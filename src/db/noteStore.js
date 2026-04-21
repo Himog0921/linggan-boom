@@ -1,0 +1,64 @@
+import db from './index.js';
+import { normalizeNoteRecord } from './recordNormalization.js';
+
+export const noteStore = {
+  async upsert(note) {
+    await db.notes.put(normalizeNoteRecord(note));
+  },
+
+  async bulkUpsert(notes) {
+    await db.notes.bulkPut((notes || []).map(normalizeNoteRecord));
+  },
+
+  async getAll() {
+    const notes = await db.notes.orderBy('createdAt').reverse().toArray();
+    return notes.map(normalizeNoteRecord);
+  },
+
+  async getById(noteId) {
+    const note = await db.notes.get(noteId);
+    return note ? normalizeNoteRecord(note) : null;
+  },
+
+  async getByCollectionRunId(collectionRunId) {
+    const id = String(collectionRunId || '').trim();
+    if (!id) return [];
+    const notes = await db.notes
+      .filter((note) => String(note.collectionRunId || '').trim() === id)
+      .toArray();
+    return notes.map(normalizeNoteRecord);
+  },
+
+  async updateById(noteId, patch) {
+    const existing = await db.notes.get(noteId);
+    await db.notes.put(normalizeNoteRecord({
+      ...(existing || {}),
+      ...(patch || {}),
+      noteId,
+    }));
+  },
+
+  async search(keyword) {
+    const notes = await db.notes
+      .filter(n => n.title?.includes(keyword) || n.content?.includes(keyword) || n.authorName?.includes(keyword))
+      .toArray();
+    return notes.map(normalizeNoteRecord);
+  },
+
+  async filterByType(type) {
+    const notes = await db.notes.where('type').equals(type).toArray();
+    return notes.map(normalizeNoteRecord);
+  },
+
+  async deleteById(noteId) {
+    await db.notes.delete(noteId);
+  },
+
+  async clear() {
+    await db.notes.clear();
+  },
+
+  async count() {
+    return db.notes.count();
+  },
+};

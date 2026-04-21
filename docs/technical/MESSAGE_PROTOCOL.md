@@ -1,0 +1,279 @@
+# 消息协议
+
+> 扩展内部各层之间的消息通信契约。  
+> 当前消息常量事实源：`src/shared/constants.js`
+
+## 1. 传输路径
+
+| 路径 | 方式 |
+|------|------|
+| Popup → Background | `chrome.runtime.sendMessage` |
+| Background → Content | `chrome.tabs.sendMessage` |
+| Content → Background | `chrome.runtime.sendMessage` |
+| Content ↔ Injected Script | `window.postMessage` / `CustomEvent` / `postMessage` |
+| Content ↔ Dashboard | iframe `postMessage` |
+| Background ↔ 内容工作台 | HTTP JSON 轮询 / PATCH / ingest | 待执行任务查询、控制请求拉取、状态快照回写、事件/记录增量写入 |
+
+> 说明：抖音链路除了 Content Script 自己的逻辑，还包含页面桥接、页面侧 fetch 和 API capture，不应再假设所有能力都只靠 Content 直接完成。
+
+## 2. 命令消息
+
+### 2.1 单条采集
+
+| Action | 发送方 → 接收方 | Payload | 说明 |
+|--------|----------------|---------|------|
+| `COLLECT_SINGLE_NOTE` | Popup → Content | `{}` | 小红书采当前笔记；抖音采当前视频 |
+| `COLLECT_SINGLE_COMMENT` | Popup → Content | `{ maxTotal?, maxSubComments?, sortMode?, triggerSource? }` | 小红书采当前笔记评论；抖音采当前视频评论 |
+| `DOWNLOAD_CURRENT_COMMENT_IMAGES` | Popup → Content | `{ maxTotal?, maxSubComments? }` | 当前视频评论图片区下载（当前仅抖音 Popup 使用） |
+| `COLLECT_AUTHOR` | Popup → Content | `{}` | 采当前博主 |
+
+### 2.2 批量内容
+
+| Action | 发送方 → 接收方 | Payload |
+|--------|----------------|---------|
+| `START_BATCH_NOTES` | Popup → Background → Content | `{ tabId, mode, count, topByLikes }` |
+| `PAUSE_BATCH_NOTES` | Popup → Background → Content | `{ tabId }` |
+| `RESUME_BATCH_NOTES` | Popup → Background → Content | `{ tabId }` |
+| `STOP_BATCH_NOTES` | Popup → Background → Content | `{ tabId }` |
+
+### 2.3 批量评论
+
+| Action | 发送方 → 接收方 | Payload |
+|--------|----------------|---------|
+| `START_BATCH_COMMENTS` | Popup → Background → Content | `{ tabId, mode, count, commentLimit }` |
+| `PAUSE_BATCH_COMMENTS` | Popup → Background → Content | `{ tabId }` |
+| `RESUME_BATCH_COMMENTS` | Popup → Background → Content | `{ tabId }` |
+| `STOP_BATCH_COMMENTS` | Popup → Background → Content | `{ tabId }` |
+
+> `commentLimit = 0` 代表未设置上限，即“尽量采全量”。当前抖音批量评论已实际使用该字段。
+
+### 2.4 数据与面板
+
+| Action | 发送方 → 接收方 | Payload | 说明 |
+|--------|----------------|---------|------|
+| `TOGGLE_DASHBOARD` | Popup → Content | `{}` | 打开 / 关闭 Dashboard |
+| `GET_STATS` | Popup / Dashboard → Content | `{}` | 读取统计数据 |
+| `GET_ALL_NOTES / GET_ALL_COMMENTS / GET_ALL_AUTHORS` | Dashboard → Content | `{}` | 读取本地数据 |
+| `DELETE_NOTE / DELETE_COMMENT / DELETE_AUTHOR` | Dashboard → Content | `{ noteId / id / userId }` | 删除单条 |
+| `CLEAR_ALL_NOTES / CLEAR_ALL_COMMENTS / CLEAR_ALL_AUTHORS` | Dashboard → Content | `{}` | 清空某类数据 |
+| `EXPORT_CSV / EXPORT_JSON` | Popup / Dashboard → Content | `{}` | 导出数据 |
+| `DOWNLOAD_NOTE_MEDIA` | Dashboard → Content | `{ noteId }` | 下载内容媒体 |
+
+### 2.5 Background 专属
+
+| Action | 发送方 → 接收方 | Payload | 说明 |
+|--------|----------------|---------|------|
+| `DOWNLOAD_MEDIA_FILE` | Content → Background | `{ candidates, filename, saveAs?, conflictAction?, headers? }` | 下载图片、视频、评论图等媒体 |
+| `BLOCK_MEDIA / UNBLOCK_MEDIA` | Content → Background | `{}` | 批量采集时临时屏蔽媒体资源 |
+| `DISPATCH_ESC` | Content → Background | `{ tabId }` | 通过 debugger 派发 Esc 等动作 |
+
+### 2.6 工作台协同
+
+| Action | 发送方 → 接收方 | Payload | 说明 |
+|--------|----------------|---------|------|
+| `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台 |
+| `WORKBENCH_CAPABILITY_CHECK` | Background → Content | `{ tabId?, task }` | 对远程任务做页面能力检查 |
+| `WORKBENCH_DISPATCH_TASK` | Background → Content | `{ tabId?, task }` | 将工作台任务协议映射到内部动作并派单 |
+| `WORKBENCH_TASK_CONTROL` | Background → Content | `{ tabId?, taskControl }` | 对已接单任务执行暂停 / 继续 / 停止 |
+| `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ externalTaskId?, collectionRunId? }` | 从页面侧 `collectionRuns` 打包结果并回传给工作台 |
+| `WORKBENCH_LOCAL_CONTROL_EVENT` | Content → Background | `{ externalTaskId?, collectionRunId?, taskType?, controlAction, status, message?, occurredAt? }` | 插件本地暂停 / 继续 / 停止同步回工作台事件流 |
+| `WORKBENCH_DELTA_FLUSH` | 内部 / 调试 → Background | `{}` | 触发工作台增量 outbox 立即 flush |
+| `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前插件是否已绑定为监控执行工位，以及可上报的平台账号状态 |
+| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 使用内容工作台生成的配对码绑定执行工位 |
+| `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
+
+> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 同时还会通过 HTTP 轮询内容工作台的 `pending` 任务，并把 `pluginRunId / resultSummary / errorMessage / progress` patch 回工作台任务记录。
+>
+> 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
+
+### 2.7 工作台 HTTP 协议补充
+
+控制请求路径：
+
+```text
+Workbench UI → Workbench API control request → Plugin Background poller
+```
+
+插件拉取：
+
+```text
+GET /api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after=<cursor>
+```
+
+执行工位与任务租约：
+
+```text
+POST /api/execution-stations/register
+POST /api/execution-stations/heartbeat
+POST /api/collection-tasks/claim
+POST /api/collection-tasks/:taskId/lease
+```
+
+控制动作：
+
+```text
+pause | resume | stop | delete
+```
+
+说明：
+- `delete` 对插件执行端映射为本地 `stop`；软删除事实由内容工作台负责。
+- 插件应用控制后通过 ingest 写入 `task.control_applied`，失败则写入 `task.control_failed`。
+- 插件本地控制按钮仍保留，通过 `WORKBENCH_LOCAL_CONTROL_EVENT` 写回同一条任务事件流。
+
+增量写入路径：
+
+```text
+Content/platform runtime → Background local/progress events
+Background outbox → Workbench API ingest → CollectionTaskEvent/CollectionTaskRecord
+```
+
+插件写入：
+
+```text
+POST /api/collection-tasks/:taskId/ingest
+```
+
+delta envelope：
+
+```json
+{
+  "protocolVersion": "v1",
+  "taskId": "task_123",
+  "pluginRunId": "run_123",
+  "executorInstanceId": "plugin_profile_uuid",
+  "cursor": "local-outbox-seq-42",
+  "events": [],
+  "records": [],
+  "snapshot": {}
+}
+```
+
+事件类型：
+
+```text
+task.claimed
+task.started
+task.heartbeat
+task.progress
+task.partial_result
+task.control_requested
+task.control_applied
+task.control_failed
+task.paused
+task.resumed
+task.stopping
+task.stopped
+task.completed
+task.failed
+```
+
+记录类型：
+
+```text
+note | comment | author | media
+```
+
+幂等键规则：
+
+```text
+event:  {taskId}:{pluginRunId}:event:{eventType}:{controlRequestId || sequence}
+record: {taskId}:{pluginRunId}:record:{recordType}:{externalRecordId || sequence}
+```
+
+### 2.8 监控任务补充
+
+内容工作台下发监控任务时，`task.envelope` 可以携带：
+
+```json
+{
+  "taskStrategy": "author_baseline",
+  "payload": {
+    "monitorId": "monitor_123",
+    "taskStrategy": "author_baseline",
+    "scanLimit": 50,
+    "detailProbeLimit": 10,
+    "keyword": "数学思维",
+    "accountPurpose": "author_monitor"
+  }
+}
+```
+
+插件支持的监控策略：
+
+```text
+author_baseline
+author_patrol
+keyword_patrol
+detail_probe
+deep_collect
+```
+
+插件内部映射：
+
+| 策略 | 插件执行方式 | 记录模式 |
+|---|---|---|
+| `author_baseline` | 作者快照 + 主页表层作品卡片，不逐篇打开 | `author_profile` + `author_surface` |
+| `author_patrol` | 作者快照 + 少量主页表层作品卡片 | `author_profile` + `author_surface` |
+| `keyword_patrol` | 搜索页表层结果卡片 | `keyword_surface` |
+| `detail_probe` | 打开指定候选内容补全正文、评论数、发布时间等详情 | `detail_probe` |
+| `deep_collect` | 保留为人工深采入口，不作为默认高频监控 | `detail_probe` |
+
+监控记录必须在 payload 中保留：
+
+```text
+monitorMode
+monitorId
+taskStrategy
+monitorMeta
+```
+
+这四个字段是内容工作台把 `CollectionTaskRecord` 转成 `MonitorObservation / RadarSignal` 的桥。普通手动采集不应携带这些字段。
+
+## 3. 平台差异说明
+
+- 小红书批量内容/评论主要依赖页面扫描、DOM 交互与列表跳转。
+- 抖音批量视频已经转为“博主页作品列表 API 驱动”。
+- 抖音批量评论已经转为“作品列表 + 评论/回复接口 + 页面桥接兜底”。
+- 抖音单条视频和评论链路存在页面桥接与页面侧 fetch，不应再假设所有能力都只靠 Content Script `fetch` 完成。
+- 工作台远程任务不会直接调用 `MSG.*`；外部任务先进入 `src/workbench/protocol/*`，再由 mapper 转成内部动作。
+
+## 4. 状态消息
+
+| Action | Payload | 说明 |
+|--------|---------|------|
+| `PROGRESS` | `{ current, total, status?, taskType, taskState, phase, message?, platform?, heartbeat? }` | 任务进度更新 |
+| `COLLECT_DONE` | `{ type, count, taskType?, taskState?, phase?, platform? }` | 采集完成通知 |
+| `ERROR` | `{ message, taskType?, platform? }` | 错误通知（并非所有路径都统一发送） |
+
+> 当前代码中的返回结构尚未完全统一到 `{ success, data, error }`，消费方仍需按具体 action 容错解析。
+
+## 5. 任务状态机
+
+```text
+IDLE → RUNNING → PAUSED → RUNNING（循环）
+                → STOPPING → DONE / ERROR
+```
+
+适用范围：
+- 小红书批量笔记
+- 小红书批量评论
+- 抖音批量视频
+- 抖音批量评论
+- 评论图片区下载
+- 内容工作台远程派单后的本地 `collectionRun`
+
+### 2.9 Cookie 管理
+
+| Action | 发送方 → 接收方 | Payload | 说明 |
+|--------|----------------|---------|------|
+| `GET_PLATFORM_COOKIES` | Popup → Background | `{}` | 提取小红书和抖音 Cookie，自动持久化到 `chrome.storage.local`，返回各平台 cookie 详情 |
+| `GET_STORED_PLATFORM_COOKIES` | Popup → Background | `{}` | 读取已保存的 Cookie 状态（不重新提取） |
+| `getDocumentCookie` | Background → Content | `{}` | Content script 返回 `document.cookie`，作为 cookies API 的 fallback |
+
+## 6. 错误处理规则
+
+- 用户可读错误优先，避免直接暴露底层技术术语
+- 单条失败不阻断整批任务
+- 停止任务时必须恢复媒体规则并清理页面状态
+- 当前技术债：结果 envelope 仍未统一，后续应逐步收口为 `{ success, data, error }`
+- 当前产品化空缺：工作台 HTTP 轮询与 patch 的鉴权边界仍未完成统一收口，接入生产环境前必须重新核对

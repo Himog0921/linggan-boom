@@ -1,0 +1,122 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  buildMonitorTaskMeta,
+  buildXhsSurfaceNoteRecords,
+} from '../src/workbench/runtime/monitorTask.js';
+import {
+  MONITOR_RECORD_MODE,
+  MONITOR_TASK_STRATEGY,
+} from '../src/workbench/protocol/schema.js';
+import { mapTaskEnvelopeToInternalCommand } from '../src/workbench/runtime/taskEnvelopeMapper.js';
+
+test('author baseline task maps to a surface-only scan using the configured scan limit', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'monitor_task_author_baseline_1',
+    taskType: 'xhs.collectAuthor',
+    platform: 'xhs',
+    taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+    triggerSource: 'collection_task_poller',
+    target: {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/user_1',
+    },
+    payload: {
+      monitorId: 'monitor_author_1',
+      taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+      scanLimit: 3,
+      detailProbeLimit: 1,
+      monitorStrength: 'standard',
+      display: { name: '回甘' },
+    },
+  }, { tabId: 7 });
+
+  assert.equal(command.payload.surfaceOnly, true);
+  assert.equal(command.payload.count, 3);
+  assert.equal(command.payload.monitorMeta.monitorId, 'monitor_author_1');
+  assert.equal(command.payload.monitorMeta.taskStrategy, MONITOR_TASK_STRATEGY.AUTHOR_BASELINE);
+  assert.equal(command.payload.monitorMeta.surfaceMode, MONITOR_RECORD_MODE.AUTHOR_SURFACE);
+  assert.equal(command.payload.externalTaskMeta.monitorMeta.monitorId, 'monitor_author_1');
+  assert.equal(command.taskMeta.monitorMeta.taskStrategy, MONITOR_TASK_STRATEGY.AUTHOR_BASELINE);
+});
+
+test('xhs author surface records stop at scanLimit and carry monitor-shaped metadata', () => {
+  const monitorMeta = buildMonitorTaskMeta({
+    platform: 'xhs',
+    taskType: 'xhs.collectAuthor',
+    taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+    payload: {
+      monitorId: 'monitor_author_1',
+      scanLimit: 2,
+      detailProbeLimit: 1,
+      display: { name: '回甘' },
+    },
+    target: {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/user_1',
+    },
+  });
+
+  const records = buildXhsSurfaceNoteRecords([
+    { noteId: 'note_1', url: '/explore/note_1', title: '第一条', likes: '5567', type: 'normal' },
+    { noteId: 'note_2', url: 'https://www.xiaohongshu.com/explore/note_2', title: '第二条', likes: '2' },
+    { noteId: 'note_3', url: '/explore/note_3', title: '第三条', likes: '3' },
+  ], {
+    monitorMeta,
+    collectionRunId: 'run_author_surface_1',
+    mode: MONITOR_RECORD_MODE.AUTHOR_SURFACE,
+    limit: 2,
+    sourcePageUrl: 'https://www.xiaohongshu.com/user/profile/user_1',
+  });
+
+  assert.equal(records.length, 2);
+  assert.deepEqual(records.map((record) => record.noteId), ['note_1', 'note_2']);
+  assert.equal(records[0].monitorMode, MONITOR_RECORD_MODE.AUTHOR_SURFACE);
+  assert.equal(records[0].monitorId, 'monitor_author_1');
+  assert.equal(records[0].taskStrategy, MONITOR_TASK_STRATEGY.AUTHOR_BASELINE);
+  assert.equal(records[0].collectionRunId, 'run_author_surface_1');
+  assert.equal(records[0].dataSource, 'monitor_surface_card');
+  assert.equal(records[0].dataQuality, 'seed');
+  assert.equal(records[0].qualityReason, 'monitor_surface_seed');
+  assert.equal(records[0].sourceTier, 'seed');
+  assert.equal(records[0].platform, 'xhs');
+  assert.equal(records[0].platformContentId, 'note_1');
+  assert.equal(records[0].contentId, 'xhs_note_1');
+  assert.equal(records[0].url, 'https://www.xiaohongshu.com/explore/note_1');
+  assert.equal(records[0].likes, 5567);
+  assert.equal(records[0].monitorMeta.monitorId, 'monitor_author_1');
+});
+
+test('xhs author surface records rewrite profile-style note links to canonical explore detail urls', () => {
+  const records = buildXhsSurfaceNoteRecords([
+    {
+      noteId: '680123456789abcdef012345',
+      url: '/user/profile/5f1234567890abcd12345678/680123456789abcdef012345',
+      title: '详情补采候选',
+    },
+  ], {
+    limit: 1,
+  });
+
+  assert.equal(records[0].url, 'https://www.xiaohongshu.com/explore/680123456789abcdef012345');
+  assert.equal(records[0].canonicalUrl, 'https://www.xiaohongshu.com/explore/680123456789abcdef012345');
+});
+
+test('xhs author surface records keep signed share links when xsec_token is already present', () => {
+  const signedUrl = 'https://www.xiaohongshu.com/user/profile/5f1234567890abcd12345678/680123456789abcdef012345?xsec_token=abc123';
+  const records = buildXhsSurfaceNoteRecords([
+    {
+      noteId: '680123456789abcdef012345',
+      url: signedUrl,
+      title: '带签名链接',
+    },
+  ], {
+    limit: 1,
+  });
+
+  assert.equal(records[0].url, signedUrl);
+  assert.equal(records[0].canonicalUrl, signedUrl);
+});

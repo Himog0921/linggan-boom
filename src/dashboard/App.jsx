@@ -1,0 +1,821 @@
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import '../extensionPublicPath.js';
+import { MSG } from '../shared/constants.js';
+import { icon } from '../shared/icons.js';
+import { generateCsv, downloadFile } from '../shared/utils.js';
+import {
+  extractHashtags, stripHashtags, cleanDisplayBodyText, getHashtagsForItem,
+  formatReplyTargetLabel, formatCollectionRunLabel, formatBatchSelectionModeLabel,
+  formatDataQualityLabel, formatQualityReasonLabel, formatSourceTierLabel,
+  isMonitorGeneratedRecord, truncate, escapeHtml, debounce,
+  sortByCreatedAt, formatLocalDate, normalizeUrl, toDisplayUrl, getPreferredRecordUrl, getUnifiedAuthorHandle,
+  buildWorkbenchSyncPayload, getItemId, getTabLabel, getColumns, getExportColumns, sendToParent, unwrapParentResponseData,
+} from './utils.js';
+import { formatTaskLeaseIdleNotice } from '../workbench/runtime/taskLeaseClient.js';
+
+const TABS = [
+  { key: 'notes', label: '笔记' },
+  { key: 'comments', label: '评论' },
+  { key: 'authors', label: '博主' },
+];
+
+const PAGE_SIZE = 50;
+const LINK_ACTION_TEXT = {
+  url: '打开',
+  noteUrl: '打开',
+  profileUrl: '打开',
+  avatarUrl: '查看',
+};
+
+const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
+
+function loadIdleClaimSnapshot(value = null) {
+  if (!value || typeof value !== 'object') return null;
+  const hasReason = Boolean(
+    String(value.idleReasonCode || '').trim()
+    || String(value.idleReasonMessage || '').trim()
+    || String(value.reason?.code || '').trim()
+    || String(value.reason?.message || '').trim(),
+  );
+  if (!hasReason) return null;
+  return { ...value };
+}
+
+function renderLinkAction(url, actionText = '打开') {
+  const fullUrl = normalizeUrl(url);
+  if (!fullUrl) return '-';
+  return (
+    <a
+      href={fullUrl}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="table-link-action"
+      title={fullUrl}
+      aria-label={`${actionText}：${fullUrl}`}
+    >
+      <span className="table-link-action-icon" dangerouslySetInnerHTML={{ __html: icon('arrowDown', { size: 12 }) }} />
+      <span className="table-link-action-text">{actionText}</span>
+    </a>
+  );
+}
+
+export default function App() {
+  const [currentTab, setCurrentTab] = useState('notes');
+  const [allData, setAllData] = useState([]);
+  const [searchKeyword, setSearchKeyword] = useState('');
+  const [filterType, setFilterType] = useState('all');
+  const [sortByTime, setSortByTime] = useState('desc');
+  const [filterDate, setFilterDate] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const [selectedIds, setSelectedIds] = useState({ notes: new Set(), comments: new Set(), authors: new Set() });
+  const [notice, setNotice] = useState({ message: '', type: 'info', visible: false });
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', confirmText: '', onConfirm: null });
+  const [mediaPreview, setMediaPreview] = useState({ open: false, url: '', title: '', type: 'image' });
+  const [loading, setLoading] = useState(false);
+  const [idleClaimSnapshot, setIdleClaimSnapshot] = useState(null);
+
+  const tableWrapperRef = useRef(null);
+
+  // ===== 加载数据 =====
+  const loadData = useCallback(async (tab) => {
+    const targetTab = tab || currentTab;
+    setAllData([]);
+    setSelectedIds((prev) => ({ ...prev, [targetTab]: new Set() }));
+    setLoading(true);
+    try {
+      const actionMap = { notes: MSG.GET_ALL_NOTES, comments: MSG.GET_ALL_COMMENTS, authors: MSG.GET_ALL_AUTHORS };
+      const response = await sendToParent(actionMap[tab || currentTab]);
+      const data = unwrapParentResponseData(response, []) || [];
+      const filtered = data.filter((item) => !isMonitorGeneratedRecord(item));
+      setAllData(sortByCreatedAt(filtered, sortByTime));
+    } catch (e) {
+      setAllData([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [currentTab, sortByTime]);
+
+  useEffect(() => {
+    loadData(currentTab);
+  }, [currentTab, loadData]);
+
+  useEffect(() => {
+    let mounted = true;
+    const readTaskLeaseSnapshot = async () => {
+      try {
+        const data = await chrome?.storage?.local?.get?.(TASK_LEASE_STORAGE_KEY);
+        if (!mounted) return;
+        setIdleClaimSnapshot(loadIdleClaimSnapshot(data?.[TASK_LEASE_STORAGE_KEY] || null));
+      } catch {
+        if (mounted) setIdleClaimSnapshot(null);
+      }
+    };
+
+    readTaskLeaseSnapshot();
+
+    const handleStorageChange = (changes, areaName) => {
+      if (areaName !== 'local' || !changes?.[TASK_LEASE_STORAGE_KEY]) return;
+      setIdleClaimSnapshot(loadIdleClaimSnapshot(changes[TASK_LEASE_STORAGE_KEY]?.newValue || null));
+    };
+
+    chrome?.storage?.onChanged?.addListener?.(handleStorageChange);
+    return () => {
+      mounted = false;
+      chrome?.storage?.onChanged?.removeListener?.(handleStorageChange);
+    };
+  }, []);
+
+  // ===== 筛选数据 =====
+  const filteredData = useMemo(() => {
+    const keyword = searchKeyword.trim().toLowerCase();
+    let result = allData.filter((item) => {
+      if (keyword) {
+        const searchable = Object.values(item).map((v) => String(v || '').toLowerCase()).join(' ');
+        if (!searchable.includes(keyword)) return false;
+      }
+      if (currentTab === 'notes' && filterType !== 'all') {
+        if (item.type !== filterType) return false;
+      }
+      if (filterDate) {
+        const itemDate = formatLocalDate(item.createdAt);
+        if (!itemDate || itemDate !== filterDate) return false;
+      }
+      return true;
+    });
+    return sortByCreatedAt(result, sortByTime);
+  }, [allData, searchKeyword, filterType, filterDate, sortByTime, currentTab]);
+
+  // ===== 分页 =====
+  const totalCount = filteredData.length;
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageData = useMemo(() => {
+    const page = Math.min(currentPage, totalPages);
+    const start = (page - 1) * PAGE_SIZE;
+    return filteredData.slice(start, start + PAGE_SIZE);
+  }, [filteredData, currentPage, totalPages]);
+
+  useEffect(() => {
+    if (currentPage > totalPages && totalPages > 0) {
+      setCurrentPage(totalPages);
+    }
+  }, [totalPages, currentPage]);
+
+  // ===== 选中管理 =====
+  const currentSelected = selectedIds[currentTab];
+  const setCurrentSelected = useCallback((newSet) => {
+    setSelectedIds((prev) => ({ ...prev, [currentTab]: newSet }));
+  }, [currentTab]);
+
+  const selectedCount = useMemo(() => {
+    return allData.filter((item) => currentSelected.has(getItemId(item, currentTab))).length;
+  }, [allData, currentSelected, currentTab]);
+
+  const toggleSelect = useCallback((id) => {
+    const next = new Set(currentSelected);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    setCurrentSelected(next);
+  }, [currentSelected, setCurrentSelected]);
+
+  const toggleSelectAll = useCallback(() => {
+    const pageIds = pageData.map((item) => getItemId(item, currentTab)).filter(Boolean);
+    const allSelected = pageIds.length > 0 && pageIds.every((id) => currentSelected.has(id));
+    const next = new Set(currentSelected);
+    if (allSelected) {
+      pageIds.forEach((id) => next.delete(id));
+    } else {
+      pageIds.forEach((id) => next.add(id));
+    }
+    setCurrentSelected(next);
+  }, [pageData, currentSelected, currentTab, setCurrentSelected]);
+
+  const someSelected = pageData.some((item) => currentSelected.has(getItemId(item, currentTab)));
+  const allSelected = pageData.length > 0 && pageData.every((item) => currentSelected.has(getItemId(item, currentTab)));
+
+  // ===== 通知 =====
+  const showNotice = useCallback((message, type = 'info') => {
+    setNotice({ message, type, visible: true });
+    setTimeout(() => setNotice((n) => ({ ...n, visible: false })), 3000);
+  }, []);
+
+  // ===== 确认弹窗 =====
+  const showConfirm = useCallback(({ title, message, confirmText }) => {
+    return new Promise((resolve) => {
+      setConfirmDialog({ open: true, title, message, confirmText, onConfirm: resolve });
+    });
+  }, []);
+
+  const handleConfirm = useCallback((result) => {
+    if (confirmDialog.onConfirm) confirmDialog.onConfirm(result);
+    setConfirmDialog((d) => ({ ...d, open: false, onConfirm: null }));
+  }, [confirmDialog]);
+
+  const idleClaimNotice = useMemo(
+    () => formatTaskLeaseIdleNotice(idleClaimSnapshot),
+    [idleClaimSnapshot],
+  );
+  const displayNotice = notice.visible ? notice : idleClaimNotice;
+
+  // ===== 导出 =====
+  const handleExportCsv = useCallback(() => {
+    if (filteredData.length === 0) {
+      showNotice('没有数据可导出。', 'warning');
+      return;
+    }
+    const columns = getExportColumns(currentTab, allData);
+    const headers = columns.map((c) => c.label);
+    const rows = filteredData.map((item) => columns.map((c) => {
+      let val = item[c.key];
+      if (c.key === 'type') return val === 'video' ? '视频' : '图文';
+      if (c.key === 'title') return stripHashtags(String(val || ''));
+      if (c.key === 'content') return cleanDisplayBodyText(String(val || ''));
+      if (c.key === 'hashtags') return getHashtagsForItem(item).join('\n');
+      if (c.key === 'batchSelectionMode') return formatBatchSelectionModeLabel(val);
+      if (c.key === 'dataQuality') return formatDataQualityLabel(val);
+      if (c.key === 'qualityReason') return formatQualityReasonLabel(val);
+      if (c.key === 'sourceTier') return formatSourceTierLabel(val);
+      if (c.key === 'authorFollowed' || c.key === 'shareRestricted' || c.key === 'followedByMe') return val ? '是' : '否';
+      if (c.key === 'handle') return getUnifiedAuthorHandle(item);
+      if (c.key === 'images') return Array.isArray(val) ? val.join('\n') : '';
+      if (c.key === 'atUserList') return Array.isArray(val) ? val.map((v) => `${v.nickname || ''}(${v.userId || ''})`).join('\n') : '';
+      if (c.key === 'topicIds') return Array.isArray(val) ? val.join('\n') : '';
+      if (c.key === 'url' || c.key === 'noteUrl' || c.key === 'profileUrl') return toDisplayUrl(getPreferredRecordUrl(item, c.key) || val);
+      if (c.key === 'createdAt') return val ? new Date(val).toLocaleString('zh-CN') : '';
+      return String(val ?? '');
+    }));
+    const csv = generateCsv(headers, rows);
+    const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+    downloadFile(csv, filename + '.csv', 'text/csv;charset=utf-8;');
+    showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.csv`, 'success');
+  }, [filteredData, currentTab, allData, showNotice]);
+
+  const handleExportJson = useCallback(() => {
+    if (filteredData.length === 0) {
+      showNotice('没有数据可导出。', 'warning');
+      return;
+    }
+    const json = JSON.stringify(filteredData, null, 2);
+    const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+    downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
+    showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.json`, 'success');
+  }, [filteredData, currentTab, showNotice]);
+
+  const handleExportSelected = useCallback(() => {
+    if (currentSelected.size === 0) {
+      showNotice(`请先勾选要导出的${getTabLabel(currentTab)}。`, 'warning');
+      return;
+    }
+    const selectedItems = allData.filter((item) => currentSelected.has(getItemId(item, currentTab)));
+    if (selectedItems.length === 0) {
+      showNotice(`没有选中的${getTabLabel(currentTab)}可导出。`, 'warning');
+      return;
+    }
+    const json = JSON.stringify(selectedItems, null, 2);
+    const filename = `灵感爆爆爆_已选${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+    downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
+    showNotice(`已导出 ${selectedItems.length} 条选中${getTabLabel(currentTab)}：${filename}.json`, 'success');
+  }, [currentSelected, allData, currentTab, showNotice]);
+
+  // ===== 删除 =====
+  const handleDeleteSelected = useCallback(async () => {
+    const selectedItems = allData.filter((item) => currentSelected.has(getItemId(item, currentTab)));
+    if (selectedItems.length === 0) {
+      showNotice(`请先勾选要删除的${getTabLabel(currentTab)}。`, 'warning');
+      return;
+    }
+    const confirmed = await showConfirm({
+      title: `确认删除选中${getTabLabel(currentTab)}`,
+      message: `确定要删除已选中的 ${selectedItems.length} 条${getTabLabel(currentTab)}吗？此操作不可恢复。`,
+      confirmText: '删除选中',
+    });
+    if (!confirmed) return;
+    try {
+      const deleteActionMap = { notes: MSG.DELETE_NOTE, comments: MSG.DELETE_COMMENT, authors: MSG.DELETE_AUTHOR };
+      const deleteAction = deleteActionMap[currentTab];
+      for (const item of selectedItems) {
+        const idKey = currentTab === 'notes' ? 'noteId' : currentTab === 'comments' ? 'id' : 'userId';
+        await sendToParent(deleteAction, { [idKey]: getItemId(item, currentTab) });
+      }
+      const next = new Set(currentSelected);
+      selectedItems.forEach((item) => next.delete(getItemId(item, currentTab)));
+      setCurrentSelected(next);
+      showNotice(`已删除 ${selectedItems.length} 条选中${getTabLabel(currentTab)}。`, 'success');
+      loadData(currentTab);
+    } catch (error) {
+      showNotice(`删除失败：${error.message || '未知错误'}`, 'error');
+    }
+  }, [currentSelected, allData, currentTab, showNotice, showConfirm, loadData, setCurrentSelected]);
+
+  // ===== 清空 =====
+  const handleClearAll = useCallback(async () => {
+    const confirmed = await showConfirm({
+      title: '确认清空数据',
+      message: `确定要清空所有${getTabLabel(currentTab)}数据吗？此操作不可恢复。`,
+      confirmText: '确认清空',
+    });
+    if (!confirmed) return;
+    const actionMap = { notes: MSG.CLEAR_ALL_NOTES, comments: MSG.CLEAR_ALL_COMMENTS, authors: MSG.CLEAR_ALL_AUTHORS };
+    await sendToParent(actionMap[currentTab]);
+    showNotice(`已清空当前${getTabLabel(currentTab)}数据。`, 'info');
+    loadData(currentTab);
+  }, [currentTab, showNotice, showConfirm, loadData]);
+
+  // ===== 同步到工作台 =====
+  const handleSyncToWorkbench = useCallback(async () => {
+    const selectedItems = allData.filter((item) => currentSelected.has(getItemId(item, currentTab)));
+    if (selectedItems.length === 0) {
+      showNotice(`请先勾选要同步到工作台的${getTabLabel(currentTab)}。`, 'warning');
+      return;
+    }
+    try {
+      showNotice(`正在同步 ${selectedItems.length} 条${getTabLabel(currentTab)}到工作台...`, 'info');
+      const payload = buildWorkbenchSyncPayload(currentTab, selectedItems);
+      const result = await sendToParent(MSG.SYNC_TO_WORKBENCH, payload);
+      if (result?.success) {
+        const imported = result.imported || 0;
+        const skipped = result.skipped || 0;
+        const total = selectedItems.length;
+        const meta = result.meta || {};
+        const details = [];
+        if (meta.notesReceived != null) details.push(`笔记 ${meta.notesReceived}`);
+        if (meta.commentsReceived != null) details.push(`评论 ${meta.commentsReceived}`);
+        if (meta.authorsReceived != null) details.push(`博主 ${meta.authorsReceived}`);
+        const detailText = details.length ? `（${details.join('，')}）` : '';
+        const failReason = meta.failReason || meta.errorReason || '';
+        if (imported === total) {
+          showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');
+        } else if (imported > 0) {
+          const reasonText = failReason ? `，原因：${failReason}` : '';
+          showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${detailText}${reasonText}`, 'warning');
+        } else {
+          const reasonText = failReason ? `，原因：${failReason}` : '';
+          showNotice(`所有${getTabLabel(currentTab)}都已存在，跳过 ${skipped} 条${detailText}${reasonText}`, 'info');
+        }
+      } else {
+        const errorMsg = result?.error || result?.meta?.failReason || '未知错误';
+        showNotice(`同步失败：${errorMsg}`, 'error');
+      }
+    } catch (error) {
+      showNotice(`同步失败：${error.message || '未知错误'}`, 'error');
+    }
+  }, [currentSelected, allData, currentTab, showNotice]);
+
+  // ===== Tab 切换 =====
+  const handleTabChange = useCallback((tab) => {
+    setCurrentTab(tab);
+    setCurrentPage(1);
+    setFilterType('all');
+  }, []);
+
+  // ===== 列定义 =====
+  const columns = useMemo(() => getColumns(currentTab, allData), [currentTab, allData]);
+
+  // ===== 渲染单元格 =====
+  const renderCell = useCallback((item, col) => {
+    const val = item[col.key];
+    if (col.key === 'url' || col.key === 'noteUrl' || col.key === 'profileUrl' || col.key === 'avatarUrl') {
+      const actionText = LINK_ACTION_TEXT[col.key] || '打开';
+      return renderLinkAction(getPreferredRecordUrl(item, col.key) || val, actionText);
+    }
+    if (col.key === 'createdAt') {
+      return val ? new Date(val).toLocaleString('zh-CN') : '';
+    }
+    if (col.key === 'lastUpdateTime') {
+      return String(val || '-');
+    }
+    if (col.key === 'platform') {
+      return val === 'douyin' ? '抖音' : '小红书';
+    }
+    if (col.key === 'contentId') {
+      const contentId = String(item.contentId || item.noteId || '').trim();
+      return <span title={contentId}>{truncate(contentId, 28)}</span>;
+    }
+    if (col.key === 'level') {
+      const level = Number(val || 0);
+      return level === 2 ? '二级' : level === 1 ? '一级' : '-';
+    }
+    if (col.key === 'type') {
+      return val === 'video' ? '视频' : '图文';
+    }
+    if (col.key === 'title') {
+      const cleanTitle = stripHashtags(String(val || ''));
+      return <span title={String(val || '')}>{truncate(cleanTitle || String(val || ''), 40)}</span>;
+    }
+    if (col.key === 'content') {
+      const cleanContent = cleanDisplayBodyText(String(val || ''));
+      return <span title={cleanContent || String(val || '')}>{truncate(cleanContent || String(val || ''), 40)}</span>;
+    }
+    if (col.key === 'text') {
+      const text = String(val || '').trim();
+      return <span className="cell-clamp-3" title={text}>{text}</span>;
+    }
+    if (col.key === 'author' || col.key === 'authorName') {
+      const text = String(val || '').trim();
+      return <span title={text}>{truncate(text, 24)}</span>;
+    }
+    if (col.key === 'hashtags') {
+      const list = getHashtagsForItem(item);
+      return <span title={list.join('\n')}>{truncate(list.join(', '), 40)}</span>;
+    }
+    if (col.key === 'authorFollowed' || col.key === 'shareRestricted' || col.key === 'followedByMe') {
+      return val ? '是' : '否';
+    }
+    if (col.key === 'avatar') {
+      if (!val || val === 'undefined' || val === 'null') return '-';
+      return (
+        <img
+          src={val}
+          alt=""
+          style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #ccc', objectFit: 'cover' }}
+          onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '-'; }}
+        />
+      );
+    }
+    if (col.key === 'handle') {
+      const handle = getUnifiedAuthorHandle(item);
+      return <span title={handle}>{truncate(handle, 40)}</span>;
+    }
+    if (col.key === 'ipLocation') {
+      const label = String(item.ipLocation || item.location || '').trim();
+      return <span title={label}>{truncate(label, 20)}</span>;
+    }
+    if (col.key === 'batchSelectionMode') {
+      return formatBatchSelectionModeLabel(val);
+    }
+    if (col.key === 'dataQuality') {
+      const label = formatDataQualityLabel(val);
+      return <span title={String(val || '')}>{label}</span>;
+    }
+    if (col.key === 'qualityReason') {
+      const label = formatQualityReasonLabel(val);
+      return <span title={String(val || '')}>{truncate(label, 24)}</span>;
+    }
+    if (col.key === 'sourceTier') {
+      const label = formatSourceTierLabel(val);
+      return <span title={String(val || '')}>{label}</span>;
+    }
+    if (col.key === 'batchRank') {
+      const rank = Number(val || 0);
+      return rank > 0 ? rank : '-';
+    }
+    if (col.key === 'replyToUserName') {
+      const label = formatReplyTargetLabel(item);
+      return <span title={label}>{truncate(label, 20)}</span>;
+    }
+    if (col.key === 'collectionRunId') {
+      const label = formatCollectionRunLabel(val);
+      return <span title={String(val || '')}>{truncate(label, 18)}</span>;
+    }
+    if (col.key === 'commentId') {
+      const text = String(val || '').trim();
+      return <span title={text}>{truncate(text, 14)}</span>;
+    }
+    if (col.key === 'images') {
+      const count = Array.isArray(item.images) ? item.images.length : 0;
+      const tip = Array.isArray(item.images) ? item.images.join('\n') : '';
+      return <span title={tip}>{count} 张</span>;
+    }
+    if (col.key === 'mediaPreview') {
+      const thumbRaw = item.cover || item.coverImg || (Array.isArray(item.images) ? item.images[0] : '') || '';
+      const thumb = toDisplayUrl(thumbRaw);
+      const videoPreviewRaw = item.videoDownloadUrl || item.videoPlayUrl || item.video
+        || (Array.isArray(item.videoStreams) ? item.videoStreams.find((s) => s?.url)?.url : '') || '';
+      const videoPreview = toDisplayUrl(videoPreviewRaw);
+      const hasVideo = Boolean(item.video || item.videoDownloadUrl || item.videoPlayUrl
+        || (Array.isArray(item.videoStreams) && item.videoStreams.length > 0));
+      const mediaCount = (Array.isArray(item.images) ? item.images.length : 0) + (hasVideo ? 1 : 0);
+      const title = item.title || item.noteId || '媒体预览';
+      if (!thumb && !videoPreview) {
+        return <div className="media-cell"><span className="media-empty">无素材</span></div>;
+      }
+      if (!thumb && videoPreview) {
+        return (
+          <div className="media-cell">
+            <button className="media-thumb-btn media-thumb-fallback"
+              onClick={() => setMediaPreview({ open: true, url: videoPreview, title, type: 'video' })}
+            >查看媒体</button>
+            <span className="media-count">{mediaCount} 个（含视频）</span>
+          </div>
+        );
+      }
+      return (
+        <div className="media-cell">
+          <button className="media-thumb-btn"
+            onClick={() => setMediaPreview({ open: true, url: thumb, title, type: 'image' })}
+          >
+            <img className="media-thumb" src={thumb} alt="缩略图" />
+          </button>
+          <span className="media-count">{mediaCount} 个{hasVideo ? '（含视频）' : ''}</span>
+        </div>
+      );
+    }
+    if (col.key === 'mediaDownloadStatus') {
+      const statusRaw = String(item.mediaDownloadStatus || '待下载');
+      const summary = item.mediaDownloadSummary || {};
+      const failed = Number(summary.failed || 0);
+      const success = Number(summary.success || 0);
+      const total = Number(summary.total || 0);
+      const statusMap = {
+        '下载中': { cls: 'running', text: '下载中' },
+        '已完成': { cls: 'done', text: '已完成' },
+        '部分失败': { cls: 'partial', text: '部分失败' },
+        '失败': { cls: 'failed', text: '失败' },
+        '无媒体': { cls: 'pending', text: '无媒体' },
+        '待下载': { cls: 'pending', text: '待下载' },
+      };
+      const mapped = statusMap[statusRaw] || statusMap['待下载'];
+      const tip = `成功 ${success}/${total}，失败 ${failed}`;
+      return <span title={tip} className={`media-status ${mapped.cls}`}>{mapped.text}</span>;
+    }
+    if (col.key === 'atUserList') {
+      const list = Array.isArray(item.atUserList) ? item.atUserList : [];
+      const text = list.map((v) => v.nickname || v.userId).filter(Boolean).join('\n');
+      return <span title={text}>{list.length}</span>;
+    }
+    if (col.key === 'topicIds') {
+      const list = Array.isArray(item.topicIds) ? item.topicIds : [];
+      return <span title={list.join('\n')}>{list.length}</span>;
+    }
+    return <span title={String(val ?? '')}>{truncate(String(val ?? ''), 40)}</span>;
+  }, []);
+
+  // ===== 分页跳转 =====
+  const goToPage = useCallback((page) => {
+    setCurrentPage(page);
+    if (tableWrapperRef.current) tableWrapperRef.current.scrollTop = 0;
+  }, []);
+
+  // ===== 渲染 =====
+  return (
+    <div className="dashboard-container">
+      {displayNotice && (
+        <section className={`dashboard-notice ${displayNotice.type}`}>
+          {displayNotice.message}
+        </section>
+      )}
+
+      <nav className="dashboard-nav">
+        <h1>灵感爆爆爆 数据面板</h1>
+        <div className="nav-tabs">
+          {TABS.map((tab) => (
+            <button
+              key={tab.key}
+              className={`tab ${currentTab === tab.key ? 'active' : ''}`}
+              onClick={() => handleTabChange(tab.key)}
+              dangerouslySetInnerHTML={{
+                __html: `${icon(tab.key === 'notes' ? 'note' : tab.key === 'comments' ? 'comment' : 'author', { size: 14 })} ${tab.label}`,
+              }}
+            />
+          ))}
+        </div>
+      </nav>
+
+      <div className="toolbar">
+        <input
+          type="text"
+          className="search-input"
+          placeholder="搜索标题 / 正文 / 作者 / 话题..."
+          value={searchKeyword}
+          onChange={(e) => { setSearchKeyword(e.target.value); setCurrentPage(1); }}
+        />
+        {currentTab === 'notes' && (
+          <select
+            className="filter-select"
+            value={filterType}
+            onChange={(e) => { setFilterType(e.target.value); setCurrentPage(1); }}
+          >
+            <option value="all">全部</option>
+            <option value="normal">图文</option>
+            <option value="video">视频</option>
+          </select>
+        )}
+        <select
+          className="filter-select"
+          value={sortByTime}
+          onChange={(e) => { setSortByTime(e.target.value); setCurrentPage(1); }}
+        >
+          <option value="desc">按采集时间: 最新</option>
+          <option value="asc">按采集时间: 最早</option>
+        </select>
+        <input
+          type="date"
+          className="filter-select"
+          title="按采集日期筛选"
+          value={filterDate}
+          onChange={(e) => { setFilterDate(e.target.value); setCurrentPage(1); }}
+        />
+        <div className="toolbar-actions">
+          <button
+            className="toolbar-btn secondary"
+            style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
+            onClick={handleExportSelected}
+          >
+            导出选中
+          </button>
+          <button
+            className="toolbar-btn danger"
+            style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
+            onClick={handleDeleteSelected}
+          >
+            删除选中
+          </button>
+          <button
+            className="toolbar-btn primary"
+            style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
+            onClick={handleSyncToWorkbench}
+          >
+            同步到工作台
+          </button>
+          <button className="toolbar-btn" onClick={handleExportCsv}>导出 CSV</button>
+          <button className="toolbar-btn" onClick={handleExportJson}>导出 JSON</button>
+          <button className="toolbar-btn danger" onClick={handleClearAll}>清空</button>
+        </div>
+      </div>
+
+      <div className="data-summary">
+        <span>共 {totalCount} 条</span>
+        {selectedCount > 0 && (
+          <>
+            <span className="summary-divider">·</span>
+            <span>已选 {selectedCount} 条</span>
+          </>
+        )}
+      </div>
+
+      <div className="data-table-wrapper" ref={tableWrapperRef}>
+        {loading || totalCount === 0 ? (
+          <div className="empty-state">
+            <svg className="empty-state-icon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/>
+            </svg>
+            <p>暂无数据</p>
+            <p className="empty-hint">去小红书或抖音页面采集一些数据吧</p>
+          </div>
+        ) : (
+          <table className={`data-table data-table-${currentTab}`}>
+            <thead>
+              <tr>
+                <th className="select-col">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected; }}
+                    onChange={toggleSelectAll}
+                  />
+                </th>
+                {columns.map((col) => (
+                  <th key={col.key} className={col.className}>{col.label}</th>
+                ))}
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              {pageData.map((item) => {
+                const id = getItemId(item, currentTab);
+                const isChecked = currentSelected.has(id);
+                return (
+                  <tr key={id} className={isChecked ? 'is-selected' : ''}>
+                    <td className="select-col">
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={() => toggleSelect(id)}
+                      />
+                    </td>
+                    {columns.map((col) => (
+                      <td key={col.key} className={col.className}>
+                        {renderCell(item, col)}
+                      </td>
+                    ))}
+                    <td className="actions-cell">
+                      {currentTab === 'notes' && (
+                        <button
+                          className="download-btn"
+                          onClick={async (e) => {
+                            const noteId = String(item.noteId || '').trim();
+                            if (!noteId) return;
+                            const btn = e.currentTarget;
+                            const oldText = btn.textContent;
+                            btn.textContent = '下载中...';
+                            btn.disabled = true;
+                            try {
+                              const result = await sendToParent(MSG.DOWNLOAD_NOTE_MEDIA, { noteId }, { timeoutMs: 10 * 60 * 1000 });
+                              if (result?.success) {
+                                const s = result.summary || {};
+                                const refreshedText = s.refreshed ? ' 已自动刷新媒体链接后重试。' : '';
+                                const failedCount = s.failed || 0;
+                                const msg = failedCount > 0
+                                  ? `下载完成：成功 ${s.success || 0}/${s.total || 0}，失败 ${failedCount}。${refreshedText || '部分资源可能已过期，建议重新打开笔记采集一次后再重试下载。'}`
+                                  : `下载完成：成功 ${s.success || 0}/${s.total || 0}，失败 0。${refreshedText}`;
+                                showNotice(msg, failedCount > 0 ? 'warning' : 'success');
+                                loadData(currentTab);
+                              } else {
+                                showNotice(`下载失败：${result?.error || '未知错误'}`, 'error');
+                              }
+                            } catch (err) {
+                              showNotice(`下载失败：${err?.message || err}`, 'error');
+                            } finally {
+                              btn.textContent = oldText || '媒体';
+                              btn.disabled = false;
+                            }
+                          }}
+                        >
+                          媒体
+                        </button>
+                      )}
+                      <button
+                        className="delete-btn"
+                        onClick={async () => {
+                          const confirmed = await showConfirm({
+                            title: '确认删除',
+                            message: '确定要删除这条数据吗？此操作不可恢复。',
+                            confirmText: '删除',
+                          });
+                          if (!confirmed) return;
+                          try {
+                            const deleteActionMap = { notes: MSG.DELETE_NOTE, comments: MSG.DELETE_COMMENT, authors: MSG.DELETE_AUTHOR };
+                            const idKey = currentTab === 'notes' ? 'noteId' : currentTab === 'comments' ? 'id' : 'userId';
+                            await sendToParent(deleteActionMap[currentTab], { [idKey]: id });
+                            showNotice('删除成功', 'success');
+                            loadData(currentTab);
+                          } catch (error) {
+                            showNotice(`删除失败：${error.message || '未知错误'}`, 'error');
+                          }
+                        }}
+                      >
+                        删除
+                      </button>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {totalCount > PAGE_SIZE && (
+        <div className="pagination-bar">
+          <div className="pagination-info">共 {totalCount} 条 · 第 {safePage}/{totalPages} 页</div>
+          <div className="pagination-controls">
+            <button disabled={safePage <= 1} onClick={() => goToPage(safePage - 1)}>上一页</button>
+            {Array.from({ length: totalPages }, (_, i) => i + 1)
+              .filter((p) => {
+                if (p === 1 || p === totalPages) return true;
+                return Math.abs(p - safePage) <= 2;
+              })
+              .map((p, idx, arr) => (
+                <React.Fragment key={p}>
+                  {idx > 0 && arr[idx - 1] !== p - 1 && <span>...</span>}
+                  <button
+                    className={p === safePage ? 'active' : ''}
+                    onClick={() => goToPage(p)}
+                  >
+                    {p}
+                  </button>
+                </React.Fragment>
+              ))}
+            <button disabled={safePage >= totalPages} onClick={() => goToPage(safePage + 1)}>下一页</button>
+          </div>
+        </div>
+      )}
+
+      {/* 确认弹窗 */}
+      {confirmDialog.open && (
+        <div className="dashboard-dialog-overlay" style={{ display: 'flex' }} aria-hidden="false">
+          <div className="dashboard-dialog" role="dialog" aria-modal="true">
+            <h2>{confirmDialog.title}</h2>
+            <p>{confirmDialog.message}</p>
+            <div className="dashboard-dialog-actions">
+              <button className="toolbar-btn" onClick={() => handleConfirm(false)}>取消</button>
+              <button className="toolbar-btn danger" onClick={() => handleConfirm(true)}>{confirmDialog.confirmText}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 媒体预览 */}
+      {mediaPreview.open && (
+        <div className="media-preview-modal" style={{ display: 'flex' }} onClick={() => {
+          document.querySelector('.media-preview-video')?.pause();
+          setMediaPreview((p) => ({ ...p, open: false }));
+        }}>
+          <div className="media-preview-backdrop" />
+          <div className="media-preview-panel" onClick={(e) => e.stopPropagation()}>
+            <button className="media-preview-close" type="button" onClick={() => {
+              document.querySelector('.media-preview-video')?.pause();
+              setMediaPreview((p) => ({ ...p, open: false }));
+            }}>×</button>
+            <div className="media-preview-title">{mediaPreview.title || '媒体预览'}</div>
+            {mediaPreview.type === 'video' ? (
+              <video className="media-preview-video" src={mediaPreview.url} controls playsinline style={{ display: 'block', maxWidth: '78vw', maxHeight: '72vh', borderRadius: '12px' }} />
+            ) : (
+              <img className="media-preview-image" src={mediaPreview.url} alt={mediaPreview.title} />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}

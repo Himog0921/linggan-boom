@@ -1,0 +1,157 @@
+import { MSG } from './constants.js';
+import { mapErrorToProtocolError } from '../workbench/runtime/errorMapper.js';
+import { normalizeProgressEvent, toLegacyProgressMessage } from '../workbench/runtime/progressEvent.js';
+
+/**
+ * 检查扩展 context 是否仍然有效
+ */
+export function isContextValid() {
+  try {
+    return !!chrome.runtime?.id;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 发送消息到 Background Service Worker
+ */
+export function sendToBackground(action, data = {}) {
+  if (!isContextValid()) {
+    return Promise.reject(new Error('Extension context invalidated'));
+  }
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({ action, ...data }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(chrome.runtime.lastError);
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+function isTabContextError(message = '') {
+  return /Receiving end does not exist|context invalidated|The message port closed/i.test(String(message || ''));
+}
+
+export function sendToTab(tabId, payload, { allowContextError = false, timeoutMs = 0 } = {}) {
+  return new Promise((resolve, reject) => {
+    const timer = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+      ? setTimeout(() => {
+        reject(new Error(`sendToTab timeout: ${String(payload?.action || 'unknown_action')}`));
+      }, Number(timeoutMs))
+      : null;
+
+    chrome.tabs.sendMessage(tabId, payload, (response) => {
+      if (timer) clearTimeout(timer);
+      const runtimeErr = chrome.runtime.lastError;
+      if (runtimeErr) {
+        const message = String(runtimeErr.message || runtimeErr);
+        if (allowContextError && isTabContextError(message)) {
+          resolve({
+            success: false,
+            skipped: true,
+            recoverable: true,
+            error: message,
+          });
+          return;
+        }
+        reject(new Error(message));
+        return;
+      }
+      if (response?.error) {
+        reject(new Error(response.error));
+        return;
+      }
+      resolve(response || { success: true });
+    });
+  });
+}
+
+/**
+ * 发送消息到指定 tab 的 Content Script
+ */
+export function sendToContent(tabId, action, data = {}) {
+  return sendToTab(tabId, { action, ...data });
+}
+
+/**
+ * 广播进度消息（从 content script 发到 popup/background）
+ */
+export function reportProgress(current, total, status, meta = {}) {
+  if (!isContextValid()) return;
+  const error = meta.error
+    ? mapErrorToProtocolError(meta.error)
+    : (String(meta.taskState || '').trim() === 'error' ? mapErrorToProtocolError(status) : null);
+  const progressEvent = normalizeProgressEvent({
+    current,
+    total,
+    status,
+    ...meta,
+    error,
+  });
+  const legacy = toLegacyProgressMessage(progressEvent);
+  chrome.runtime.sendMessage({
+    action: MSG.PROGRESS,
+    ...legacy,
+    progressEvent,
+  });
+}
+
+export function reportTaskError(error, meta = {}) {
+  if (!isContextValid()) return;
+  const protocolError = mapErrorToProtocolError(error, meta);
+  const progressEvent = normalizeProgressEvent({
+    current: Number(meta.current || 0),
+    total: Number(meta.total || 0),
+    status: protocolError.message,
+    taskState: 'error',
+    phase: meta.phase || meta.stage || 'finalizing',
+    taskType: meta.taskType,
+    metrics: meta.metrics,
+    heartbeatAt: meta.heartbeatAt,
+    error: protocolError,
+  });
+  const legacy = toLegacyProgressMessage(progressEvent);
+  chrome.runtime.sendMessage({
+    action: MSG.PROGRESS,
+    ...legacy,
+    progressEvent,
+  });
+}
+
+export function reportWorkbenchRecord({
+  recordType = '',
+  externalRecordId = '',
+  record = {},
+  collectionRunId = '',
+  externalTaskId = '',
+  sequence = Date.now(),
+  collectedAt = '',
+} = {}) {
+  if (!isContextValid()) return;
+  chrome.runtime.sendMessage({
+    action: MSG.WORKBENCH_RECORD_DELTA,
+    recordType,
+    externalRecordId,
+    record: record && typeof record === 'object' && !Array.isArray(record) ? record : {},
+    collectionRunId,
+    externalTaskId,
+    sequence,
+    collectedAt,
+  });
+}
+
+/**
+ * 广播采集完成消息
+ */
+export function reportDone(type, count, meta = {}) {
+  if (!isContextValid()) return;
+  chrome.runtime.sendMessage({
+    action: MSG.COLLECT_DONE,
+    type,
+    count,
+    ...meta,
+  });
+}

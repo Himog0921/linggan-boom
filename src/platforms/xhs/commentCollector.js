@@ -1,0 +1,836 @@
+import { randomDelay, parseCount, toHighQualityImageUrl, getHighQualityImageCandidates } from '../../shared/utils.js';
+import { commentStore } from '../../db/commentStore.js';
+import { BATCH_CONFIG, COMMENT_DEPTH_MODE } from '../../shared/constants.js';
+import { reportProgress } from '../../shared/messaging.js';
+import { detectCaptcha, showCaptchaPauseOverlay, humanScroll } from './antiDetect.js';
+import { getActiveCommentsContext } from './batchShared.js';
+import { createCollectorEvidence, createCollectorQualityMeta, joinRawDomText } from '../../shared/collectorMetadata.js';
+import {
+  buildXhsCommentsFromSnapshot,
+  requestXhsCommentSnapshot,
+  hydrateXhsCommentSnapshot,
+  fetchXhsJsonViaBridge,
+} from './commentApi.js';
+
+async function waitForCondition(predicate, timeout = 500, interval = 80) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    if (predicate()) return true;
+    await randomDelay(interval, Math.max(interval + 20, Math.round(interval * 1.35)));
+  }
+  return Boolean(predicate());
+}
+
+function readCommentSignals(container) {
+  const textSource = container?.innerText || document.body?.innerText || '';
+  const text = String(textSource || '').slice(0, 6000);
+  const match = text.match(/共\s*(\d+)\s*条评论/);
+  const commentHint = match ? Number(match[1] || 0) : 0;
+  const hasEndMarker = /- THE END -/.test(text);
+  const hasExpandableReplies = [...(container?.querySelectorAll?.('div.show-more') || [])]
+    .some((el) => isExpandMoreReplyTrigger(el?.textContent));
+  return {
+    commentHint,
+    hasEndMarker,
+    hasExpandableReplies,
+  };
+}
+
+/**
+ * 采集单篇笔记的所有评论（含子评论）
+ * 技术路径：DOM 解析 + 自动滚动加载 + 子评论展开
+ *
+ * @param {Object} options
+ * @param {string} options.noteId - 笔记 ID
+ * @param {string} options.noteUrl - 笔记 URL
+ * @param {number} options.maxTotal - 最多采集总评论数（0=不限）
+ * @param {number} options.maxSubComments - 每条主评论最多采集的子评论数（0=不限）
+ * @param {Function} options.onProgress - 进度回调
+ * @param {Function} options.shouldStop - 返回 true 时停止采集
+ * @param {string} options.commentDepthMode - 评论深度：twoLevel / allReplies
+ * @param {string} options.collectionRunId - 采集批次 ID
+ */
+export async function collectComments({
+  noteId = '',
+  noteUrl = '',
+  maxTotal = 0,
+  maxSubComments = BATCH_CONFIG.maxSubComments,
+  onProgress = null,
+  shouldStop = () => false,
+  waitIfPaused = async () => {},
+  commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
+  collectionRunId = '',
+} = {}) {
+  const apiResult = await collectCommentsViaApi({
+    noteId,
+    noteUrl,
+    maxTotal,
+    maxSubComments,
+    onProgress,
+    shouldStop,
+    waitIfPaused,
+    commentDepthMode,
+    collectionRunId,
+  });
+  if (!apiResult.needsDomContinuation && (apiResult.apiObserved || apiResult.total > 0)) {
+    return { total: apiResult.total, comments: apiResult.comments };
+  }
+
+  if (apiResult.needsDomContinuation) {
+    onProgress?.({
+      status: 'collecting',
+      current: apiResult.total || 0,
+      message: `页面 API 未完整覆盖更多回复，继续展开页面中的回复链路（当前 ${apiResult.total || 0} 条）`,
+    });
+  }
+
+  return collectCommentsFromDom({
+    noteId,
+    noteUrl,
+    maxTotal,
+    maxSubComments,
+    onProgress,
+    shouldStop,
+    waitIfPaused,
+    commentDepthMode,
+    collectionRunId,
+    initialComments: apiResult.comments,
+  });
+}
+
+function buildCommentSeenId(comment) {
+  return String(comment?.commentId || '').trim();
+}
+
+export function initializeCollectedComments(initialComments = []) {
+  const allComments = [];
+  const seenIds = new Set();
+  const list = Array.isArray(initialComments) ? initialComments : [];
+  list.forEach((comment) => {
+    const seenId = buildCommentSeenId(comment);
+    if (!seenId || seenIds.has(seenId)) return;
+    seenIds.add(seenId);
+    allComments.push(comment);
+  });
+  return { allComments, seenIds };
+}
+
+export function shouldContinueDomAfterApi({
+  depthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
+  hydrationDegraded = false,
+  hasExpandableReplies = false,
+} = {}) {
+  return String(depthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() === COMMENT_DEPTH_MODE.ALL_REPLIES
+    && Boolean(hydrationDegraded)
+    && Boolean(hasExpandableReplies);
+}
+
+async function collectCommentsViaApi({
+  noteId = '',
+  noteUrl = '',
+  maxTotal = 0,
+  maxSubComments = BATCH_CONFIG.maxSubComments,
+  onProgress = null,
+  shouldStop = () => false,
+  waitIfPaused = async () => {},
+  commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
+  collectionRunId = '',
+} = {}) {
+  noteUrl = noteUrl || window.location.href;
+  noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
+  const contentId = noteId ? `xhs_${noteId}` : '';
+
+  const resolveContainer = () => getActiveCommentsContext().container;
+  let container = resolveContainer();
+  if (!container) {
+    throw new Error('未找到评论区域，请确认当前页面有评论');
+  }
+
+  const allComments = [];
+  const seenIds = new Set();
+  const depthMode = String(commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() || COMMENT_DEPTH_MODE.TWO_LEVEL;
+  let noNewCount = 0;
+  const maxNoNew = depthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 8 : 4;
+  const replyExpandAttempts = depthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 20 : 3;
+  let apiObserved = false;
+  let hydrationDegradedEver = false;
+
+  while (!shouldStop()) {
+    container = resolveContainer() || container;
+    if (!container) break;
+    await waitIfPaused();
+    if (shouldStop()) break;
+    if (maxTotal > 0 && allComments.length >= maxTotal) {
+      onProgress?.({ status: 'done', message: `已达到设定上限 ${maxTotal} 条，停止采集` });
+      break;
+    }
+
+    onProgress?.({
+      status: 'collecting',
+      current: allComments.length,
+      message: `正在扫描评论区，当前已采集 ${allComments.length} 条评论`,
+    });
+
+    if (detectCaptcha()) {
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `检测到安全验证，当前已采集 ${allComments.length} 条评论`,
+      });
+      const action = await showCaptchaPauseOverlay();
+      if (action === 'stop') break;
+    }
+
+    let foundNew = false;
+    const snapshot = await requestXhsCommentSnapshot(noteId).catch(() => null);
+    if (snapshot) {
+      let hydrationDegraded = false;
+      const hydratedSnapshot = await hydrateXhsCommentSnapshot(snapshot, {
+        noteId,
+        fetchJson: fetchXhsJsonViaBridge,
+        shouldStop,
+        waitIfPaused,
+      }).catch(() => {
+        hydrationDegraded = true;
+        hydrationDegradedEver = true;
+        return snapshot;
+      });
+      apiObserved = apiObserved
+        || hydratedSnapshot.pages.length > 0
+        || hydratedSnapshot.subPages.length > 0;
+      const apiComments = buildXhsCommentsFromSnapshot(hydratedSnapshot, {
+        noteId,
+        noteUrl,
+        url: noteUrl,
+        contentId,
+      }, {
+        maxSubComments: depthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 0 : maxSubComments,
+        sortMode: 'unknown',
+        collectionRunId,
+        qualityMeta: hydrationDegraded
+          ? {
+              dataQuality: 'degraded',
+              qualityReason: 'api_snapshot_partial',
+              sourceTier: 'api',
+            }
+          : {},
+      });
+
+      for (const comment of apiComments) {
+        await waitIfPaused();
+        if (shouldStop()) break;
+        if (maxTotal > 0 && allComments.length >= maxTotal) break;
+        const key = `${comment.commentId}|${comment.parentCommentId || ''}|${comment.level || 1}`;
+        if (!comment.commentId || seenIds.has(key)) continue;
+        seenIds.add(key);
+        allComments.push(comment);
+        foundNew = true;
+      }
+    }
+
+    const parentComments = container.querySelectorAll('.parent-comment');
+    for (const parentEl of parentComments) {
+      await waitIfPaused();
+      if (shouldStop()) break;
+      if (maxTotal > 0 && allComments.length >= maxTotal) break;
+
+      const scrollParent = findScrollParent(container);
+      await scrollIntoViewIfNeeded(parentEl, scrollParent);
+      await randomDelay(80, 160);
+      await expandAllReplies(parentEl, replyExpandAttempts);
+    }
+
+    if (foundNew) {
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `已通过页面 API 同步 ${allComments.length} 条评论${maxTotal > 0 ? `（上限 ${maxTotal}）` : ''}`,
+      });
+    }
+
+    if (!foundNew) {
+      noNewCount++;
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `本轮未同步到新评论，准备继续滚动加载（第 ${noNewCount}/${maxNoNew} 次）`,
+      });
+      if (noNewCount >= maxNoNew) {
+        if (!apiObserved && allComments.length === 0) {
+          return { total: 0, comments: [], apiObserved: false };
+        }
+        break;
+      }
+    } else {
+      noNewCount = 0;
+    }
+
+    const nextSignals = readCommentSignals(resolveContainer() || container);
+    if (nextSignals.hasEndMarker && noNewCount > 0) {
+      onProgress?.({
+        status: 'done',
+        current: allComments.length,
+        message: `检测到评论区已到底，停止采集（当前 ${allComments.length} 条）`,
+      });
+      break;
+    }
+
+    if (foundNew) {
+      continue;
+    }
+
+    const nextContainer = resolveContainer() || container;
+    const nextScrollParent = findScrollParent(nextContainer);
+    await humanScroll(nextScrollParent, 420);
+    await randomDelay(350, 650);
+  }
+
+  if (allComments.length > 0) {
+    await commentStore.bulkUpsert(allComments);
+  }
+
+  const finalSignals = readCommentSignals(resolveContainer() || container);
+  return {
+    total: allComments.length,
+    comments: allComments,
+    apiObserved,
+    needsDomContinuation: shouldContinueDomAfterApi({
+      depthMode,
+      hydrationDegraded: hydrationDegradedEver,
+      hasExpandableReplies: finalSignals.hasExpandableReplies,
+    }),
+  };
+}
+
+async function collectCommentsFromDom({
+  noteId = '',
+  noteUrl = '',
+  maxTotal = 0,
+  maxSubComments = BATCH_CONFIG.maxSubComments,
+  onProgress = null,
+  shouldStop = () => false,
+  waitIfPaused = async () => {},
+  commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
+  collectionRunId = '',
+  initialComments = [],
+} = {}) {
+  noteUrl = noteUrl || window.location.href;
+  noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
+  const contentId = noteId ? `xhs_${noteId}` : '';
+
+  const resolveContainer = () => getActiveCommentsContext().container;
+  let container = resolveContainer();
+  if (!container) {
+    throw new Error('未找到评论区域，请确认当前页面有评论');
+  }
+
+  const seeded = initializeCollectedComments(initialComments);
+  const allComments = seeded.allComments;
+  const seenIds = seeded.seenIds;
+  const depthMode = String(commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() || COMMENT_DEPTH_MODE.TWO_LEVEL;
+  let noNewCount = 0;
+  const maxNoNew = depthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 8 : 4;
+  const replyExpandAttempts = depthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 20 : 3;
+
+  while (!shouldStop()) {
+    container = resolveContainer() || container;
+    if (!container) break;
+    await waitIfPaused();
+    if (shouldStop()) break;
+    if (maxTotal > 0 && allComments.length >= maxTotal) {
+      onProgress?.({ status: 'done', message: `已达到设定上限 ${maxTotal} 条，停止采集` });
+      break;
+    }
+
+    onProgress?.({
+      status: 'collecting',
+      current: allComments.length,
+      message: `正在扫描评论区，当前已采集 ${allComments.length} 条评论`,
+    });
+
+    if (detectCaptcha()) {
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `检测到安全验证，当前已采集 ${allComments.length} 条评论`,
+      });
+      const action = await showCaptchaPauseOverlay();
+      if (action === 'stop') break;
+    }
+
+    const parentComments = container.querySelectorAll('.parent-comment');
+    let foundNew = false;
+
+    for (const parentEl of parentComments) {
+      await waitIfPaused();
+      if (shouldStop()) break;
+      if (maxTotal > 0 && allComments.length >= maxTotal) break;
+
+      const mainItemEl = parentEl.querySelector('.comment-item:not(.comment-item-sub)');
+      const mainComment = parseCommentNode(mainItemEl);
+      if (!mainComment || seenIds.has(mainComment.commentId)) continue;
+
+      foundNew = true;
+      seenIds.add(mainComment.commentId);
+      mainComment.noteId = noteId;
+      mainComment.noteUrl = noteUrl;
+      mainComment.contentId = contentId;
+      mainComment.commentEntityId = `xhs_${noteId}_${mainComment.commentId}`;
+      mainComment.platformCommentId = mainComment.commentId;
+      mainComment.parentCommentId = '';
+      mainComment.rootCommentId = mainComment.commentId;
+      mainComment.level = 1;
+      mainComment.replyToCommentId = '';
+      mainComment.replyToUserName = '';
+      mainComment.sortMode = 'unknown';
+      mainComment.platform = 'xhs';
+      mainComment.collectionRunId = collectionRunId;
+      mainComment.dataQuality = mainComment.dataQuality || 'degraded';
+      mainComment.qualityReason = mainComment.qualityReason || 'api_unobserved_dom_fallback';
+      mainComment.sourceTier = mainComment.sourceTier || 'dom';
+
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `正在展开第 ${allComments.length + 1} 条主评论的回复`,
+      });
+      const scrollParent = findScrollParent(container);
+      await scrollIntoViewIfNeeded(parentEl, scrollParent);
+      await randomDelay(80, 160);
+      await expandAllReplies(parentEl, replyExpandAttempts);
+
+      const subItems = parentEl.querySelectorAll('.comment-item.comment-item-sub');
+      let subCount = 0;
+
+      for (const subEl of subItems) {
+        await waitIfPaused();
+        if (maxSubComments > 0 && subCount >= maxSubComments) break;
+        if (maxTotal > 0 && allComments.length >= maxTotal) break;
+
+        const subComment = parseCommentNode(subEl);
+        if (!subComment || seenIds.has(subComment.commentId)) continue;
+
+        seenIds.add(subComment.commentId);
+        subComment.noteId = noteId;
+        subComment.noteUrl = noteUrl;
+        subComment.contentId = contentId;
+        subComment.commentEntityId = `xhs_${noteId}_${subComment.commentId}`;
+        subComment.platformCommentId = subComment.commentId;
+        subComment.parentCommentId = mainComment.commentId;
+        subComment.rootCommentId = mainComment.commentId;
+        subComment.level = 2;
+        subComment.replyToCommentId = mainComment.commentId;
+        subComment.replyToUserName = mainComment.author || '';
+        subComment.sortMode = 'unknown';
+        subComment.platform = 'xhs';
+        subComment.collectionRunId = collectionRunId;
+        subComment.dataQuality = subComment.dataQuality || 'degraded';
+        subComment.qualityReason = subComment.qualityReason || 'api_unobserved_dom_fallback';
+        subComment.sourceTier = subComment.sourceTier || 'dom';
+
+        allComments.push(subComment);
+        subCount++;
+      }
+
+      allComments.push(mainComment);
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `已采集 ${allComments.length} 条评论${maxTotal > 0 ? `（上限 ${maxTotal}）` : ''}`,
+      });
+
+      await randomDelay(60, 120);
+    }
+
+    if (!foundNew) {
+      noNewCount++;
+      onProgress?.({
+        status: 'collecting',
+        current: allComments.length,
+        message: `本轮未发现新评论，准备继续滚动加载（第 ${noNewCount}/${maxNoNew} 次）`,
+      });
+      if (noNewCount >= maxNoNew) break;
+    } else {
+      noNewCount = 0;
+    }
+
+    const nextSignals = readCommentSignals(resolveContainer() || container);
+    if (nextSignals.hasEndMarker && noNewCount > 0) {
+      onProgress?.({
+        status: 'done',
+        current: allComments.length,
+        message: `检测到评论区已到底，停止采集（当前 ${allComments.length} 条）`,
+      });
+      break;
+    }
+
+    if (foundNew) {
+      continue;
+    }
+
+    const nextContainer = resolveContainer() || container;
+    const nextScrollParent = findScrollParent(nextContainer);
+    await humanScroll(nextScrollParent, 420);
+    await randomDelay(350, 650);
+  }
+
+  if (allComments.length > 0) {
+    await commentStore.bulkUpsert(allComments);
+  }
+
+  return { total: allComments.length, comments: allComments };
+}
+
+/**
+ * 采集评论区所有图片 URL（不含文字，仅图片）
+ * @param {Object} options
+ * @param {string} options.noteId
+ * @param {Function} options.onProgress
+ * @param {Function} options.shouldStop
+ * @returns {Promise<{total: number, images: string[]}>}
+ */
+export async function collectCommentImages({
+  noteId = '',
+  onProgress = null,
+  shouldStop = () => false,
+  waitIfPaused = async () => {},
+} = {}) {
+  const resolveContainer = () => getActiveCommentsContext().container;
+  let container = resolveContainer();
+  if (!container) {
+    throw new Error('未找到评论区域，请确认当前页面有评论');
+  }
+
+  const allImages = [];
+  const seenUrls = new Set();
+  let noNewCount = 0;
+  const maxNoNew = 4;
+
+  while (!shouldStop()) {
+    container = resolveContainer() || container;
+    if (!container) break;
+    await waitIfPaused();
+    if (shouldStop()) break;
+    onProgress?.({
+      status: 'collecting',
+      current: allImages.length,
+      message: `正在扫描评论图片区，当前已发现 ${allImages.length} 张`,
+    });
+    if (detectCaptcha()) {
+      const action = await showCaptchaPauseOverlay();
+      if (action === 'stop') break;
+    }
+
+    // 展开所有子评论
+    const parentComments = container.querySelectorAll('.parent-comment');
+    for (const parentEl of parentComments) {
+      await waitIfPaused();
+      if (shouldStop()) break;
+      await expandAllReplies(parentEl);
+    }
+
+    // 查找所有评论中的图片
+    const images = container.querySelectorAll('.comment-item img, .comment-item-sub img');
+    let foundNew = false;
+
+    for (const img of images) {
+      await waitIfPaused();
+      if (shouldStop()) break;
+      const sources = extractImageSources(img);
+      if (sources.length === 0) continue;
+      // 排除头像等小图（通常评论图片较大）
+      // 头像一般在 a.name 或 .avatar 内
+      if (img.closest('a.name') || img.closest('.avatar') || img.closest('.author-wrapper')) continue;
+      // 排除 emoji/表情图（通常很小或在特定 class 下）
+      if (img.width > 0 && img.width < 30) continue;
+      if (img.height > 0 && img.height < 30) continue;
+      if (img.closest('[class*="emoji"]') || img.closest('[class*="sticker"]')) continue;
+
+      const candidateSet = new Set();
+      sources.forEach((sourceUrl) => {
+        getHighQualityImageCandidates(sourceUrl).forEach((candidate) => candidateSet.add(candidate));
+      });
+      const candidates = Array.from(candidateSet);
+      const highQualitySrc = candidates[0] || toHighQualityImageUrl(sources[0]);
+      if (!highQualitySrc || seenUrls.has(highQualitySrc)) continue;
+      seenUrls.add(highQualitySrc);
+      allImages.push({ url: highQualitySrc, candidates, originalUrl: sources[0] });
+      foundNew = true;
+    }
+
+    // 也查找评论中的图片链接（有些评论图片是点击展开的）
+    const commentImgContainers = container.querySelectorAll('.comment-image, .note-image, [class*="comment-img"]');
+    for (const imgContainer of commentImgContainers) {
+      await waitIfPaused();
+      if (shouldStop()) break;
+      const imgs = imgContainer.querySelectorAll('img');
+      for (const img of imgs) {
+        await waitIfPaused();
+        if (shouldStop()) break;
+        const sources = extractImageSources(img);
+        if (sources.length === 0) continue;
+        const candidateSet = new Set();
+        sources.forEach((sourceUrl) => {
+          getHighQualityImageCandidates(sourceUrl).forEach((candidate) => candidateSet.add(candidate));
+        });
+        const candidates = Array.from(candidateSet);
+        const highQualitySrc = candidates[0] || toHighQualityImageUrl(sources[0]);
+        if (!highQualitySrc || seenUrls.has(highQualitySrc)) continue;
+        seenUrls.add(highQualitySrc);
+        allImages.push({ url: highQualitySrc, candidates, originalUrl: sources[0] });
+        foundNew = true;
+      }
+    }
+
+    onProgress?.({
+      status: 'collecting',
+      current: allImages.length,
+      message: `已发现 ${allImages.length} 张评论图片`,
+    });
+
+    if (!foundNew) {
+      noNewCount++;
+      onProgress?.({
+        status: 'collecting',
+        current: allImages.length,
+        message: `本轮未发现新图片，准备继续滚动加载（第 ${noNewCount}/${maxNoNew} 次）`,
+      });
+      if (noNewCount >= maxNoNew) break;
+    } else {
+      noNewCount = 0;
+    }
+
+    const nextScrollParent = findScrollParent(resolveContainer() || container);
+    onProgress?.({
+      status: 'collecting',
+      current: allImages.length,
+      message: `正在滚动加载更多评论，当前已发现 ${allImages.length} 张图片`,
+    });
+    await humanScroll(nextScrollParent, 600);
+    await randomDelay(550, 1100);
+  }
+
+  return { total: allImages.length, images: allImages };
+}
+
+/**
+ * 从评论 DOM 节点提取数据（含点赞数）
+ */
+function parseCommentNode(el) {
+  if (!el) return null;
+
+  const rawId = el.dataset?.id || el.id || '';
+  const authorEl = el.querySelector('.author-wrapper a.name') || el.querySelector('a.name');
+  const avatarLinkEl = el.querySelector('.avatar a') || el.querySelector('a.name');
+  const author = authorEl?.textContent?.trim() || '';
+
+  const innerContainer = el.querySelector('.comment-inner-container');
+  const spans = innerContainer
+    ? [...innerContainer.querySelectorAll('span:not([class])')]
+    : [...el.querySelectorAll('span:not([class])')];
+
+  const timeRe = /^\d{4}[-/年]\d{1,2}|^(昨天|前天|刚刚|\d+分钟前|\d+小时前|\d+天前)/;
+  const textEl = spans.find(s => s.textContent.trim().length > 2 && !timeRe.test(s.textContent.trim()));
+  const timeEl = spans.find(s => timeRe.test(s.textContent.trim()));
+
+  const text = textEl?.textContent?.trim() || '';
+  if (!text && !author) return null;
+
+  const commentId = rawId || `${author}_${text.slice(0, 50)}`;
+
+  // 采集点赞数
+  const likesEl = el.querySelector('.like-wrapper .count')
+    || el.querySelector('.like .count')
+    || el.querySelector('[class*="like"] .count')
+    || el.querySelector('.comment-like .count');
+  const likesText = likesEl?.textContent?.trim() || '0';
+  const likes = parseLikeCount(likesText);
+  const ipLocation = el.querySelector('.date .location')?.textContent?.trim() || '';
+  const avatarUrl = el.querySelector('.avatar img.avatar-item')?.src
+    || el.querySelector('.avatar img')?.src
+    || '';
+  const authorId = avatarLinkEl?.dataset?.userId
+    || avatarLinkEl?.getAttribute?.('data-user-id')
+    || '';
+
+  return {
+    commentId,
+    text,
+    author,
+    profileUrl: authorEl?.getAttribute('href') || avatarLinkEl?.getAttribute('href') || '',
+    location: ipLocation,
+    ipLocation,
+    avatarUrl,
+    authorId,
+    time: timeEl?.textContent?.trim() || '',
+    publishedAt: 0,
+    publishedAtText: timeEl?.textContent?.trim() || '',
+    likes,
+    collectedAt: Date.now(),
+    createdAt: Date.now(),
+    syncStatus: 'pending',
+    ...createCollectorQualityMeta({
+      dataQuality: rawId ? 'degraded' : 'degraded',
+      qualityReason: rawId ? 'api_unobserved_dom_fallback' : 'synthetic_comment_id',
+      sourceTier: 'dom',
+    }),
+    ...createCollectorEvidence({
+      rawPayload: {
+        rawId,
+        author,
+        text,
+        time: timeEl?.textContent?.trim() || '',
+        likesText,
+        ipLocation,
+        authorId,
+      },
+      rawDomText: joinRawDomText([
+        author,
+        text,
+        timeEl?.textContent?.trim() || '',
+        ipLocation,
+      ]),
+      rawUrl: window.location.href,
+      rawSource: 'xhs.comments.dom',
+    }),
+  };
+}
+
+/**
+ * 解析点赞数（支持 "1.2万" 格式）
+ */
+function parseLikeCount(text) {
+  if (!text || text === '赞') return 0;
+  return parseCount(text);
+}
+
+/**
+ * 展开所有子评论回复（递归版）
+ * 支持多层级：每次点击展开按钮后重新扫描所有层级的「展开更多回复」
+ */
+export function isExpandMoreReplyTrigger(text = '') {
+  return /展开/.test(String(text || '').trim());
+}
+
+export async function expandAllReplies(parentCommentEl, maxAttempts = 10) {
+
+  while (maxAttempts > 0) {
+    const expandBtns = [...parentCommentEl.querySelectorAll('div.show-more')]
+      .filter((el) => isExpandMoreReplyTrigger(el?.textContent));
+
+    if (expandBtns.length === 0) break;
+
+    const beforeCount = parentCommentEl.querySelectorAll('.comment-item.comment-item-sub').length;
+
+    for (const btn of expandBtns) {
+      btn.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+      await randomDelay(60, 110);
+      btn.click();
+    }
+
+    await waitForCondition(() => {
+      const currentCount = parentCommentEl.querySelectorAll('.comment-item.comment-item-sub').length;
+      const stillHasExpand = [...parentCommentEl.querySelectorAll('div.show-more')]
+        .some((el) => isExpandMoreReplyTrigger(el?.textContent));
+      return currentCount > beforeCount || !stillHasExpand;
+    }, 800, 70);
+    maxAttempts--;
+  }
+}
+
+async function scrollIntoViewIfNeeded(el, scrollParent) {
+  const elRect = el.getBoundingClientRect();
+  const parentRect = scrollParent.getBoundingClientRect?.() ?? { top: 0, bottom: window.innerHeight };
+  if (elRect.top < parentRect.top || elRect.bottom > parentRect.bottom) {
+    el.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+    await randomDelay(90, 160);
+  }
+}
+
+function findScrollParent(el) {
+  let parent = el.parentElement;
+  while (parent) {
+    const style = window.getComputedStyle(parent);
+    if (style.overflow === 'auto' || style.overflow === 'scroll' ||
+        style.overflowY === 'auto' || style.overflowY === 'scroll') {
+      return parent;
+    }
+    parent = parent.parentElement;
+  }
+  return document.documentElement;
+}
+
+function extractImageSources(img) {
+  if (!img) return [];
+  const attrCandidates = [
+    img.currentSrc,
+    img.src,
+    img.dataset?.src,
+    img.dataset?.origin,
+    img.dataset?.originSrc,
+    img.getAttribute('data-src'),
+    img.getAttribute('data-origin'),
+    img.getAttribute('data-origin-src'),
+    img.getAttribute('src'),
+  ].filter(Boolean);
+
+  const srcset = img.getAttribute('srcset') || '';
+  if (srcset) {
+    srcset.split(',').forEach((item) => {
+      const [url] = item.trim().split(/\s+/);
+      if (url) attrCandidates.push(url);
+    });
+  }
+
+  // 采集图片节点及其祖先（最多 5 层）上的 href/data-*/style 背景图
+  let cursor = img;
+  for (let depth = 0; cursor && depth < 5; depth++) {
+    const href = cursor.getAttribute?.('href') || '';
+    if (href) attrCandidates.push(href);
+
+    const style = cursor.getAttribute?.('style') || '';
+    const bgUrls = extractUrlsFromBackground(style);
+    bgUrls.forEach((value) => attrCandidates.push(value));
+
+    const dataset = cursor.dataset || {};
+    Object.keys(dataset).forEach((key) => {
+      const value = dataset[key];
+      if (typeof value !== 'string') return;
+      const trimmed = value.trim();
+      if (!trimmed) return;
+      if (/^https?:\/\//i.test(trimmed) || /^\/\//.test(trimmed) || /^\/[^/]/.test(trimmed)) {
+        attrCandidates.push(trimmed);
+      }
+    });
+    cursor = cursor.parentElement;
+  }
+
+  const dedup = [];
+  attrCandidates.forEach((value) => {
+    if (!value) return;
+    const normalized = String(value).trim();
+    if (!normalized || dedup.includes(normalized)) return;
+    if (!isLikelyImageUrl(normalized)) return;
+    dedup.push(normalized);
+  });
+  return dedup;
+}
+
+function extractUrlsFromBackground(styleText) {
+  if (!styleText || !styleText.includes('url(')) return [];
+  const urls = [];
+  const re = /url\((['"]?)(.*?)\1\)/g;
+  let m;
+  while ((m = re.exec(styleText)) !== null) {
+    if (m[2]) urls.push(m[2].trim());
+  }
+  return urls;
+}
+
+function isLikelyImageUrl(url) {
+  if (!url || /^data:|^javascript:/i.test(url)) return false;
+  if (/\.(jpg|jpeg|png|gif|webp|avif)(\?|$)/i.test(url)) return true;
+  if (/xhscdn|xhsimg|xhslink/i.test(url)) return true;
+  if (/x-oss-process|imageView2|imageslim|thumbnail/i.test(url)) return true;
+  return false;
+}

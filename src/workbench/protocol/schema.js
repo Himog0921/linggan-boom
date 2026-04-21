@@ -1,0 +1,235 @@
+import { MSG } from '../../shared/constants.js';
+
+export const WORKBENCH_PROTOCOL_VERSION = 'v1';
+
+export const WORKBENCH_MESSAGE_TYPE = {
+  EXECUTOR_HELLO: 'executor.hello',
+  CAPABILITY_CHECK: 'capability.check',
+  CAPABILITY_REPORT: 'capability.report',
+  TASK_ENVELOPE: 'task.envelope',
+  TASK_ACCEPTED: 'task.accepted',
+  TASK_REJECTED: 'task.rejected',
+  TASK_PROGRESS: 'task.progress',
+  TASK_RESULT: 'task.result',
+  TASK_FAILED: 'task.failed',
+  TASK_CONTROL: 'task.control',
+  TASK_RECORD: 'task.record',
+};
+
+export const REMOTE_TASK_TYPE = {
+  XHS_BATCH_NOTES: 'xhs.batchNotes',
+  XHS_BATCH_COMMENTS: 'xhs.batchComments',
+  XHS_COLLECT_AUTHOR: 'xhs.collectAuthor',
+  DOUYIN_BATCH_NOTES: 'douyin.batchNotes',
+  DOUYIN_BATCH_COMMENTS: 'douyin.batchComments',
+  DOUYIN_COLLECT_AUTHOR: 'douyin.collectAuthor',
+  DOUYIN_SINGLE_COMMENTS: 'douyin.singleComments',
+  DOUYIN_COMMENT_IMAGE_DOWNLOAD: 'douyin.commentImageDownload',
+};
+
+export const MONITOR_TASK_STRATEGY = {
+  AUTHOR_BASELINE: 'author_baseline',
+  AUTHOR_PATROL: 'author_patrol',
+  KEYWORD_PATROL: 'keyword_patrol',
+  DETAIL_PROBE: 'detail_probe',
+  DEEP_COLLECT: 'deep_collect',
+};
+
+export const MONITOR_RECORD_MODE = {
+  AUTHOR_PROFILE: 'author_profile',
+  AUTHOR_SURFACE: 'author_surface',
+  KEYWORD_SURFACE: 'keyword_surface',
+  DETAIL_PROBE: 'detail_probe',
+};
+
+export const REMOTE_TASK_CONTROL_ACTION = {
+  PAUSE: 'pause',
+  RESUME: 'resume',
+  STOP: 'stop',
+  DELETE: 'delete',
+};
+
+export const WORKBENCH_TASK_EVENT_TYPE = {
+  TASK_CLAIMED: 'task.claimed',
+  TASK_STARTED: 'task.started',
+  TASK_HEARTBEAT: 'task.heartbeat',
+  TASK_PROGRESS: 'task.progress',
+  TASK_PARTIAL_RESULT: 'task.partial_result',
+  TASK_CONTROL_REQUESTED: 'task.control_requested',
+  TASK_CONTROL_APPLIED: 'task.control_applied',
+  TASK_CONTROL_FAILED: 'task.control_failed',
+  TASK_PAUSED: 'task.paused',
+  TASK_RESUMED: 'task.resumed',
+  TASK_STOPPING: 'task.stopping',
+  TASK_STOPPED: 'task.stopped',
+  TASK_COMPLETED: 'task.completed',
+  TASK_FAILED: 'task.failed',
+};
+
+export const WORKBENCH_RECORD_TYPE = {
+  NOTE: 'note',
+  COMMENT: 'comment',
+  AUTHOR: 'author',
+  MEDIA: 'media',
+};
+
+export const WORKBENCH_EVENT_SOURCE = {
+  WORKBENCH: 'workbench',
+  PLUGIN: 'plugin',
+  CONTENT: 'content',
+};
+
+export const REMOTE_EXECUTION_STATUS = {
+  ACCEPTED: 'accepted',
+  RUNNING: 'running',
+  PAUSED: 'paused',
+  STOPPING: 'stopping',
+  DONE: 'done',
+  FAILED: 'failed',
+  CANCELED: 'canceled',
+  REJECTED: 'rejected',
+};
+
+export const REMOTE_EXECUTION_STAGE = {
+  CONTEXT_CHECK: 'context_check',
+  DISCOVERING: 'discovering',
+  COLLECTING: 'collecting',
+  DOWNLOADING: 'downloading',
+  PERSISTING: 'persisting',
+  PACKAGING: 'packaging',
+  FINALIZING: 'finalizing',
+};
+
+export const REMOTE_ERROR_CATEGORY = {
+  CONTEXT: 'context',
+  AUTH: 'auth',
+  NETWORK: 'network',
+  PLATFORM_BLOCK: 'platform_block',
+  RATE_LIMIT: 'rate_limit',
+  STORAGE: 'storage',
+  DOWNLOAD: 'download',
+  USER_CANCEL: 'user_cancel',
+  INTERNAL: 'internal',
+};
+
+export const REMOTE_ERROR_CODE = {
+  UNSUPPORTED_TASK_TYPE: 'unsupported_task_type',
+  PLATFORM_MISMATCH: 'platform_mismatch',
+  PAGE_TYPE_MISMATCH: 'page_type_mismatch',
+  PAGE_CONTEXT_UNAVAILABLE: 'page_context_unavailable',
+  SEARCH_LIST_UNSTABLE: 'search_list_unstable',
+  LOGIN_REQUIRED: 'login_required',
+  EXECUTOR_BUSY: 'executor_busy',
+  STORAGE_WRITE_FAILED: 'storage_write_failed',
+  DOWNLOAD_FAILED: 'download_failed',
+  TASK_STOPPED_BY_USER: 'task_stopped_by_user',
+  UNEXPECTED_INTERNAL_ERROR: 'unexpected_internal_error',
+};
+
+export const REMOTE_TARGET_PAGE_TYPE = {
+  SEARCH: 'search',
+  PROFILE: 'profile',
+  DETAIL: 'detail',
+  UNKNOWN: 'unknown',
+};
+
+export const WORKBENCH_DISPATCH_TARGET = {
+  BACKGROUND: 'background',
+  CONTENT: 'content',
+};
+
+export const SUPPORTED_REMOTE_TASKS = {
+  [REMOTE_TASK_TYPE.XHS_BATCH_NOTES]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE, REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_NOTES,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_NOTES,
+    },
+    capabilityKey: 'canBatchNotes',
+  },
+  [REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_COMMENTS,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_COMMENTS,
+    },
+    capabilityKey: 'canBatchComments',
+  },
+  [REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.COLLECT_AUTHOR,
+    controlActions: {},
+    capabilityKey: 'canCollectAuthor',
+  },
+  [REMOTE_TASK_TYPE.DOUYIN_BATCH_NOTES]: {
+    platform: 'douyin',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE, REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_NOTES,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_NOTES,
+    },
+    capabilityKey: 'canBatchNotes',
+  },
+  [REMOTE_TASK_TYPE.DOUYIN_BATCH_COMMENTS]: {
+    platform: 'douyin',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_COMMENTS,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_COMMENTS,
+    },
+    capabilityKey: 'canBatchComments',
+  },
+  [REMOTE_TASK_TYPE.DOUYIN_COLLECT_AUTHOR]: {
+    platform: 'douyin',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.COLLECT_AUTHOR,
+    controlActions: {},
+    capabilityKey: 'canCollectAuthor',
+  },
+  [REMOTE_TASK_TYPE.DOUYIN_SINGLE_COMMENTS]: {
+    platform: 'douyin',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.COLLECT_SINGLE_COMMENT,
+    controlActions: {},
+    capabilityKey: 'canCollectComments',
+  },
+  [REMOTE_TASK_TYPE.DOUYIN_COMMENT_IMAGE_DOWNLOAD]: {
+    platform: 'douyin',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.DOWNLOAD_CURRENT_COMMENT_IMAGES,
+    controlActions: {},
+    capabilityKey: 'canDownloadCommentImages',
+  },
+};
+
+export function getSupportedRemoteTask(taskType = '') {
+  const normalizedTaskType = String(taskType || '').trim();
+  return SUPPORTED_REMOTE_TASKS[normalizedTaskType] || null;
+}
+
+export function isSupportedRemoteTaskType(taskType = '') {
+  return Boolean(getSupportedRemoteTask(taskType));
+}

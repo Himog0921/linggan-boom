@@ -1,0 +1,528 @@
+import {
+  getByInject,
+  safeUrl,
+  extractNoteId,
+  parseCount,
+  toHighQualityImageUrl,
+  pickBestVideoStream,
+  getHighQualityImageCandidates,
+} from '../../shared/utils.js';
+import { isContextValid } from '../../shared/messaging.js';
+import { noteStore } from '../../db/noteStore.js';
+import { createCollectorEvidence, joinRawDomText } from '../../shared/collectorMetadata.js';
+import { withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
+
+async function waitForDiscoverySettle(containerSelector, previousCount, timeout, isProfileMode) {
+  const startedAt = Date.now();
+  let stableRounds = 0;
+
+  while (Date.now() - startedAt < timeout) {
+    const currentCount = discoverNotesFromDOM(containerSelector).length;
+    if (currentCount > previousCount) {
+      stableRounds += 1;
+      if (stableRounds >= 2) return;
+    } else {
+      stableRounds = 0;
+    }
+    await new Promise((resolve) => setTimeout(resolve, isProfileMode ? 200 : 160));
+  }
+}
+
+export function selectNoteKey(noteMap = {}, preferredNoteId = '', currentUrl = '') {
+  const expectedId = String(preferredNoteId || '').trim();
+  if (expectedId && noteMap && noteMap[expectedId]) {
+    return expectedId;
+  }
+
+  const currentNoteId = extractNoteId(currentUrl);
+  const validKeys = Object.keys(noteMap || {}).filter(k => k && k !== 'undefined' && k.length > 10);
+  if (currentNoteId && noteMap && noteMap[currentNoteId]) {
+    return currentNoteId;
+  }
+  return validKeys[0] || '';
+}
+
+function normalizeNoteData(noteData) {
+  let note = Array.isArray(noteData) ? noteData[0] : noteData;
+  if (note && note.note && !note.noteId && !note.id) {
+    note = note.note;
+  }
+  return note || null;
+}
+
+export function isCollectedNoteUsable(note = {}, expectedNoteId = '') {
+  const normalizedExpectedId = String(expectedNoteId || '').trim();
+  const normalizedActualId = String(note?.noteId || note?.id || '').trim();
+  if (normalizedExpectedId && normalizedActualId && normalizedExpectedId !== normalizedActualId) {
+    return false;
+  }
+
+  const hasText = Boolean(String(note?.title || '').trim() || String(note?.desc || '').trim());
+  const hasMedia = Boolean(
+    (Array.isArray(note?.imageList) && note.imageList.length > 0)
+      || note?.video?.media?.stream
+      || note?.video?.consumer
+  );
+  const hasAuthor = Boolean(String(note?.user?.nickname || '').trim() || String(note?.user?.userId || '').trim());
+  const hasStats = Boolean(
+    note?.interactInfo?.likedCount
+    || note?.interactInfo?.commentCount
+    || note?.interactInfo?.shareCount
+    || note?.interactInfo?.collectedCount
+  );
+
+  return hasText || hasMedia || hasAuthor || hasStats;
+}
+
+export function resolveExpectedNoteFromMap(noteMap = {}, expectedNoteId = '', currentUrl = '') {
+  const expectedId = String(expectedNoteId || '').trim();
+  const preferredKey = selectNoteKey(noteMap, expectedId, currentUrl);
+  const candidateKeys = [];
+  if (expectedId) candidateKeys.push(expectedId);
+  if (preferredKey && !candidateKeys.includes(preferredKey)) candidateKeys.push(preferredKey);
+
+  const entries = Object.entries(noteMap || {});
+  for (const [key, value] of entries) {
+    const note = normalizeNoteData(value);
+    const actualId = String(note?.noteId || note?.id || '').trim();
+    if (expectedId && actualId === expectedId && !candidateKeys.includes(key)) {
+      candidateKeys.unshift(key);
+    }
+  }
+
+  for (const key of candidateKeys) {
+    const note = normalizeNoteData(noteMap?.[key]);
+    if (!note) continue;
+    const actualId = String(note?.noteId || note?.id || '').trim();
+    return {
+      noteKey: key,
+      note,
+      actualNoteId: actualId,
+      exactMatch: !expectedId || actualId === expectedId,
+      usable: isCollectedNoteUsable(note, expectedId),
+    };
+  }
+
+  return {
+    noteKey: '',
+    note: null,
+    actualNoteId: '',
+    exactMatch: false,
+    usable: false,
+  };
+}
+
+/**
+ * 提取话题标签
+ */
+function extractHashtags(text = '') {
+  const raw = String(text || '');
+  const matches = raw.match(/#\s*[^\s#，。！？,.!?:：;；、]+/g) || [];
+  return matches.map(tag => tag.replace(/^#/, '').trim()).filter(Boolean);
+}
+
+/**
+ * 移除话题标签
+ */
+function removeHashtags(text = '') {
+  return String(text || '').replace(/#\s*[^\s#，。！？,.!?:：;；、]+/g, '').replace(/\s+/g, ' ').trim();
+}
+
+function stripLooseHashes(text = '') {
+  return String(text || '')
+    .replace(/^\s*#{1,6}\s*/gm, '')
+    .replace(/(^|\s)(?:#\s*){2,}(?=\s|$)/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function cleanNoteBodyText(text = '') {
+  return stripLooseHashes(removeHashtags(text));
+}
+
+function toNormalizedTimestamp(raw) {
+  if (raw == null || raw === '') return 0;
+  if (raw instanceof Date) {
+    const ts = raw.getTime();
+    return Number.isFinite(ts) && ts > 0 ? ts : 0;
+  }
+  if (typeof raw === 'number') {
+    if (!Number.isFinite(raw) || raw <= 0) return 0;
+    return raw < 1000000000000 ? raw * 1000 : raw;
+  }
+  const text = String(raw).trim();
+  if (!text) return 0;
+  if (/^\d+$/.test(text)) {
+    const value = Number(text);
+    if (!Number.isFinite(value) || value <= 0) return 0;
+    return value < 1000000000000 ? value * 1000 : value;
+  }
+  const parsed = Date.parse(text);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function buildDateFromParts(baseDate, {
+  year,
+  month,
+  day,
+  hours = 0,
+  minutes = 0,
+  seconds = 0,
+} = {}) {
+  const candidate = new Date(baseDate);
+  candidate.setFullYear(year, month - 1, day);
+  candidate.setHours(hours, minutes, seconds, 0);
+  return candidate;
+}
+
+export function parseXhsPublishedAt(raw, { now = Date.now() } = {}) {
+  const directTimestamp = toNormalizedTimestamp(raw);
+  if (directTimestamp > 0) return directTimestamp;
+
+  const text = String(raw || '').trim()
+    .replace(/^[发發]布于?\s*/i, '')
+    .replace(/^[发發]布時間[:：]?\s*/i, '')
+    .replace(/^[编編][辑輯]于?\s*/i, '')
+    .replace(/\s*IP.*$/i, '')
+    .trim();
+  if (!text) return 0;
+
+  const nowDate = new Date(now);
+  const relativeMatch = text.match(/^(\d+)\s*(秒钟?|分钟|分鐘|小时|小時|天|周|週|个月|個月|月|年)前$/);
+  if (relativeMatch) {
+    const amount = Number(relativeMatch[1]);
+    if (Number.isFinite(amount) && amount >= 0) {
+      const unit = relativeMatch[2];
+      const multipliers = {
+        秒: 1000,
+        秒钟: 1000,
+        分钟: 60 * 1000,
+        分鐘: 60 * 1000,
+        小时: 60 * 60 * 1000,
+        小時: 60 * 60 * 1000,
+        天: 24 * 60 * 60 * 1000,
+        周: 7 * 24 * 60 * 60 * 1000,
+        週: 7 * 24 * 60 * 60 * 1000,
+        个月: 30 * 24 * 60 * 60 * 1000,
+        個月: 30 * 24 * 60 * 60 * 1000,
+        月: 30 * 24 * 60 * 60 * 1000,
+        年: 365 * 24 * 60 * 60 * 1000,
+      };
+      const multiplier = multipliers[unit];
+      if (multiplier) return Math.max(0, nowDate.getTime() - amount * multiplier);
+    }
+  }
+
+  if (/^刚刚$/i.test(text)) return nowDate.getTime();
+
+  const dayWordMatch = text.match(/^(今天|昨日|昨天|前天)\s*(\d{1,2}:\d{2})?$/);
+  if (dayWordMatch) {
+    const [, dayWord, timePart] = dayWordMatch;
+    const candidate = new Date(nowDate);
+    candidate.setSeconds(0, 0);
+    if (dayWord === '昨天' || dayWord === '昨日') candidate.setDate(candidate.getDate() - 1);
+    if (dayWord === '前天') candidate.setDate(candidate.getDate() - 2);
+    const [hours, minutes] = String(timePart || '00:00').split(':').map((value) => Number(value || 0));
+    candidate.setHours(hours || 0, minutes || 0, 0, 0);
+    return candidate.getTime();
+  }
+
+  const fullDateMatch = text.match(/^(\d{4})[年./-](\d{1,2})[月./-](\d{1,2})(?:日)?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (fullDateMatch) {
+    const [, year, month, day, hours, minutes, seconds] = fullDateMatch;
+    return buildDateFromParts(nowDate, {
+      year: Number(year),
+      month: Number(month),
+      day: Number(day),
+      hours: Number(hours || 0),
+      minutes: Number(minutes || 0),
+      seconds: Number(seconds || 0),
+    }).getTime();
+  }
+
+  const monthDayMatch = text.match(/^(\d{1,2})[月/-](\d{1,2})(?:日)?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+  if (monthDayMatch) {
+    const [, month, day, hours, minutes, seconds] = monthDayMatch;
+    let candidate = buildDateFromParts(nowDate, {
+      year: nowDate.getFullYear(),
+      month: Number(month),
+      day: Number(day),
+      hours: Number(hours || 0),
+      minutes: Number(minutes || 0),
+      seconds: Number(seconds || 0),
+    });
+    if (candidate.getTime() - nowDate.getTime() > 24 * 60 * 60 * 1000) {
+      candidate = buildDateFromParts(nowDate, {
+        year: nowDate.getFullYear() - 1,
+        month: Number(month),
+        day: Number(day),
+        hours: Number(hours || 0),
+        minutes: Number(minutes || 0),
+        seconds: Number(seconds || 0),
+      });
+    }
+    return candidate.getTime();
+  }
+
+  return 0;
+}
+
+/**
+ * 采集单篇笔记数据
+ * 技术路径：注入 noteMap.js → 从 __INITIAL_STATE__ 提取结构化数据
+ *
+ * @param {Window} wd - 目标 window（主页面或 iframe.contentWindow）
+ * @returns {Object} 采集到的笔记数据
+ */
+export async function collectNote(wd = window, options = {}) {
+  if (!isContextValid()) {
+    throw new Error('插件刚更新，请刷新当前页面后重试');
+  }
+
+  // 1. 注入脚本获取 noteDetailMap（最多重试 3 次，等待 __INITIAL_STATE__ 填充）
+  let noteMap = null;
+  let lastErr = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (attempt > 0) {
+        await new Promise(r => setTimeout(r, 1500 * attempt));
+      }
+      noteMap = await getByInject(wd, 'noteMap');
+      if (noteMap && Object.keys(noteMap).length > 0) break;
+    } catch (e) {
+      lastErr = e;
+      console.warn(`[灵感爆爆爆] getByInject 第 ${attempt + 1} 次失败:`, e.message);
+      const msg = String(e?.message || '');
+      if (/Extension context invalidated|context invalidated/i.test(msg) || !isContextValid()) {
+        lastErr = new Error('插件刚更新，请刷新当前页面后重试');
+        break;
+      }
+    }
+    noteMap = null;
+  }
+
+  if (!noteMap || Object.keys(noteMap).length === 0) {
+    throw lastErr || new Error('未找到笔记数据，请确认当前页面是笔记详情页');
+  }
+
+  // 2. 找到正确的笔记数据
+  // 优先用当前 URL 的 noteId 精确匹配，避免拿到 'undefined' / '' 等无效 key
+  const expectedNoteId = String(options.expectedNoteId || '').trim();
+  const currentUrl = wd.location?.href || window.location.href;
+  const currentNoteId = extractNoteId(currentUrl);
+  const validKeys = Object.keys(noteMap).filter(k => k && k !== 'undefined' && k.length > 10);
+
+  console.log('[灵感爆爆爆] noteMap keys:', validKeys, '| currentNoteId:', currentNoteId, '| expectedNoteId:', expectedNoteId);
+
+  const noteKey = selectNoteKey(noteMap, expectedNoteId, currentUrl);
+
+  if (!noteKey) {
+    throw new Error('未找到笔记数据，请确认当前页面是笔记详情页');
+  }
+
+  const { note } = resolveExpectedNoteFromMap(noteMap, expectedNoteId, currentUrl);
+
+  console.log('[灵感爆爆爆] note 原始数据:', JSON.stringify({
+    noteId: note?.noteId, id: note?.id, title: note?.title,
+    likes: note?.interactInfo?.likedCount, type: note?.type,
+  }));
+
+  if (!note || (!note.noteId && !note.id && !note.title)) {
+    throw new Error('笔记数据解析失败，数据结构异常');
+  }
+
+  if (!isCollectedNoteUsable(note, expectedNoteId)) {
+    throw new Error(`笔记数据未稳定就绪: expected=${expectedNoteId || 'unknown'} actual=${note.noteId || note.id || ''}`);
+  }
+
+  // 3. 映射字段
+  const imageUrls = (note.imageList || [])
+    .map((img) => toHighQualityImageUrl(img.urlDefault || img.url || ''))
+    .filter(Boolean);
+  const imageCandidates = (note.imageList || [])
+    .map((img) => getHighQualityImageCandidates(img.urlDefault || img.url || ''))
+    .filter((arr) => arr.length > 0);
+  const videoSelection = pickBestVideoStream(note.video?.media?.stream || {});
+  const existing = await noteStore.getById(note.noteId || note.id || noteKey);
+
+  const platformContentId = note.noteId || note.id || noteKey;
+  const collectedAt = Date.now();
+  const publishedAt = parseXhsPublishedAt(
+    note.publishTime
+      || note.publishDate
+      || note.publishedAt
+      || note.createTime
+      || note.create_time
+      || note.time,
+    { now: collectedAt },
+  );
+
+  const noteInfo = withMonitorRecordMeta({
+    noteId: platformContentId,
+    contentId: `xhs_${platformContentId}`,
+    platformContentId,
+    platform: 'xhs',
+    url: safeUrl(wd.location?.href || window.location.href),
+    canonicalUrl: safeUrl(wd.location?.href || window.location.href),
+    title: cleanNoteBodyText(note.title || ''),
+    content: cleanNoteBodyText(note.desc || ''),
+    bodyText: cleanNoteBodyText(note.desc || ''),
+    hashtags: [...new Set([...extractHashtags(note.title || ''), ...extractHashtags(note.desc || '')])],
+    type: note.type === 'video' ? 'video' : 'normal',
+    cover: toHighQualityImageUrl(note.imageList?.[0]?.urlDefault || note.imageList?.[0]?.url || ''),
+    images: imageUrls,
+    imageCandidates,
+    video: videoSelection.url || note.video?.media?.stream?.h264?.[0]?.masterUrl || '',
+    videoStreams: videoSelection.streams || [],
+    likes: parseCount(note.interactInfo?.likedCount),
+    collects: parseCount(note.interactInfo?.collectedCount),
+    comments: parseCount(note.interactInfo?.commentCount),
+    shares: parseCount(note.interactInfo?.shareCount),
+    keywords: (note.tagList || []).map(t => t.name).filter(Boolean),
+    topicIds: (note.tagList || []).map(t => t.id).filter(Boolean),
+    atUserList: (note.atUserList || []).map((u) => ({
+      userId: u?.userId || '',
+      nickname: u?.nickname || '',
+    })).filter((u) => u.userId || u.nickname),
+    releaseDate: note.time || '',
+    lastUpdateTime: note.lastUpdateTime || '',
+    ipLocation: note.ipLocation || '',
+    shareRestricted: Boolean(note.shareInfo?.unShare),
+    authorFollowed: Boolean(note.interactInfo?.followed),
+    authorId: note.user?.userId || '',
+    authorEntityId: note.user?.userId ? `xhs_${note.user.userId}` : '',
+    authorName: note.user?.nickname || '',
+    authorAvatar: note.user?.avatar || '',
+    publishedAt,
+    publishedAtText: note.time || '',
+    collectedAt,
+    updatedAt: collectedAt,
+    collectionRunId: String(options.collectionRunId || '').trim(),
+    dataSource: '__INITIAL_STATE__',
+    createdAt: existing?.createdAt || collectedAt,
+    mediaQuality: 'HD',
+    syncStatus: 'pending',
+    lastSyncAt: null,
+    ...createCollectorEvidence({
+      rawPayload: note,
+      rawDomText: joinRawDomText([
+        note.title || '',
+        note.desc || '',
+        (note.tagList || []).map((item) => item?.name || '').filter(Boolean).join(' '),
+      ]),
+      rawUrl: safeUrl(wd.location?.href || window.location.href),
+      rawSource: '__INITIAL_STATE__.noteMap',
+    }),
+  }, options.monitorMeta);
+
+  // 4. 写入 IndexedDB（主键 noteId 自动去重）
+  await noteStore.upsert(noteInfo);
+
+  return noteInfo;
+}
+
+/**
+ * 从搜索/博主页的笔记卡片 DOM 中提取基础信息
+ * 用于批量采集时的笔记列表发现
+ *
+ * 按视觉位置排序（先上后下，同行先左后右），解决瀑布流双列布局下
+ * DOM 顺序 ≠ 视觉顺序导致的采集乱序问题
+ */
+export function discoverNotesFromDOM(containerSelector) {
+  const notes = [];
+  const seenIds = new Set();
+  const sections = document.querySelectorAll(`${containerSelector} section`);
+
+  sections.forEach((section) => {
+    const coverLink = section.querySelector('a.cover');
+    if (!coverLink) return;
+
+    const url = coverLink.getAttribute('href') || '';
+    const noteId = extractNoteId(url);
+    if (!noteId || seenIds.has(noteId)) return;
+    seenIds.add(noteId);
+
+    const titleEl = section.querySelector('.footer span') || section.querySelector('.title');
+    const likesEl = section.querySelector('.like-wrapper .count');
+    const hasVideo = section.querySelector('.play-icon') !== null;
+
+    // 获取元素的视觉位置用于排序
+    const rect = section.getBoundingClientRect();
+
+    notes.push({
+      noteId,
+      url: safeUrl(url),
+      title: titleEl?.textContent?.trim() || '',
+      likes: likesEl?.textContent?.trim() || '0',
+      type: hasVideo ? 'video' : 'normal',
+      element: section,
+      _top: rect.top + window.scrollY,
+      _left: rect.left,
+    });
+  });
+
+  // 按视觉位置排序：先按纵坐标（容差 50px 视为同行），再按横坐标
+  notes.sort((a, b) => {
+    const rowDiff = Math.abs(a._top - b._top);
+    if (rowDiff < 50) return a._left - b._left; // 同行按左右
+    return a._top - b._top; // 不同行按上下
+  });
+
+  return notes;
+}
+
+/**
+ * 滚动发现更多笔记（处理懒加载）
+ * 在批量采集前调用，确保尽可能多的笔记被加载到 DOM 中
+ */
+export async function discoverWithScroll(containerSelector, maxScrolls = 10) {
+  const allNotes = new Map(); // key=noteId，滚动期间持续累积，不依赖回顶后的 DOM
+  let noNewCount = 0;
+  const isProfileMode = containerSelector === '#userPostedFeeds';
+  const maxRounds = isProfileMode ? Math.max(maxScrolls, 12) : maxScrolls;
+  const settleDelay = isProfileMode ? 1300 : 900;
+
+  for (let i = 0; i < maxRounds; i++) {
+    const found = discoverNotesFromDOM(containerSelector);
+    let hasNew = false;
+
+    for (const note of found) {
+      if (!allNotes.has(note.noteId)) {
+        allNotes.set(note.noteId, note);
+        hasNew = true;
+      }
+    }
+
+    if (!hasNew) {
+      noNewCount++;
+      if (noNewCount >= 2) break; // 连续 2 次无新笔记，停止滚动
+    } else {
+      noNewCount = 0;
+    }
+
+    // 每次滚动约 68% 屏高；博主页使用更慢节奏防止空白卡片
+    const step = Math.round(window.innerHeight * (isProfileMode ? 0.62 : 0.68));
+    const previousCount = found.length;
+    window.scrollBy({ top: step, behavior: 'auto' });
+    await waitForDiscoverySettle(containerSelector, previousCount, settleDelay, isProfileMode);
+
+    // 某些博主页会出现短暂空白，额外等待一次再做下一轮
+    if (isProfileMode && found.length === 0) {
+      await new Promise(r => setTimeout(r, 450));
+    }
+  }
+
+  // 滚回顶部
+  window.scrollTo({ top: 0, behavior: 'auto' });
+  await new Promise(r => setTimeout(r, 200));
+
+  // 关键修复：返回滚动期间累积的所有笔记（按发现时的视觉位置排序）
+  // 不能再次调用 discoverNotesFromDOM，因为虚拟列表在回顶后已卸载底部卡片
+  const result = Array.from(allNotes.values());
+  result.sort((a, b) => {
+    const rowDiff = Math.abs(a._top - b._top);
+    if (rowDiff < 50) return a._left - b._left;
+    return a._top - b._top;
+  });
+  return result;
+}
