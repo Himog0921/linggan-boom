@@ -54,13 +54,15 @@ export function getModeFromUrl(url, platform = PLATFORM.XHS) {
 export function getPageCapabilities(platform, mode, options = {}) {
   const { isDyVideoPage = false, isDyStrictDetailPage = false, isStableSearchList = false } = options;
   if (platform === PLATFORM.XHS) {
+    const isProfile = mode === PAGE_MODE.PROFILE;
+    const isDetail = mode === PAGE_MODE.DETAIL;
     return {
-      canCollectPrimary: mode === PAGE_MODE.DETAIL,
-      canCollectSecondary: mode === PAGE_MODE.DETAIL,
+      canCollectPrimary: isDetail,
+      canCollectSecondary: isDetail || isProfile,
       canDownloadCommentImages: false,
       canBatchNotes: mode === PAGE_MODE.SEARCH || mode === PAGE_MODE.PROFILE,
       canBatchComments: mode === PAGE_MODE.SEARCH || mode === PAGE_MODE.PROFILE,
-      secondaryAction: 'comment',
+      secondaryAction: isProfile ? 'author' : (isDetail ? 'comment' : 'none'),
       isDyVideoPage,
       isDyStrictDetailPage,
       isStableSearchList,
@@ -105,6 +107,9 @@ export function getPrimaryActionWarning(platform, mode, capabilities) {
 export function getSecondaryActionWarning(platform, mode, capabilities) {
   if (platform === PLATFORM.DOUYIN && capabilities.secondaryAction === 'author') {
     return '请先进入抖音博主页，再采集当前博主。';
+  }
+  if (platform === PLATFORM.XHS && capabilities.secondaryAction === 'author') {
+    return '请先进入小红书博主页，再采集当前博主。';
   }
   if (platform === PLATFORM.DOUYIN) {
     return '请先进入抖音视频详情页或弹层页，再采集当前评论。';
@@ -329,8 +334,8 @@ export function getPageContextText(platform, mode, options = {}) {
       tags.push('单条可用', '评论可用');
     } else if (mode === 'profile') {
       scene = '小红书博主页';
-      hint = '适合批量笔记和批量评论。单篇动作请先进入具体笔记详情页。';
-      tags.push('批量可用');
+      hint = '适合手动采集当前博主，也适合发起批量笔记和批量评论。';
+      tags.push('博主可用', '批量可用');
     } else if (mode === 'search') {
       scene = '小红书搜索/列表页';
       hint = '适合从当前可见列表发起批量笔记或批量评论。';

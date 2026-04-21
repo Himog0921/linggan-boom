@@ -8,7 +8,7 @@ const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
 test('popup current-content section collapses duplicate disabled copy into a single empty-state hint', () => {
   const source = fs.readFileSync(path.join(projectRoot, 'src/popup/components/ActionButtons.jsx'), 'utf8');
   assert.match(source, /action-empty-state/);
-  assert.match(source, /当前内容暂不支持单条操作，请先打开笔记页/);
+  assert.match(source, /当前内容暂不支持单条操作，请先打开笔记详情页或博主页/);
   assert.match(source, /if \(!hasCurrentContentActions\)/);
 });
 

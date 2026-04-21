@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import '../extensionPublicPath.js';
 import { MSG } from '../shared/constants.js';
+import { BRAND_ASSETS, getBrandAssetUrl } from '../shared/brandAssets.js';
 import { icon } from '../shared/icons.js';
 import { generateCsv, downloadFile } from '../shared/utils.js';
 import {
@@ -26,6 +27,9 @@ const LINK_ACTION_TEXT = {
   profileUrl: '打开',
   avatarUrl: '查看',
 };
+
+const BRAND_LOGO_SRC = getBrandAssetUrl(BRAND_ASSETS.logo);
+const BRAND_BANNER_SRC = getBrandAssetUrl(BRAND_ASSETS.banner);
 
 const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
 
@@ -556,7 +560,17 @@ export default function App() {
       )}
 
       <nav className="dashboard-nav">
-        <h1>灵感爆爆爆 数据面板</h1>
+        <div className="dashboard-brand">
+          <div className="dashboard-brand-mark" aria-hidden="true">
+            <img className="dashboard-brand-logo" src={BRAND_LOGO_SRC} alt="" />
+          </div>
+          <div className="dashboard-brand-copy">
+            <div className="dashboard-brand-banner-shell" aria-hidden="true">
+              <img className="dashboard-brand-banner" src={BRAND_BANNER_SRC} alt="" />
+            </div>
+            <h1>灵感爆爆爆 数据面板</h1>
+          </div>
+        </div>
         <div className="nav-tabs">
           {TABS.map((tab) => (
             <button

@@ -43,6 +43,31 @@ test('author baseline task maps to a surface-only scan using the configured scan
   assert.equal(command.taskMeta.monitorMeta.taskStrategy, MONITOR_TASK_STRATEGY.AUTHOR_BASELINE);
 });
 
+test('author baseline task defaults scan limit to 50 when workbench payload omits it', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'monitor_task_author_baseline_default_1',
+    taskType: 'xhs.collectAuthor',
+    platform: 'xhs',
+    taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+    triggerSource: 'collection_task_poller',
+    target: {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/user_1',
+    },
+    payload: {
+      monitorId: 'monitor_author_default_1',
+      taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+      detailProbeLimit: 10,
+    },
+  }, { tabId: 7 });
+
+  assert.equal(command.payload.count, 50);
+  assert.equal(command.payload.monitorMeta.scanLimit, 50);
+  assert.equal(command.payload.monitorMeta.limit, 50);
+});
+
 test('xhs author surface records stop at scanLimit and carry monitor-shaped metadata', () => {
   const monitorMeta = buildMonitorTaskMeta({
     platform: 'xhs',

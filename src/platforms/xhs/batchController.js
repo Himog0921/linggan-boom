@@ -306,18 +306,23 @@ export class BatchNoteController extends BaseBatchController {
       runConfig.surfaceOnly = this.surfaceOnly;
       runConfig.monitorMeta = this.monitorMeta;
     }
-    const runPayload = buildRemoteRunCreatePayload({
-      platform: 'xhs',
-      taskType: 'batchNotes',
-      pageType: mode,
-      triggerSource,
-      pageUrl: window.location.href,
-      config: runConfig,
-      externalTaskMeta: settings.externalTaskMeta || {},
-    });
+    const existingCollectionRunId = String(settings.collectionRunId || '').trim();
+    const runPayload = existingCollectionRunId
+      ? null
+      : buildRemoteRunCreatePayload({
+        platform: 'xhs',
+        taskType: 'batchNotes',
+        pageType: mode,
+        triggerSource,
+        pageUrl: window.location.href,
+        config: runConfig,
+        externalTaskMeta: settings.externalTaskMeta || {},
+      });
     if (runPayload) {
       const run = await collectionRunStore.createRun(runPayload);
       this.collectionRunId = run.collectionRunId;
+    } else if (existingCollectionRunId) {
+      this.collectionRunId = existingCollectionRunId;
     } else {
       this.collectionRunId = '';
     }

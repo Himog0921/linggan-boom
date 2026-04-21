@@ -7,18 +7,16 @@ export default function ActionButtons({ platform, capabilities, onCollectNote, o
   const primaryText = isDouyin
     ? (capabilities.canCollectPrimary ? '采集当前视频' : '当前页不支持')
     : (capabilities.canCollectPrimary ? '采集当前笔记' : '先打开笔记页');
-  const secondaryText = isDouyin
-    ? (capabilities.canCollectSecondary
-      ? (capabilities.secondaryAction === 'author' ? '采集当前博主' : '采集当前评论')
-      : '当前页不支持')
-    : (capabilities.canCollectSecondary ? '采集当前评论' : '先打开笔记页');
+  const secondaryText = capabilities.canCollectSecondary
+    ? (capabilities.secondaryAction === 'author' ? '采集当前博主' : '采集当前评论')
+    : (isDouyin ? '当前页不支持' : '先打开笔记详情页或博主页');
 
   if (!hasCurrentContentActions) {
     return (
       <div className="action-empty-state" id="actionEmptyState">
         {isDouyin
           ? '当前内容暂不支持单条操作，请切到作品详情或作者主页。'
-          : '当前内容暂不支持单条操作，请先打开笔记页。'}
+          : '当前内容暂不支持单条操作，请先打开笔记详情页或博主页。'}
       </div>
     );
   }

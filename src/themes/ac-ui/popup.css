@@ -83,6 +83,24 @@ body[data-theme="ac-ui"] .popup-header {
   gap: 10px;
 }
 
+body[data-theme="ac-ui"] .header-brand-mark {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--ac-shadow);
+}
+
+body[data-theme="ac-ui"] .header-brand-banner-shell {
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: var(--ac-shadow);
+}
+
+body[data-theme="ac-ui"] .header-brand-banner {
+  width: 120px;
+}
+
 body[data-theme="ac-ui"] .popup-header h1 {
   font-size: 17px;
   letter-spacing: 0.2px;

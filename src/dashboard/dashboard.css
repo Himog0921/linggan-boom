@@ -64,10 +64,58 @@ select:focus-visible {
   background: #ffd74d;
 }
 
-.dashboard-nav h1 {
+.dashboard-brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
+.dashboard-brand-mark {
+  flex: 0 0 64px;
+  width: 64px;
+  padding: 6px;
+  border: 2px solid #121212;
+  border-radius: 16px;
+  box-shadow: 3px 3px 0 #121212;
+  background: #fff6d8;
+}
+
+.dashboard-brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+}
+
+.dashboard-brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.dashboard-brand-banner-shell {
+  width: fit-content;
+  max-width: 100%;
+  padding: 4px 6px;
+  border: 2px solid #121212;
+  border-radius: 10px;
+  box-shadow: 2px 2px 0 #121212;
+  background: #fff7d1;
+}
+
+.dashboard-brand-banner {
+  display: block;
+  width: 164px;
+  max-width: 100%;
+  height: auto;
+}
+
+.dashboard-brand h1 {
   font-size: 24px;
   color: #121212;
-  line-height: 1.15;
+  line-height: 1.08;
 }
 
 .nav-tabs {
@@ -728,6 +776,10 @@ select:focus-visible {
 @media (max-width: 1080px) {
   .dashboard-nav {
     align-items: flex-start;
+  }
+
+  .dashboard-brand {
+    width: 100%;
   }
 
   .toolbar {

@@ -66,22 +66,67 @@ main {
   border: var(--line);
   border-radius: 14px;
   box-shadow: var(--shadow);
-  padding: 12px 14px;
+  padding: 14px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
-  gap: 10px;
+  gap: 12px;
 }
 
-.header-copy { min-width: 0; }
+.header-brand-stack {
+  min-width: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  flex: 1;
+}
+
+.header-brand-mark {
+  flex: 0 0 52px;
+  width: 52px;
+  padding: 4px;
+  border: 2px solid var(--ink);
+  border-radius: 12px;
+  background: rgba(255, 253, 247, 0.75);
+  box-shadow: var(--shadow-sm);
+}
+
+.header-brand-logo {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+}
+
+.header-copy {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  flex: 1;
+}
+
+.header-brand-banner-shell {
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 5px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: #fff8d6;
+  box-shadow: 1px 1px 0 var(--ink);
+}
+
+.header-brand-banner {
+  display: block;
+  width: 128px;
+  max-width: 100%;
+  height: auto;
+}
 
 .popup-header h1 {
   font-size: 18px;
-  letter-spacing: 0.2px;
-  line-height: 1.2;
-  display: flex;
-  align-items: center;
-  gap: 6px;
+  letter-spacing: 0.15px;
+  line-height: 1.1;
 }
 
 .popup-header .subtitle {
@@ -91,6 +136,14 @@ main {
   font-weight: 700;
   line-height: 1.4;
   margin-top: 2px;
+}
+
+.header-controls {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 4px;
 }
 
 .header-badge {

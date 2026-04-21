@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import '../extensionPublicPath.js';
 import { MSG, COMMENT_DEPTH_MODE } from '../shared/constants.js';
+import { BRAND_ASSETS, getBrandAssetUrl } from '../shared/brandAssets.js';
 import { initThemeManager, setTheme, getCurrentTheme } from '../themes/themeManager.js';
 import {
   PLATFORM, PAGE_MODE,
@@ -31,6 +32,9 @@ const TABS = [
   { id: 'tab-data', label: '数据', ariaControls: 'panel-data' },
   { id: 'tab-config', label: '配置', ariaControls: 'panel-config' },
 ];
+
+const BRAND_LOGO_SRC = getBrandAssetUrl(BRAND_ASSETS.logo);
+const BRAND_BANNER_SRC = getBrandAssetUrl(BRAND_ASSETS.banner);
 
 const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
 
@@ -329,7 +333,7 @@ export default function App() {
       return;
     }
     const isCommentScene = capabilities.secondaryAction === 'comment';
-    let payload = { action: MSG.COLLECT_SINGLE_COMMENT };
+    let payload = { action: isCommentScene ? MSG.COLLECT_SINGLE_COMMENT : MSG.COLLECT_AUTHOR };
     if (isCommentScene) {
       const settings = await openCommentLimitSettings({
         title: platform === PLATFORM.DOUYIN ? '抖音当前评论设置' : '小红书当前评论设置',
@@ -355,19 +359,15 @@ export default function App() {
     setProgressVisible(true);
     setProgressCurrent(0);
     setProgressTotal(1);
-    const action = platform === PLATFORM.DOUYIN
-      ? (isDyVideoPage ? MSG.COLLECT_SINGLE_COMMENT : MSG.COLLECT_AUTHOR)
-      : MSG.COLLECT_SINGLE_COMMENT;
-    setProgressStatus(platform === PLATFORM.DOUYIN
-      ? (isDyVideoPage ? '正在发起评论采集...' : '正在发起博主采集...')
-      : '正在发起评论采集...');
+    const action = isCommentScene ? MSG.COLLECT_SINGLE_COMMENT : MSG.COLLECT_AUTHOR;
+    setProgressStatus(isCommentScene ? '正在发起评论采集...' : '正在发起博主采集...');
     try {
       await sendToTab(tabId, isCommentScene ? payload : { action });
     } catch (err) {
       setProgressVisible(false);
       showNotice(toFriendlyError(err), 'warning');
     }
-  }, [capabilities, platform, mode, isDyVideoPage, tabId, hideNotice, showNotice]);
+  }, [capabilities, platform, mode, tabId, hideNotice, showNotice]);
 
   const handleCommentImages = useCallback(async () => {
     if (!capabilities.canDownloadCommentImages) {
@@ -797,11 +797,19 @@ export default function App() {
   return (
     <div className="popup-container" data-theme={currentTheme === 'ac-ui' ? 'ac-ui' : undefined}>
       <header className="popup-header">
-        <div className="header-copy">
-          <h1>灵感爆爆爆</h1>
-          <p className="subtitle" id="platformSubtitle">{subtitle}</p>
+        <div className="header-brand-stack">
+          <div className="header-brand-mark" aria-hidden="true">
+            <img className="header-brand-logo" src={BRAND_LOGO_SRC} alt="" />
+          </div>
+          <div className="header-copy">
+            <div className="header-brand-banner-shell" aria-hidden="true">
+              <img className="header-brand-banner" src={BRAND_BANNER_SRC} alt="" />
+            </div>
+            <h1>灵感爆爆爆</h1>
+            <p className="subtitle" id="platformSubtitle">{subtitle}</p>
+          </div>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+        <div className="header-controls">
           <span className="header-badge" id="platformBadge">{platformLabel}</span>
           <button
             id="themeToggle"

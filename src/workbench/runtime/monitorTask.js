@@ -89,11 +89,12 @@ export function buildMonitorTaskMeta({
   const monitorMode = inferMonitorMode(strategy, pageType);
   const isDetail = monitorMode === MONITOR_RECORD_MODE.DETAIL_PROBE;
   const surfaceOnly = !isDetail;
-  const scanLimit = ensurePositiveInteger(payload.scanLimit ?? payload.limit ?? payload.count, surfaceOnly ? 30 : 0);
+  const defaultSurfaceLimit = strategy === MONITOR_TASK_STRATEGY.AUTHOR_BASELINE ? 50 : 30;
+  const scanLimit = ensurePositiveInteger(payload.scanLimit ?? payload.limit ?? payload.count, surfaceOnly ? defaultSurfaceLimit : 0);
   const detailProbeLimit = ensurePositiveInteger(payload.detailProbeLimit ?? payload.limit ?? payload.count, isDetail ? 10 : 0);
   const effectiveLimit = isDetail
     ? ensurePositiveInteger(detailProbeLimit, 10)
-    : ensurePositiveInteger(scanLimit, 30);
+    : ensurePositiveInteger(scanLimit, defaultSurfaceLimit);
 
   return {
     monitorId: normalizeString(payload.monitorId),

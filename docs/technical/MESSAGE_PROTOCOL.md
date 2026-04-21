@@ -212,7 +212,7 @@ deep_collect
 
 | 策略 | 插件执行方式 | 记录模式 |
 |---|---|---|
-| `author_baseline` | 作者快照 + 主页表层作品卡片，不逐篇打开 | `author_profile` + `author_surface` |
+| `author_baseline` | 作者快照 + 主页当前顺位前 50 篇作品采集；顺位优先，不按点赞 Top N | `author_profile` + `author_surface` |
 | `author_patrol` | 作者快照 + 少量主页表层作品卡片 | `author_profile` + `author_surface` |
 | `keyword_patrol` | 搜索页表层结果卡片 | `keyword_surface` |
 | `detail_probe` | 打开指定候选内容补全正文、评论数、发布时间等详情 | `detail_probe` |

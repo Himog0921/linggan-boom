@@ -175,6 +175,10 @@
 
 **触发方式**：博主页 → 浮动按钮“采集博主”
 
+**Popup 入口**：
+- 小红书博主页 Popup 提供“采集当前博主”
+- 抖音博主页 Popup 提供“采集当前博主”
+
 **采集字段**：
 - 统一：`userId / name / avatar / description / profileUrl / location / ipLocation`
 - 小红书：`redId / keywords / follows / fans / interactions`
@@ -190,6 +194,7 @@
 - 选择数量 `5 / 10 / 20 / 50`
 - 可选“按点赞排序取 Top N”
 - 扫描页面 → 逐条打开笔记 → 采集 → 返回列表页
+- 内容工作台下发的小红书 `author_baseline` 首次建档，默认固定为“先采博主，再按当前博主页顺位补前 50 篇”，不走点赞 Top N
 
 #### 抖音
 

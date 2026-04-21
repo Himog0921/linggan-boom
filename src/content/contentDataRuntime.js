@@ -21,6 +21,7 @@ export function createContentDataRuntime({
   collectDouyinComments,
   downloadDouyinCommentImages,
   collectDouyinAuthor,
+  BatchNoteController,
   reportDone,
   batchMessageHandlers,
   extractNoteId,
@@ -110,13 +111,13 @@ export function createContentDataRuntime({
       isStableSearchList: mode === 'search',
       capabilities: {
         canCollectPrimary: mode === 'detail',
-        canCollectSecondary: mode === 'detail',
+        canCollectSecondary: mode === 'detail' || mode === 'profile',
         canCollectAuthor: mode === 'profile',
         canCollectComments: mode === 'detail',
         canDownloadCommentImages: false,
         canBatchNotes: mode === 'search' || mode === 'profile',
         canBatchComments: mode === 'search' || mode === 'profile',
-        secondaryAction: mode === 'detail' ? 'comment' : 'none',
+        secondaryAction: mode === 'profile' ? 'author' : (mode === 'detail' ? 'comment' : 'none'),
       },
     });
   }
@@ -131,6 +132,7 @@ export function createContentDataRuntime({
     collectDouyinComments,
     downloadDouyinCommentImages,
     collectDouyinAuthor,
+    BatchNoteController,
     noteStore,
     commentStore,
     authorStore,
