@@ -11,6 +11,7 @@
 | 笔记新增字段 | `note.ipLocation / note.lastUpdateTime / note.atUserList / note.tagList[].id / note.shareInfo.unShare / note.interactInfo.followed` | ✅ 已验证 | 2026-04-18 | 14 个字段全部正常。detailMap 含幽灵 key `"undefined"` 和 `""`，需用正则过滤真实 noteId |
 | 笔记卡片（列表页） | `section`（在 `.feeds-container` 或 `#userPostedFeeds` 下） | ✅ 已验证 | 2026-04-18 | class 为 `note-item`，21-28 张卡片 |
 | 卡片封面链接 | `a.cover` | ✅ 已验证 | 2026-04-18 | class 为 `cover mask ld`。博主页 href 格式变为 `/user/profile/{userId}/{noteId}?xsec_token=...`，`extractNoteId` 兜底逻辑可正确提取 |
+| 卡片封面图 | `a.cover` 内 `img / picture img / source`，读取 `currentSrc / src / data-src / srcset`，兜底 `background-image` | ⚠️ 代码兼容，待实机复验 | 2026-04-28 | 为监控首轮建档补封面：先从卡片图取封面，详情数据没有图片时用卡片封面兜底 |
 | 卡片标题 | `.footer span` 或 `.title` | ⚠️ 可用但过于宽泛 | 2026-04-18 | 匹配 105-140 个元素（混入了作者名/点赞数），需限定在 section 内且排除 `.name` 和 `.like-wrapper` |
 | 卡片点赞数 | `.like-wrapper .count` | ✅ 已验证 | 2026-04-18 | 21-46 个匹配（博主页 21 卡片准确，笔记页混入评论区点赞数） |
 | 视频标识 | `.play-icon` | ✅ 已验证 | 2026-04-18 | 该博主仅 1 个视频笔记，选择器正常 |

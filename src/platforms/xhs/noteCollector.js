@@ -470,6 +470,7 @@ export function discoverNotesFromDOM(containerSelector) {
     const titleEl = section.querySelector('.footer span') || section.querySelector('.title');
     const likesEl = section.querySelector('.like-wrapper .count');
     const hasVideo = section.querySelector('.play-icon') !== null;
+    const cover = pickCardCoverImage(section, coverLink);
 
     // 获取元素的视觉位置用于排序
     const rect = section.getBoundingClientRect();
@@ -480,6 +481,11 @@ export function discoverNotesFromDOM(containerSelector) {
       title: titleEl?.textContent?.trim() || '',
       likes: likesEl?.textContent?.trim() || '0',
       type: hasVideo ? 'video' : 'normal',
+      cover,
+      coverImg: cover,
+      coverUrl: cover,
+      thumbnail: cover,
+      images: cover ? [cover] : [],
       element: section,
       _top: rect.top + window.scrollY,
       _left: rect.left,
@@ -500,6 +506,82 @@ function normalizePositiveInteger(value, fallback = 0) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return Math.floor(parsed);
+}
+
+function firstText(value) {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  return trimmed && trimmed !== '[object Object]' ? trimmed : '';
+}
+
+function readAttribute(element, name) {
+  if (!element || typeof element.getAttribute !== 'function') return '';
+  return firstText(element.getAttribute(name));
+}
+
+function firstSrcsetUrl(value = '') {
+  const text = firstText(value);
+  if (!text) return '';
+  const candidates = text
+    .split(',')
+    .map((item) => firstText(item).split(/\s+/)[0])
+    .filter(Boolean);
+  return candidates[candidates.length - 1] || '';
+}
+
+function backgroundImageUrl(value = '') {
+  const text = firstText(value);
+  const match = text.match(/url\((["']?)(.*?)\1\)/i);
+  return firstText(match?.[2] || '');
+}
+
+function pickImageUrlFromElement(element) {
+  if (!element) return '';
+  const candidates = [
+    firstText(element.currentSrc),
+    firstText(element.src),
+    readAttribute(element, 'src'),
+    readAttribute(element, 'data-src'),
+    readAttribute(element, 'data-original'),
+    readAttribute(element, 'data-lazy-src'),
+    readAttribute(element, 'data-url'),
+    firstSrcsetUrl(readAttribute(element, 'srcset')),
+    backgroundImageUrl(element.style?.backgroundImage),
+    backgroundImageUrl(readAttribute(element, 'style')),
+  ];
+  const raw = candidates.find(Boolean) || '';
+  return raw ? toHighQualityImageUrl(raw) : '';
+}
+
+function pickCardCoverImage(section, coverLink) {
+  const imageSelectors = [
+    'img, picture img, source',
+    'img',
+    'picture img',
+    'source',
+  ];
+  const candidates = [];
+
+  for (const selector of imageSelectors) {
+    const fromCover = typeof coverLink?.querySelector === 'function'
+      ? coverLink.querySelector(selector)
+      : null;
+    if (fromCover) candidates.push(fromCover);
+
+    const fromSection = typeof section?.querySelector === 'function'
+      ? section.querySelector(selector)
+      : null;
+    if (fromSection) candidates.push(fromSection);
+  }
+
+  candidates.push(coverLink, section);
+
+  for (const candidate of candidates) {
+    const imageUrl = pickImageUrlFromElement(candidate);
+    if (imageUrl) return imageUrl;
+  }
+
+  return '';
 }
 
 function getWindowScrollTarget() {
@@ -609,7 +691,7 @@ export function buildDiscoveryPlan(containerSelector, {
     maxRounds,
     settleDelay: isProfileMode ? 1300 : 900,
     stableNoNewLimit: isProfileMode ? 4 : 2,
-    bottomConfirmationRounds: isProfileMode ? 3 : 0,
+    bottomConfirmationRounds: isProfileMode ? 6 : 0,
     stepRatio: isProfileMode ? 0.55 : 0.68,
     requireBottomOrExpected: isProfileMode,
   };
@@ -632,6 +714,49 @@ export function shouldStopDiscovery({
   return atBottom && bottomNoNewCount >= bottomConfirmationRounds;
 }
 
+function createWheelEvent(deltaY) {
+  if (typeof WheelEvent === 'function') {
+    return () => new WheelEvent('wheel', {
+      deltaY,
+      bubbles: true,
+      cancelable: true,
+    });
+  }
+
+  if (typeof Event === 'function') {
+    return () => {
+      const event = new Event('wheel', {
+        bubbles: true,
+        cancelable: true,
+      });
+      try {
+        Object.defineProperty(event, 'deltaY', { value: deltaY });
+      } catch {
+        // Some browser Event objects do not allow redefining properties.
+      }
+      return event;
+    };
+  }
+
+  return () => ({ type: 'wheel', deltaY });
+}
+
+function dispatchDiscoveryWheel(scrollTarget, deltaY) {
+  const makeEvent = createWheelEvent(deltaY);
+  const targets = isElementScrollTarget(scrollTarget)
+    ? [scrollTarget.element]
+    : [window, document, document.documentElement, document.body];
+
+  for (const target of targets) {
+    if (!target || typeof target.dispatchEvent !== 'function') continue;
+    try {
+      target.dispatchEvent(makeEvent());
+    } catch {
+      // The wheel event is only a loading nudge; normal scroll still moves the page.
+    }
+  }
+}
+
 async function probeProfileBottom(containerSelector, previousSnapshot, settleDelay, scrollTarget) {
   const metrics = getScrollMetrics(scrollTarget);
   if (!metrics.atBottom) return false;
@@ -649,13 +774,17 @@ async function probeProfileBottom(containerSelector, previousSnapshot, settleDel
     scrollDiscoveryTargetTo(scrollTarget, returnTop);
   }
 
+  const nudgeStep = Math.max(220, Math.round(metrics.viewportHeight * 0.45));
+  scrollDiscoveryTargetBy(scrollTarget, nudgeStep);
+  dispatchDiscoveryWheel(scrollTarget, nudgeStep);
+
   await waitForDiscoverySettle(
     containerSelector,
     previousSnapshot,
-    settleDelay + 500,
+    settleDelay + 900,
     true,
   );
-  await new Promise((resolve) => setTimeout(resolve, 220));
+  await new Promise((resolve) => setTimeout(resolve, 320));
   return true;
 }
 

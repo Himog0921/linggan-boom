@@ -107,6 +107,34 @@ function buildWorkbenchNoteRecord(note = {}) {
   };
 }
 
+function firstCoverFromNoteLike(note = {}) {
+  const images = Array.isArray(note.images) ? note.images.filter(Boolean) : [];
+  return firstText(note.cover)
+    || firstText(note.coverImg)
+    || firstText(note.coverUrl)
+    || firstText(note.thumbnail)
+    || pickMediaUrlFromArray(images);
+}
+
+export function mergeSurfaceCoverFallback(note = {}, surfaceNote = {}) {
+  const currentCover = firstCoverFromNoteLike(note);
+  const fallbackCover = firstCoverFromNoteLike(surfaceNote);
+  if (currentCover || !fallbackCover) return note;
+
+  const images = Array.isArray(note.images) && note.images.length > 0
+    ? note.images
+    : [fallbackCover];
+
+  return {
+    ...note,
+    cover: fallbackCover,
+    coverImg: firstText(note.coverImg) || fallbackCover,
+    coverUrl: firstText(note.coverUrl) || fallbackCover,
+    thumbnail: firstText(note.thumbnail) || fallbackCover,
+    images,
+  };
+}
+
 function normalizeTargetIdentity(value = '') {
   return String(value || '').trim().toLowerCase();
 }
@@ -680,11 +708,11 @@ export class BatchNoteController extends BaseBatchController {
             await this._waitForNoteDataStable(noteInfo.noteId, 2600 + (attempt * 1200));
             await randomDelay(420, 760);
           }
-          const result = await collectNote(window, {
+          const result = mergeSurfaceCoverFallback(await collectNote(window, {
             collectionRunId: this.collectionRunId,
             expectedNoteId: noteInfo.noteId,
             monitorMeta: this.monitorMeta,
-          });
+          }), noteInfo);
           if (String(result?.noteId || '').trim() !== String(noteInfo.noteId || '').trim()) {
             throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
           }
@@ -725,11 +753,11 @@ export class BatchNoteController extends BaseBatchController {
       await this._settleAfterDetailReady();
       await this._waitForNoteDataStable(noteInfo.noteId, 2500);
 
-      const result = await collectNote(window, {
+      const result = mergeSurfaceCoverFallback(await collectNote(window, {
         collectionRunId: this.collectionRunId,
         expectedNoteId: noteInfo.noteId,
         monitorMeta: this.monitorMeta,
-      });
+      }), noteInfo);
       if (String(result?.noteId || '').trim() !== String(noteInfo.noteId || '').trim()) {
         throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
       }

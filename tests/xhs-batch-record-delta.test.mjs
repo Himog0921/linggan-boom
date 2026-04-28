@@ -1,8 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { BatchNoteController } from '../src/platforms/xhs/batchController.js';
+import { BatchNoteController, mergeSurfaceCoverFallback } from '../src/platforms/xhs/batchController.js';
 import { MSG } from '../src/shared/constants.js';
+
+test('mergeSurfaceCoverFallback keeps a card cover when detail data has no image list', () => {
+  const merged = mergeSurfaceCoverFallback(
+    {
+      noteId: 'note_video_1',
+      title: '视频作品',
+      cover: '',
+      images: [],
+    },
+    {
+      cover: 'https://sns-img.example.com/video-card.jpg',
+      images: ['https://sns-img.example.com/video-card.jpg'],
+    },
+  );
+
+  assert.equal(merged.cover, 'https://sns-img.example.com/video-card.jpg');
+  assert.equal(merged.coverImg, 'https://sns-img.example.com/video-card.jpg');
+  assert.equal(merged.coverUrl, 'https://sns-img.example.com/video-card.jpg');
+  assert.deepEqual(merged.images, ['https://sns-img.example.com/video-card.jpg']);
+});
 
 test('BatchNoteController reports a workbench record delta after collecting one note', () => {
   const messages = [];
