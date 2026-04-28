@@ -26,6 +26,7 @@ import { reportDone, reportProgress, isContextValid, sendToBackground } from '..
 import { generateCsv, downloadFile, extractNoteId } from '../shared/utils.js';
 import { createManagedTaskController } from '../shared/managedTaskController.js';
 import { normalizeWorkbenchMessageResponse } from '../workbench/protocol/responseEnvelope.js';
+import { assertActivePluginAuthorization } from '../workbench/runtime/pluginAuthorization.js';
 import { normalizeContentMessageResponse } from './protocol/responseEnvelope.js';
 import '../content.css';
 import { initThemeManager } from '../themes/themeManager.js';
@@ -46,6 +47,10 @@ let contentDataRuntimeInstance = null;
 let contentDataRuntimePromise = null;
 let dashboardBridgeListenerRegistered = false;
 let douyinAdapterRef = null;
+
+async function assertPluginAuthorized() {
+  return assertActivePluginAuthorization();
+}
 
 async function loadContentDataRuntime() {
   if (contentDataRuntimeInstance) {
@@ -73,6 +78,7 @@ async function loadContentDataRuntime() {
         loadDouyinRuntime,
         discoverXhsSurfaceNotes: discoverWithScroll,
         discoverDouyinSurfaceTargets: (...args) => callDouyinRuntime('discoverDouyinBatchTargets', ...args),
+        assertPluginAuthorized,
       }))
       .then((runtime) => {
         contentDataRuntimeInstance = runtime;
@@ -105,6 +111,7 @@ function normalizeRuntimeMessageResponse(action, result) {
 
 const xhsPageController = createXhsPageController({
   MSG,
+  assertPluginAuthorized,
   collectComments,
   collectCommentImages,
   collectNote,

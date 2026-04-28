@@ -111,8 +111,8 @@ export default function TaskControlBar({
             className={pauseClass}
             data-action={pauseAction}
             style={{ ...btnBase, background: '#fff' }}
-            onMouseEnter={(e) => { e.target.style.transform = 'translate(-1px,-1px)'; e.target.style.boxShadow = btnHoverShadow; }}
-            onMouseLeave={(e) => { e.target.style.transform = 'translate(0,0)'; e.target.style.boxShadow = btnShadow; }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translate(-1px,-1px)'; e.currentTarget.style.boxShadow = btnHoverShadow; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0,0)'; e.currentTarget.style.boxShadow = btnShadow; }}
           >暂停</button>
         )}
         {isPaused && !isStopping && (
@@ -120,8 +120,8 @@ export default function TaskControlBar({
             className={resumeClass}
             data-action={resumeAction}
             style={{ ...btnBase, background: isAc ? '#ABEDC6' : '#7dd87a' }}
-            onMouseEnter={(e) => { e.target.style.transform = 'translate(-1px,-1px)'; e.target.style.boxShadow = btnHoverShadow; }}
-            onMouseLeave={(e) => { e.target.style.transform = 'translate(0,0)'; e.target.style.boxShadow = btnShadow; }}
+            onMouseEnter={(e) => { e.currentTarget.style.transform = 'translate(-1px,-1px)'; e.currentTarget.style.boxShadow = btnHoverShadow; }}
+            onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0,0)'; e.currentTarget.style.boxShadow = btnShadow; }}
           >继续</button>
         )}
         <button
@@ -134,8 +134,8 @@ export default function TaskControlBar({
             cursor: isStopping ? 'not-allowed' : 'pointer',
             opacity: isStopping ? 0.7 : 1,
           }}
-          onMouseEnter={(e) => { if (!isStopping) { e.target.style.transform = 'translate(-1px,-1px)'; e.target.style.boxShadow = btnHoverShadow; } }}
-          onMouseLeave={(e) => { e.target.style.transform = 'translate(0,0)'; e.target.style.boxShadow = btnShadow; }}
+          onMouseEnter={(e) => { if (!isStopping) { e.currentTarget.style.transform = 'translate(-1px,-1px)'; e.currentTarget.style.boxShadow = btnHoverShadow; } }}
+          onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0,0)'; e.currentTarget.style.boxShadow = btnShadow; }}
         >{isStopping ? '停止中...' : '停止'}</button>
       </div>
     </div>

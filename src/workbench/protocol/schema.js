@@ -116,6 +116,7 @@ export const REMOTE_ERROR_CODE = {
   UNSUPPORTED_TASK_TYPE: 'unsupported_task_type',
   PLATFORM_MISMATCH: 'platform_mismatch',
   PAGE_TYPE_MISMATCH: 'page_type_mismatch',
+  PAGE_TARGET_MISMATCH: 'page_target_mismatch',
   PAGE_CONTEXT_UNAVAILABLE: 'page_context_unavailable',
   SEARCH_LIST_UNSTABLE: 'search_list_unstable',
   LOGIN_REQUIRED: 'login_required',

@@ -33,6 +33,16 @@ test('dashboard export columns expose quality fields for notes comments and auth
   }
 });
 
+test('dashboard notes columns hide low-signal xhs metadata fields', () => {
+  const noteColumns = getColumns('notes', [{ platform: 'xhs' }]).map((column) => column.key);
+  const noteExportColumns = getExportColumns('notes', [{ platform: 'xhs' }]).map((column) => column.key);
+
+  for (const key of ['atUserList', 'authorFollowed', 'shareRestricted']) {
+    assert.ok(!noteColumns.includes(key), `notes table should not include ${key}`);
+    assert.ok(!noteExportColumns.includes(key), `notes export should not include ${key}`);
+  }
+});
+
 test('dashboard quality labels render readable Chinese values', () => {
   assert.equal(formatDataQualityLabel('full'), '完整');
   assert.equal(formatDataQualityLabel('degraded'), '降级');

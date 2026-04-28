@@ -153,3 +153,241 @@ test('remote xhs single-note collection creates a run and writes back success su
     },
   ]]);
 });
+
+test('remote xhs author collection fails fast when current profile does not match the monitor target', async () => {
+  const failedCalls = [];
+  const previousWindow = globalThis.window;
+
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/user/profile/current_author',
+      origin: 'https://www.xiaohongshu.com',
+    },
+  };
+
+  try {
+    const handlers = createContentMessageHandlers({
+      MSG,
+      isDouyinPage: () => false,
+      collectNote: async () => null,
+      collectComments: async () => null,
+      collectAuthor: async () => {
+        throw new Error('collectAuthor should not run');
+      },
+      collectDouyinVideo: async () => null,
+      collectDouyinComments: async () => null,
+      downloadDouyinCommentImages: async () => null,
+      collectDouyinAuthor: async () => null,
+      noteStore: {},
+      commentStore: {},
+      authorStore: {},
+      reportDone: () => {},
+      batchMessageHandlers: {},
+      extractNoteId: () => '',
+      downloadNoteMediaFromRecord: async () => null,
+      generateCsv: () => '',
+      downloadFile: () => {},
+      backfillLegacyAiReadyFields: async () => null,
+      getPageContext: async () => ({ platform: 'xhs', pageType: 'profile' }),
+      collectionRunStore: {
+        async createRun() {
+          return { collectionRunId: 'run_remote_author_1' };
+        },
+        async markDone() {
+          throw new Error('markDone should not be called');
+        },
+        async markStopped() {
+          throw new Error('markStopped should not be called');
+        },
+        async markFailed(runId, error, patch) {
+          failedCalls.push([runId, error, patch]);
+        },
+      },
+      packageWorkbenchResult: async () => null,
+      discoverXhsSurfaceNotes: async () => [],
+      discoverDouyinSurfaceTargets: async () => [],
+    });
+
+    await assert.rejects(
+      () => handlers[MSG.COLLECT_AUTHOR]({
+        triggerSource: 'workbench_dispatch',
+        externalTaskMeta: {
+          externalTaskId: 'task_remote_author_1',
+          externalTaskType: 'xhs.collectAuthor',
+          executorInstanceId: 'executor_1',
+          protocolVersion: 'v1',
+          monitorMeta: {
+            monitorId: 'monitor_author_1',
+            taskStrategy: 'author_baseline',
+            targetUrl: 'https://www.xiaohongshu.com/user/profile/target_author',
+            display: { name: '目标博主' },
+          },
+        },
+      }),
+      (error) => {
+        assert.equal(error.code, 'target_mismatch');
+        return true;
+      },
+    );
+
+    assert.deepEqual(failedCalls, [[
+      'run_remote_author_1',
+      '当前页博主身份与任务目标不一致，已停止本轮采集：当前=current_author，目标=目标博主',
+      {
+        error: '当前页博主身份与任务目标不一致，已停止本轮采集：当前=current_author，目标=目标博主',
+        itemsPlanned: 51,
+        itemsSucceeded: 0,
+        itemsFailed: 51,
+        targetIds: [],
+        contentIds: [],
+      },
+    ]]);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+test('remote xhs author surface scan passes profile selector and scan limit into note discovery', async () => {
+  const discoverCalls = [];
+  const bulkUpsertCalls = [];
+  const doneCalls = [];
+  const previousWindow = globalThis.window;
+
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/user/profile/target_author',
+      pathname: '/user/profile/target_author',
+      origin: 'https://www.xiaohongshu.com',
+    },
+  };
+
+  try {
+    const handlers = createContentMessageHandlers({
+      MSG,
+      isDouyinPage: () => false,
+      collectNote: async () => null,
+      collectComments: async () => null,
+      collectAuthor: async () => ({
+        platformAuthorId: 'target_author',
+        userId: 'target_author',
+        name: '目标博主',
+      }),
+      collectDouyinVideo: async () => null,
+      collectDouyinComments: async () => null,
+      downloadDouyinCommentImages: async () => null,
+      collectDouyinAuthor: async () => null,
+      noteStore: {
+        async bulkUpsert(records) {
+          bulkUpsertCalls.push(records);
+        },
+      },
+      commentStore: {},
+      authorStore: {},
+      reportDone: () => {},
+      batchMessageHandlers: {},
+      extractNoteId: () => '',
+      downloadNoteMediaFromRecord: async () => null,
+      generateCsv: () => '',
+      downloadFile: () => {},
+      backfillLegacyAiReadyFields: async () => null,
+      getPageContext: async () => ({ platform: 'xhs', pageType: 'profile' }),
+      collectionRunStore: {
+        async createRun() {
+          return { collectionRunId: 'run_author_surface_1' };
+        },
+        async markDone(runId, patch) {
+          doneCalls.push([runId, patch]);
+        },
+        async markStopped() {
+          throw new Error('markStopped should not be called');
+        },
+        async markFailed() {
+          throw new Error('markFailed should not be called');
+        },
+      },
+      packageWorkbenchResult: async () => null,
+      discoverXhsSurfaceNotes: async (...args) => {
+        discoverCalls.push(args);
+        return [
+          { noteId: 'note_1', url: '/explore/note_1', title: '第一条' },
+          { noteId: 'note_2', url: '/explore/note_2', title: '第二条' },
+        ];
+      },
+      discoverDouyinSurfaceTargets: async () => [],
+    });
+
+    const result = await handlers[MSG.COLLECT_AUTHOR]({
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_author_surface_1',
+        externalTaskType: 'xhs.collectAuthor',
+        executorInstanceId: 'executor_1',
+        protocolVersion: 'v1',
+        monitorMeta: {
+          monitorId: 'monitor_author_surface_1',
+          taskStrategy: 'author_patrol',
+          targetUrl: 'https://www.xiaohongshu.com/user/profile/target_author',
+          scanLimit: 7,
+          limit: 7,
+          surfaceOnly: true,
+          surfaceMode: 'author_surface',
+          monitorMode: 'author_surface',
+          display: { name: '目标博主' },
+        },
+      },
+    });
+
+    assert.equal(result.success, true);
+    assert.deepEqual(discoverCalls, [['#userPostedFeeds', 10, { expectedCount: 7 }]]);
+    assert.equal(bulkUpsertCalls.length, 1);
+    assert.equal(bulkUpsertCalls[0].length, 2);
+    assert.equal(doneCalls[0][1].itemsPlanned, 3);
+    assert.equal(doneCalls[0][1].itemsSucceeded, 3);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
+test('content message handlers reject collection when plugin authorization is missing', async () => {
+  const handlers = createContentMessageHandlers({
+    MSG,
+    isDouyinPage: () => false,
+    assertPluginAuthorized: async () => {
+      const error = new Error('当前浏览器还没有插件授权。请先去内容工作台设置生成授权码，再回到插件激活。');
+      error.code = 'plugin_authorization_required';
+      throw error;
+    },
+    collectNote: async () => {
+      throw new Error('collectNote should not run');
+    },
+    collectComments: async () => null,
+    collectAuthor: async () => null,
+    collectDouyinVideo: async () => null,
+    collectDouyinComments: async () => null,
+    downloadDouyinCommentImages: async () => null,
+    collectDouyinAuthor: async () => null,
+    noteStore: {},
+    commentStore: {},
+    authorStore: {},
+    reportDone: () => {},
+    batchMessageHandlers: {},
+    extractNoteId: () => '',
+    downloadNoteMediaFromRecord: async () => null,
+    generateCsv: () => '',
+    downloadFile: () => {},
+    backfillLegacyAiReadyFields: async () => null,
+    getPageContext: async () => ({ platform: 'xhs', pageType: 'detail' }),
+    collectionRunStore: {},
+    packageWorkbenchResult: async () => null,
+    discoverXhsSurfaceNotes: async () => [],
+    discoverDouyinSurfaceTargets: async () => [],
+  });
+
+  await assert.rejects(
+    () => handlers[MSG.COLLECT_SINGLE_NOTE]({ triggerSource: 'popup_manual' }),
+    (error) => {
+      assert.equal(error.code, 'plugin_authorization_required');
+      return true;
+    },
+  );
+});

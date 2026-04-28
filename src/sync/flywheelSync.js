@@ -1,11 +1,11 @@
 /**
- * 飞轮工作台同步模块
+ * 内容工作台同步模块
  * 负责将插件采集的数据同步到选题工作台
  */
 
 import { normalizeServerUrl } from '../shared/utils.js';
 
-const API_BASE_URL = 'http://localhost:3000';
+const API_BASE_URL = 'https://lingganboom.fun';
 const FLYWHEEL_STORAGE_KEY = 'flywheelConfig';
 
 let cachedConfig = null;
@@ -166,7 +166,7 @@ async function sendBatch(batchSources, tag, operator) {
 }
 
 /**
- * 同步采集的数据到飞轮工作台
+ * 同步采集的数据到内容工作台
  * @param {Array} sources - 采集的笔记数据
  * @param {string} tag - 标签：direct_import | evaluate | analysis_only
  * @param {string} operator - 操作人
@@ -262,13 +262,6 @@ export async function fetchCollectionTasks(config = {}, query = {}) {
   }
   const data = await response.json().catch(() => ({}));
   return Array.isArray(data?.tasks) ? data.tasks : [];
-}
-
-export async function fetchPendingCollectionTasks(config = {}, { limit = 5 } = {}) {
-  return fetchCollectionTasks(config, {
-    status: 'pending',
-    limit,
-  });
 }
 
 export async function fetchTrackableCollectionTasks(

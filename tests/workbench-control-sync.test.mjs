@@ -9,14 +9,21 @@ import {
 import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
 import { REMOTE_TASK_CONTROL_ACTION, WORKBENCH_TASK_EVENT_TYPE } from '../src/workbench/protocol/schema.js';
 
-test('workbench task polling defaults on for local workbench unless explicitly disabled', async () => {
+function claimTask(tasksOrTask) {
+  return async () => {
+    const task = Array.isArray(tasksOrTask) ? tasksOrTask[0] : tasksOrTask;
+    return { task: task || null };
+  };
+}
+
+test('workbench task polling defaults on for the deployed workbench unless explicitly disabled', async () => {
   const originalChrome = globalThis.chrome;
   globalThis.chrome = undefined;
 
   try {
     const config = await getFlywheelConfig();
 
-    assert.equal(config.serverUrl, 'http://localhost:3000');
+    assert.equal(config.serverUrl, 'https://lingganboom.fun');
     assert.equal(config.enabled, true);
   } finally {
     globalThis.chrome = originalChrome;
@@ -113,7 +120,7 @@ test('task poller applies workbench pause control and emits applied plus paused 
   const controlsApplied = [];
   const events = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([{ id: 'task_1', taskType: 'xhs.batchNotes', platform: 'xhs' }]),
+    claimTaskLease: claimTask([{ id: 'task_1', taskType: 'xhs.batchNotes', platform: 'xhs' }]),
     patchTask: async () => ({ success: true }),
     capabilityCheck: async () => ({ success: true, accepted: true }),
     dispatchTask: async () => ({
@@ -175,7 +182,7 @@ test('task poller maps workbench delete control to local stop semantics', async 
   const controlsApplied = [];
   const events = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([{ id: 'task_2', taskType: 'douyin.batchComments', platform: 'douyin' }]),
+    claimTaskLease: claimTask([{ id: 'task_2', taskType: 'douyin.batchComments', platform: 'douyin' }]),
     patchTask: async () => ({ success: true }),
     capabilityCheck: async () => ({ success: true, accepted: true }),
     dispatchTask: async () => ({

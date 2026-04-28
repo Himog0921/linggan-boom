@@ -60,6 +60,8 @@ test('task lease client claims and renews through workbench lease endpoints', as
     serverUrl: 'http://localhost:3000',
     stationId: 'station-1',
     stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
     capabilities: ['xhs.authorSurfaceScan'],
     platformAccounts: [{ platform: 'xhs', purpose: 'author_monitor', healthStatus: 'healthy' }],
     fetchFn,
@@ -71,6 +73,8 @@ test('task lease client claims and renews through workbench lease endpoints', as
     stationId: 'station-1',
     stationToken: 'station-token',
     leaseToken: 'lease-token-1',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
     status: 'running',
     fetchFn,
     store,
@@ -81,6 +85,10 @@ test('task lease client claims and renews through workbench lease endpoints', as
   assert.equal(renewal.expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal((await store.read()).expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal(requests.length, 2);
+  assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
+  assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
+  assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
+  assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
 });
 
 test('task lease client preserves claim reason and writes an idle snapshot', async () => {
@@ -90,7 +98,6 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
     async json() {
       return {
         task: null,
-        fallbackToPending: false,
         reason: {
           code: 'no_available_account',
           message: '没有可用账号',
@@ -115,7 +122,6 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
     code: 'no_available_account',
     message: '没有可用账号',
   });
-  assert.equal(claim.fallbackToPending, false);
   assert.equal(claim.nextPollAfterMs, 45000);
   assert.deepEqual(await store.read(), {
     taskId: '',
@@ -128,7 +134,6 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
       code: 'no_available_account',
       message: '没有可用账号',
     },
-    fallbackToPending: false,
   });
   assert.deepEqual(createTaskLeaseIdleSnapshot(claim), await store.read());
   assert.deepEqual(
@@ -192,31 +197,38 @@ test('task poller keeps one active lease and does not claim another task while r
   assert.equal(poller.getState().activeLease.leaseToken, 'lease-token-2');
 });
 
-test('task poller falls back to pending tasks when station is not paired yet', async () => {
-  let fallbackCalls = 0;
+test('task poller stays idle when station is not paired yet', async () => {
+  let dispatchCalls = 0;
   const poller = createTaskPoller({
-    claimTaskLease: async () => ({ task: null, fallbackToPending: true }),
-    fetchPendingTasks: async () => [{
-      id: 'manual-task-1',
-      taskType: 'xhs.collectAuthor',
-      platform: 'xhs',
-    }],
+    claimTaskLease: async () => ({
+      task: null,
+      reason: {
+        code: 'station_not_registered',
+        message: '请先绑定执行工位',
+      },
+      nextPollAfterMs: 30000,
+    }),
     capabilityCheck: async () => ({ success: true, accepted: true }),
     dispatchTask: async () => {
-      fallbackCalls += 1;
-      return {
-        success: true,
-        accepted: true,
-        taskId: 'manual-task-1',
-        resultLookup: { externalTaskId: 'manual-task-1' },
-      };
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run without a leased task');
     },
   });
 
   const result = await poller.tick();
 
-  assert.equal(result.accepted, true);
-  assert.equal(fallbackCalls, 1);
+  assert.deepEqual(result, {
+    success: true,
+    idle: true,
+    nextPollAfterMs: 30000,
+    idleReasonCode: 'station_not_registered',
+    idleReasonMessage: '请先绑定执行工位',
+    reason: {
+      code: 'station_not_registered',
+      message: '请先绑定执行工位',
+    },
+  });
+  assert.equal(dispatchCalls, 0);
   assert.equal(poller.getState().activeLease, null);
 });
 

@@ -14,6 +14,7 @@ import { createResultPackager } from '../workbench/runtime/resultPackager.js';
 export function createContentDataRuntime({
   MSG,
   isDouyinPage,
+  assertPluginAuthorized,
   collectNote,
   collectComments,
   collectAuthor,
@@ -125,6 +126,7 @@ export function createContentDataRuntime({
   const messageHandlers = createContentMessageHandlers({
     MSG,
     isDouyinPage,
+    assertPluginAuthorized,
     collectNote,
     collectComments,
     collectAuthor,

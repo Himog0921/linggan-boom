@@ -1,6 +1,8 @@
 import React, { useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 import { getCurrentTheme } from '../../themes/themeManager.js';
+import { icon } from '../../shared/icons.js';
+import { getFeedbackMeta } from '../../shared/feedback.js';
 
 function buildToastStyle(type = 'info') {
   const theme = getCurrentTheme();
@@ -27,9 +29,9 @@ function buildToastStyle(type = 'info') {
     boxSizing: 'border-box',
     padding: '10px 16px',
     display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    textAlign: 'center',
+    alignItems: 'flex-start',
+    justifyContent: 'flex-start',
+    gap: '10px',
     background: toneMap[type] || toneMap.info,
     color: ink,
     border,
@@ -46,6 +48,7 @@ function buildToastStyle(type = 'info') {
 }
 
 function Toast({ message, type = 'info', onDismiss }) {
+  const meta = getFeedbackMeta(type);
   useEffect(() => {
     const timer = setTimeout(() => onDismiss?.(), 3000);
     return () => clearTimeout(timer);
@@ -58,7 +61,15 @@ function Toast({ message, type = 'info', onDismiss }) {
       aria-live={type === 'error' ? 'assertive' : 'polite'}
       aria-atomic="true"
     >
-      {message}
+      <span
+        style={{ display: 'inline-flex', flex: '0 0 auto', marginTop: '1px' }}
+        aria-hidden="true"
+        dangerouslySetInnerHTML={{ __html: icon(meta.icon, { size: 16 }) }}
+      />
+      <span style={{ display: 'block', minWidth: 0, flex: 1 }}>
+        <strong style={{ display: 'block', fontSize: '11px', marginBottom: '1px' }}>{meta.title}</strong>
+        <span>{message}</span>
+      </span>
     </div>
   );
 }

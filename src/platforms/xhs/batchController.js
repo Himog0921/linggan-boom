@@ -66,6 +66,7 @@ function buildWorkbenchNoteRecord(note = {}) {
   const rawUrl = String(note.rawUrl || canonicalUrl || url).trim();
 
   return {
+    platform: String(note.platform || 'xhs').trim() || 'xhs',
     noteId: String(note.noteId || note.platformContentId || note.contentId || '').trim(),
     platformContentId: String(note.platformContentId || note.noteId || note.contentId || '').trim(),
     title: String(note.title || '').trim(),
@@ -84,7 +85,25 @@ function buildWorkbenchNoteRecord(note = {}) {
     collects: toFiniteNumber(note.collects, 0),
     comments: toFiniteNumber(note.comments, 0),
     shares: toFiniteNumber(note.shares, 0),
+    authorId: String(note.authorId || note.authorPlatformId || note.userId || '').trim(),
+    authorPlatformId: String(note.authorPlatformId || note.authorId || note.userId || '').trim(),
+    authorEntityId: String(note.authorEntityId || '').trim(),
     authorName: String(note.authorName || note.author || '').trim(),
+    authorAvatar: firstText(note.authorAvatar) || firstText(note.avatar),
+    publishedAt: note.publishedAt ?? note.publishTime ?? note.releaseDate ?? null,
+    publishedAtText:
+      firstText(note.publishedAtText)
+      || firstText(note.publishTimeText)
+      || firstText(note.releaseDateText)
+      || firstText(note.releaseDate)
+      || firstText(note.timeText)
+      || firstText(note.time),
+    type: String(note.type || note.contentType || note.noteType || note.itemType || '').trim(),
+    contentType: String(note.contentType || note.type || note.noteType || note.itemType || '').trim(),
+    dataSource: firstText(note.dataSource),
+    dataQuality: firstText(note.dataQuality),
+    qualityReason: firstText(note.qualityReason),
+    sourceTier: firstText(note.sourceTier),
   };
 }
 
@@ -347,7 +366,9 @@ export class BatchNoteController extends BaseBatchController {
     });
 
     try {
-      this.noteList = await discoverWithScroll(this._containerSelector);
+      this.noteList = await discoverWithScroll(this._containerSelector, 10, {
+        expectedCount: this.targetNoteId ? 1 : count,
+      });
       this.noteList = filterTargetedXhsNoteList(this.noteList, this.targetNoteId);
       if (this.targetNoteId && this.noteList.length === 0) {
         throw new Error(`目标作品未在当前作者页找到：${this.targetNoteId}`);

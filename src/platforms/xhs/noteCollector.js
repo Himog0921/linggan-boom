@@ -12,13 +12,38 @@ import { noteStore } from '../../db/noteStore.js';
 import { createCollectorEvidence, joinRawDomText } from '../../shared/collectorMetadata.js';
 import { withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
 
-async function waitForDiscoverySettle(containerSelector, previousCount, timeout, isProfileMode) {
+function normalizeDiscoverySnapshot(snapshot) {
+  if (typeof snapshot === 'number') {
+    return {
+      visibleCount: snapshot,
+      knownNoteIds: null,
+    };
+  }
+
+  const knownNoteIds = snapshot?.knownNoteIds instanceof Set
+    ? snapshot.knownNoteIds
+    : null;
+  return {
+    visibleCount: normalizePositiveInteger(snapshot?.visibleCount, 0),
+    knownNoteIds,
+  };
+}
+
+function hasDiscoveryAdvanced(currentNotes, snapshot) {
+  if (snapshot.knownNoteIds && currentNotes.some((note) => note?.noteId && !snapshot.knownNoteIds.has(note.noteId))) {
+    return true;
+  }
+  return currentNotes.length > snapshot.visibleCount;
+}
+
+async function waitForDiscoverySettle(containerSelector, previousSnapshot, timeout, isProfileMode) {
   const startedAt = Date.now();
   let stableRounds = 0;
+  const snapshot = normalizeDiscoverySnapshot(previousSnapshot);
 
   while (Date.now() - startedAt < timeout) {
-    const currentCount = discoverNotesFromDOM(containerSelector).length;
-    if (currentCount > previousCount) {
+    const currentNotes = discoverNotesFromDOM(containerSelector);
+    if (hasDiscoveryAdvanced(currentNotes, snapshot)) {
       stableRounds += 1;
       if (stableRounds >= 2) return;
     } else {
@@ -471,55 +496,264 @@ export function discoverNotesFromDOM(containerSelector) {
   return notes;
 }
 
+function normalizePositiveInteger(value, fallback = 0) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.floor(parsed);
+}
+
+function getWindowScrollTarget() {
+  return { type: 'window', element: null };
+}
+
+function isScrollableElement(element) {
+  if (!element) return false;
+  const scrollHeight = Number(element.scrollHeight || 0);
+  const clientHeight = Number(element.clientHeight || 0);
+  return clientHeight > 0 && scrollHeight > clientHeight + 24;
+}
+
+function getDiscoveryScrollTarget(containerSelector) {
+  if (typeof document === 'undefined' || typeof document.querySelector !== 'function') {
+    return getWindowScrollTarget();
+  }
+
+  let node = document.querySelector(containerSelector);
+  while (node && node !== document.body && node !== document.documentElement) {
+    if (isScrollableElement(node)) {
+      return { type: 'element', element: node };
+    }
+    node = node.parentElement;
+  }
+
+  return getWindowScrollTarget();
+}
+
+function isElementScrollTarget(scrollTarget) {
+  return scrollTarget?.type === 'element' && scrollTarget.element;
+}
+
+function getScrollMetrics(scrollTarget = getWindowScrollTarget()) {
+  if (isElementScrollTarget(scrollTarget)) {
+    const element = scrollTarget.element;
+    const elementHeight = Number(element.clientHeight || 0);
+    const windowHeight = typeof window === 'undefined' ? Number(document?.documentElement?.clientHeight || 0) : Number(window.innerHeight || 0);
+    // 对列表自身可滚动的虚拟流，必须按列表可视高度算“到底”，不能拿浏览器整窗高度代替。
+    const viewportHeight = Math.max(elementHeight || windowHeight, 1);
+    const scrollHeight = Math.max(Number(element.scrollHeight || 0), viewportHeight);
+    const scrollTop = Math.max(Number(element.scrollTop || 0), 0);
+    const maxTop = Math.max(0, scrollHeight - viewportHeight);
+    return {
+      scrollTop,
+      viewportHeight,
+      scrollHeight,
+      maxTop,
+      atBottom: scrollTop >= Math.max(0, maxTop - 24),
+    };
+  }
+
+  const doc = document.documentElement || document.body;
+  const body = document.body || doc;
+  const scrollTop = Math.max(window.scrollY || 0, doc?.scrollTop || 0, body?.scrollTop || 0);
+  const viewportHeight = Math.max(window.innerHeight || 0, doc?.clientHeight || 0, body?.clientHeight || 0);
+  const scrollHeight = Math.max(doc?.scrollHeight || 0, body?.scrollHeight || 0, viewportHeight);
+  const maxTop = Math.max(0, scrollHeight - viewportHeight);
+  return {
+    scrollTop,
+    viewportHeight,
+    scrollHeight,
+    maxTop,
+    atBottom: scrollTop >= Math.max(0, maxTop - 24),
+  };
+}
+
+function scrollDiscoveryTargetTo(scrollTarget, top) {
+  const nextTop = Math.max(0, Number(top || 0));
+  if (isElementScrollTarget(scrollTarget)) {
+    scrollTarget.element.scrollTop = nextTop;
+    return;
+  }
+  window.scrollTo({ top: nextTop, behavior: 'auto' });
+}
+
+function scrollDiscoveryTargetBy(scrollTarget, top) {
+  const offset = Number(top || 0);
+  if (isElementScrollTarget(scrollTarget)) {
+    const currentTop = Math.max(0, Number(scrollTarget.element.scrollTop || 0));
+    scrollTarget.element.scrollTop = Math.max(0, currentTop + offset);
+    return;
+  }
+  window.scrollBy({ top: offset, behavior: 'auto' });
+}
+
+export function buildDiscoveryPlan(containerSelector, {
+  maxScrolls = 10,
+  expectedCount = 0,
+} = {}) {
+  const isProfileMode = containerSelector === '#userPostedFeeds';
+  const normalizedMaxScrolls = normalizePositiveInteger(maxScrolls, 10);
+  const normalizedExpectedCount = normalizePositiveInteger(expectedCount, 0);
+  const profileTargetRounds = normalizedExpectedCount > 0
+    ? Math.min(Math.max(normalizedExpectedCount, 28), 80)
+    : 28;
+  const maxRounds = isProfileMode
+    ? Math.max(
+      normalizedMaxScrolls,
+      profileTargetRounds,
+    )
+    : normalizedMaxScrolls;
+
+  return {
+    isProfileMode,
+    expectedCount: normalizedExpectedCount,
+    maxRounds,
+    settleDelay: isProfileMode ? 1300 : 900,
+    stableNoNewLimit: isProfileMode ? 4 : 2,
+    bottomConfirmationRounds: isProfileMode ? 3 : 0,
+    stepRatio: isProfileMode ? 0.55 : 0.68,
+    requireBottomOrExpected: isProfileMode,
+  };
+}
+
+export function shouldStopDiscovery({
+  noNewCount = 0,
+  stableNoNewLimit = 2,
+  discoveredCount = 0,
+  expectedCount = 0,
+  atBottom = false,
+  bottomNoNewCount = 0,
+  bottomConfirmationRounds = 0,
+  requireBottomOrExpected = false,
+} = {}) {
+  if (noNewCount < stableNoNewLimit) return false;
+  if (!requireBottomOrExpected) return true;
+  const discoveredEnough = expectedCount > 0 && discoveredCount >= expectedCount;
+  if (discoveredEnough) return true;
+  return atBottom && bottomNoNewCount >= bottomConfirmationRounds;
+}
+
+async function probeProfileBottom(containerSelector, previousSnapshot, settleDelay, scrollTarget) {
+  const metrics = getScrollMetrics(scrollTarget);
+  if (!metrics.atBottom) return false;
+
+  const bounceStep = Math.max(180, Math.round(metrics.viewportHeight * 0.35));
+  const retreatTop = Math.max(0, metrics.scrollTop - bounceStep);
+  if (retreatTop < metrics.scrollTop - 1) {
+    scrollDiscoveryTargetTo(scrollTarget, retreatTop);
+    await new Promise((resolve) => setTimeout(resolve, 220));
+  }
+
+  const refreshed = getScrollMetrics(scrollTarget);
+  const returnTop = Math.max(metrics.maxTop, refreshed.maxTop);
+  if (returnTop > refreshed.scrollTop + 1) {
+    scrollDiscoveryTargetTo(scrollTarget, returnTop);
+  }
+
+  await waitForDiscoverySettle(
+    containerSelector,
+    previousSnapshot,
+    settleDelay + 500,
+    true,
+  );
+  await new Promise((resolve) => setTimeout(resolve, 220));
+  return true;
+}
+
 /**
  * 滚动发现更多笔记（处理懒加载）
  * 在批量采集前调用，确保尽可能多的笔记被加载到 DOM 中
  */
-export async function discoverWithScroll(containerSelector, maxScrolls = 10) {
+export async function discoverWithScroll(containerSelector, maxScrolls = 10, options = {}) {
   const allNotes = new Map(); // key=noteId，滚动期间持续累积，不依赖回顶后的 DOM
   let noNewCount = 0;
-  const isProfileMode = containerSelector === '#userPostedFeeds';
-  const maxRounds = isProfileMode ? Math.max(maxScrolls, 12) : maxScrolls;
-  const settleDelay = isProfileMode ? 1300 : 900;
+  let bottomNoNewCount = 0;
+  let scrollTarget = getDiscoveryScrollTarget(containerSelector);
+  const plan = buildDiscoveryPlan(containerSelector, {
+    maxScrolls,
+    expectedCount: options.expectedCount,
+  });
 
-  for (let i = 0; i < maxRounds; i++) {
+  for (let i = 0; i < plan.maxRounds; i++) {
+    scrollTarget = getDiscoveryScrollTarget(containerSelector);
     const found = discoverNotesFromDOM(containerSelector);
     let hasNew = false;
 
     for (const note of found) {
       if (!allNotes.has(note.noteId)) {
-        allNotes.set(note.noteId, note);
+        allNotes.set(note.noteId, {
+          ...note,
+          _discoveryOrder: allNotes.size,
+        });
         hasNew = true;
       }
     }
 
+    const discoveredEnough = plan.expectedCount > 0 && allNotes.size >= plan.expectedCount;
+    if (discoveredEnough) break;
+
+    const metrics = getScrollMetrics(scrollTarget);
+    const discoverySnapshot = {
+      visibleCount: found.length,
+      knownNoteIds: new Set(allNotes.keys()),
+    };
     if (!hasNew) {
       noNewCount++;
-      if (noNewCount >= 2) break; // 连续 2 次无新笔记，停止滚动
+      if (plan.isProfileMode && metrics.atBottom && !discoveredEnough) {
+        bottomNoNewCount++;
+        if (bottomNoNewCount < plan.bottomConfirmationRounds) {
+          await probeProfileBottom(containerSelector, discoverySnapshot, plan.settleDelay, scrollTarget);
+          continue;
+        }
+      } else {
+        bottomNoNewCount = 0;
+      }
+      if (shouldStopDiscovery({
+        noNewCount,
+        stableNoNewLimit: plan.stableNoNewLimit,
+        discoveredCount: allNotes.size,
+        expectedCount: plan.expectedCount,
+        atBottom: metrics.atBottom,
+        bottomNoNewCount,
+        bottomConfirmationRounds: plan.bottomConfirmationRounds,
+        requireBottomOrExpected: plan.requireBottomOrExpected,
+      })) break;
     } else {
       noNewCount = 0;
+      bottomNoNewCount = 0;
     }
 
     // 每次滚动约 68% 屏高；博主页使用更慢节奏防止空白卡片
-    const step = Math.round(window.innerHeight * (isProfileMode ? 0.62 : 0.68));
-    const previousCount = found.length;
-    window.scrollBy({ top: step, behavior: 'auto' });
-    await waitForDiscoverySettle(containerSelector, previousCount, settleDelay, isProfileMode);
+    const step = Math.round(metrics.viewportHeight * plan.stepRatio);
+    const nextTop = Math.min(metrics.maxTop, metrics.scrollTop + step);
+    if (nextTop > metrics.scrollTop + 1) {
+      scrollDiscoveryTargetTo(scrollTarget, nextTop);
+    } else if (!metrics.atBottom) {
+      scrollDiscoveryTargetBy(scrollTarget, step);
+    }
+    await waitForDiscoverySettle(
+      containerSelector,
+      discoverySnapshot,
+      plan.settleDelay,
+      plan.isProfileMode,
+    );
 
     // 某些博主页会出现短暂空白，额外等待一次再做下一轮
-    if (isProfileMode && found.length === 0) {
+    if (plan.isProfileMode && found.length === 0) {
       await new Promise(r => setTimeout(r, 450));
     }
   }
 
   // 滚回顶部
-  window.scrollTo({ top: 0, behavior: 'auto' });
+  scrollDiscoveryTargetTo(scrollTarget, 0);
   await new Promise(r => setTimeout(r, 200));
 
   // 关键修复：返回滚动期间累积的所有笔记（按发现时的视觉位置排序）
   // 不能再次调用 discoverNotesFromDOM，因为虚拟列表在回顶后已卸载底部卡片
   const result = Array.from(allNotes.values());
   result.sort((a, b) => {
+    const orderA = Number.isFinite(a._discoveryOrder) ? a._discoveryOrder : Number.MAX_SAFE_INTEGER;
+    const orderB = Number.isFinite(b._discoveryOrder) ? b._discoveryOrder : Number.MAX_SAFE_INTEGER;
+    if (orderA !== orderB) return orderA - orderB;
     const rowDiff = Math.abs(a._top - b._top);
     if (rowDiff < 50) return a._left - b._left;
     return a._top - b._top;

@@ -57,7 +57,6 @@ function injectVideoDetailButtons(page) {
     flexDirection: 'column',
     alignItems: 'stretch',
     minWidth: '160px',
-    boxShadow: '5px 5px 0 #121212',
   });
 
   const buttons = [
@@ -73,9 +72,11 @@ function injectVideoDetailButtons(page) {
 
   renderButtonGroup(container, {
     platform: 'douyin',
+    brandVariant: 'banner',
+    floatingKey: page.type === DY_PAGE_TYPE.NOTE_DETAIL ? 'douyin.note-detail' : 'douyin.video-detail',
     buttons: filteredButtons,
-    containerStyle: { flexDirection: 'column', alignItems: 'stretch' },
-    brandStyle: { textAlign: 'center', marginBottom: '6px', marginRight: '0' },
+    containerStyle: { flexDirection: 'column', alignItems: 'stretch', boxShadow: 'none' },
+    brandStyle: { marginBottom: '10px', marginRight: '0', justifyContent: 'center', width: '100%' },
     buttonStyle: { width: '100%' },
   });
 
@@ -105,6 +106,7 @@ function injectSearchButtons() {
   renderButtonGroup(container, {
     platform: 'douyin',
     compact: true,
+    floatingKey: 'douyin.search',
     buttons: [
       { text: '批量视频', icon: 'video', action: 'dy_batchVideos', style: 'primary', data: { mode: 'search' } },
       { text: '批量评论', icon: 'comment', action: 'dy_batchComments', style: 'secondary', data: { mode: 'search' } },
@@ -131,6 +133,7 @@ function injectProfileButtons() {
   renderButtonGroup(container, {
     platform: 'douyin',
     compact: true,
+    floatingKey: 'douyin.profile',
     buttons: [
       { text: '采集博主', icon: 'author', action: 'dy_collectAuthor', style: 'primary' },
       { text: '批量视频', icon: 'video', action: 'dy_batchVideos', style: 'secondary', data: { mode: 'profile' } },

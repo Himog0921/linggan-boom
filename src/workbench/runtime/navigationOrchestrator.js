@@ -70,13 +70,32 @@ export function navigateToTask(taskType, target, options = {}) {
 
     let completed = false;
 
-    chrome.tabs.create({ url, active: true }, (tab) => {
-      if (chrome.runtime.lastError || !tab?.id) {
+    chrome.windows.create({ url, focused: false, type: 'normal' }, async (createdWindow) => {
+      if (chrome.runtime.lastError || !createdWindow?.id) {
         resolve({ tabId: null, error: 'tab_create_failed' });
         return;
       }
 
-      const tabId = tab.id;
+      let tabId = Number(createdWindow?.tabs?.[0]?.id || 0) || null;
+      if (!tabId) {
+        try {
+          const tabs = await chrome.tabs.query({
+            windowId: createdWindow.id,
+            active: true,
+          });
+          tabId = Number(tabs?.[0]?.id || 0) || null;
+        } catch {
+          tabId = null;
+        }
+      }
+
+      if (!tabId) {
+        resolve({ tabId: null, error: 'tab_create_failed' });
+        return;
+      }
+
+      chrome.tabs.update(tabId, { autoDiscardable: false }).catch(() => {});
+
       const timeout = setTimeout(() => {
         if (completed) return;
         completed = true;
@@ -90,7 +109,7 @@ export function navigateToTask(taskType, target, options = {}) {
         completed = true;
         clearTimeout(timeout);
         chrome.tabs.onUpdated.removeListener(listener);
-        resolve({ tabId, error: null });
+        resolve({ tabId, error: null, windowId: createdWindow.id });
       }
 
       chrome.tabs.onUpdated.addListener(listener);

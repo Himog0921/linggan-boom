@@ -250,6 +250,7 @@ idle → running ⇄ paused → stopping → done / error
 
 ```
 内容工作台 (Next.js)
+  POST /api/plugin-authorizations/activate      → 激活插件授权
   POST /api/collect/batch                     ← 插件推送数据
   GET  /api/collection-tasks                  → 插件拉取任务
   POST /api/collection-tasks/claim            → 执行工位认领任务租约
@@ -261,6 +262,7 @@ idle → running ⇄ paused → stopping → done / error
   PATCH /api/collection-tasks/[id]            ← 状态更新
         ↕ HTTPS + Bearer Token (PLUGIN_API_TOKEN)
 linggan-boom 插件
+  pluginAuthorizationClient (授权码激活、设备资格、本地授权状态)
   taskPoller (优先租约认领；未配对时回退旧轮询)
   executionStationClient (工位配对、身份、心跳)
   taskLeaseClient (本地租约持久化、续租)
@@ -268,7 +270,10 @@ linggan-boom 插件
   heartbeat (3s 心跳)
 ```
 
-**关键事实**：远程任务入口在 Background，不在 Popup。真正执行和落库发生在 Content Script 侧。
+**关键事实**：
+
+- 远程任务入口在 Background，不在 Popup。真正执行和落库发生在 Content Script 侧。
+- 插件现在有两层身份：授权码决定“谁能用”，配对码决定“这台已授权浏览器绑定到哪个工位”。
 
 ### 8.2 同步模块 — src/sync/flywheelSync.js
 
@@ -284,6 +289,7 @@ linggan-boom 插件
 
 | 文件 | 职责 |
 |---|---|
+| pluginAuthorization.js | 激活授权码、持久化设备授权状态、统一授权门禁 |
 | executionStationClient.js | 配对注册、保存工位身份、发送心跳 |
 | executionStationRuntime.js | 监控工位能力清单、平台账号健康汇报 |
 | taskLeaseClient.js | 任务租约认领、续租、本地持久化 |
@@ -345,8 +351,8 @@ linggan-boom 插件
 ### 8.5 任务执行流程
 
 ```
-工作台 → fetchPendingTasks() → taskPoller.tick()
-  → claimTask() → capabilityCheck() → dispatchTask()
+工作台 → claimTaskLease() → taskPoller.tick()
+  → capabilityCheck() → dispatchTask()
   → collectionRunStore.createRun() → 平台采集器执行
   → 进度事件 → taskDeltaReporter.enqueueEvent()
   → deltaOutbox.flush() → ingestCollectionTaskDelta()

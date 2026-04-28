@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildTaskNavigationUrl } from '../src/workbench/runtime/navigationOrchestrator.js';
+import { buildTaskNavigationUrl, navigateToTask } from '../src/workbench/runtime/navigationOrchestrator.js';
 
 test('xhs.batchNotes keeps full note urls intact for detail probe navigation', () => {
   const noteUrl = 'https://www.xiaohongshu.com/explore/note_123';
@@ -45,4 +45,60 @@ test('other task types keep their existing navigation behavior', () => {
     buildTaskNavigationUrl('xhs.collectAuthor', '6926d8f4000000003702c666'),
     'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
   );
+});
+
+test('navigateToTask opens an unfocused execution window and keeps the task tab non-discardable', async () => {
+  const originalChrome = globalThis.chrome;
+  const windowCalls = [];
+  const updateCalls = [];
+  const listeners = [];
+
+  globalThis.chrome = {
+    runtime: {
+      lastError: null,
+    },
+    windows: {
+      create(options, callback) {
+        windowCalls.push(options);
+        callback({ id: 77 });
+      },
+    },
+    tabs: {
+      async query(queryInfo) {
+        assert.deepEqual(queryInfo, { windowId: 77, active: true });
+        return [{ id: 701 }];
+      },
+      async update(tabId, patch) {
+        updateCalls.push({ tabId, patch });
+        return { id: tabId, ...patch };
+      },
+      onUpdated: {
+        addListener(listener) {
+          listeners.push(listener);
+          setTimeout(() => listener(701, { status: 'complete' }), 0);
+        },
+        removeListener(listener) {
+          const index = listeners.indexOf(listener);
+          if (index >= 0) listeners.splice(index, 1);
+        },
+      },
+    },
+  };
+
+  try {
+    const result = await navigateToTask('xhs.collectAuthor', '6926d8f4000000003702c666');
+    assert.deepEqual(windowCalls, [{
+      url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+      focused: false,
+      type: 'normal',
+    }]);
+    assert.deepEqual(updateCalls, [{
+      tabId: 701,
+      patch: { autoDiscardable: false },
+    }]);
+    assert.equal(result.tabId, 701);
+    assert.equal(result.error, null);
+  } finally {
+    globalThis.chrome = originalChrome;
+  }
 });

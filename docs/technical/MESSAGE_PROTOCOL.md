@@ -78,8 +78,10 @@
 | `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ externalTaskId?, collectionRunId? }` | 从页面侧 `collectionRuns` 打包结果并回传给工作台 |
 | `WORKBENCH_LOCAL_CONTROL_EVENT` | Content → Background | `{ externalTaskId?, collectionRunId?, taskType?, controlAction, status, message?, occurredAt? }` | 插件本地暂停 / 继续 / 停止同步回工作台事件流 |
 | `WORKBENCH_DELTA_FLUSH` | 内部 / 调试 → Background | `{}` | 触发工作台增量 outbox 立即 flush |
-| `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前插件是否已绑定为监控执行工位，以及可上报的平台账号状态 |
-| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 使用内容工作台生成的配对码绑定执行工位 |
+| `AUTHORIZE_PLUGIN_ACCESS` | Popup → Background | `{ serverUrl, authorizationCode, browserLabel? }` | 使用内容工作台设置里生成的授权码激活当前浏览器 |
+| `CLEAR_PLUGIN_AUTHORIZATION` | Popup → Background | `{}` | 清除当前浏览器的插件授权，并解除执行工位绑定 |
+| `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前浏览器是否已授权、是否已绑定执行工位，以及可上报的平台账号状态 |
+| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 在已授权前提下，使用内容工作台生成的配对码绑定执行工位 |
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
 > 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 同时还会通过 HTTP 轮询内容工作台的 `pending` 任务，并把 `pluginRunId / resultSummary / errorMessage / progress` patch 回工作台任务记录。
@@ -103,11 +105,18 @@ GET /api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after
 执行工位与任务租约：
 
 ```text
+POST /api/plugin-authorizations/activate
 POST /api/execution-stations/register
 POST /api/execution-stations/heartbeat
 POST /api/collection-tasks/claim
 POST /api/collection-tasks/:taskId/lease
 ```
+
+授权与配对说明：
+
+- `authorizationCode` 由内容工作台“设置 → 插件授权”生成，决定谁可以使用插件
+- `pairingCode` 由内容工作台的工位管理入口生成，决定这台已授权浏览器绑定到哪个执行工位
+- 插件完成授权后，后续工作台请求统一携带 `Authorization: Bearer <authorizationToken>`
 
 控制动作：
 

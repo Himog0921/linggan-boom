@@ -55,6 +55,8 @@ export const MSG = {
   WORKBENCH_RECORD_DELTA: 'workbenchRecordDelta',
   WORKBENCH_DELTA_FLUSH: 'workbenchDeltaFlush',
   SYNC_TO_WORKBENCH: 'syncToWorkbench',
+  AUTHORIZE_PLUGIN_ACCESS: 'authorizePluginAccess',
+  CLEAR_PLUGIN_AUTHORIZATION: 'clearPluginAuthorization',
   GET_EXECUTION_STATION_STATUS: 'getExecutionStationStatus',
   REGISTER_EXECUTION_STATION: 'registerExecutionStation',
   SEND_EXECUTION_STATION_HEARTBEAT: 'sendExecutionStationHeartbeat',

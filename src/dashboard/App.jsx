@@ -3,6 +3,7 @@ import '../extensionPublicPath.js';
 import { MSG } from '../shared/constants.js';
 import { BRAND_ASSETS, getBrandAssetUrl } from '../shared/brandAssets.js';
 import { icon } from '../shared/icons.js';
+import { getFeedbackMeta, getMediaStatusMeta } from '../shared/feedback.js';
 import { generateCsv, downloadFile } from '../shared/utils.js';
 import {
   extractHashtags, stripHashtags, cleanDisplayBodyText, getHashtagsForItem,
@@ -28,7 +29,6 @@ const LINK_ACTION_TEXT = {
   avatarUrl: '查看',
 };
 
-const BRAND_LOGO_SRC = getBrandAssetUrl(BRAND_ASSETS.logo);
 const BRAND_BANNER_SRC = getBrandAssetUrl(BRAND_ASSETS.banner);
 
 const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
@@ -73,12 +73,25 @@ export default function App() {
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedIds, setSelectedIds] = useState({ notes: new Set(), comments: new Set(), authors: new Set() });
   const [notice, setNotice] = useState({ message: '', type: 'info', visible: false });
-  const [confirmDialog, setConfirmDialog] = useState({ open: false, title: '', message: '', confirmText: '', onConfirm: null });
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    detail: '',
+    confirmText: '',
+    confirmTone: 'danger',
+    onConfirm: null,
+  });
   const [mediaPreview, setMediaPreview] = useState({ open: false, url: '', title: '', type: 'image' });
   const [loading, setLoading] = useState(false);
   const [idleClaimSnapshot, setIdleClaimSnapshot] = useState(null);
+  const [busyActions, setBusyActions] = useState({});
+  const [rowBusyActions, setRowBusyActions] = useState({});
 
   const tableWrapperRef = useRef(null);
+  const noticeTimerRef = useRef(null);
+  const busyActionsRef = useRef({});
+  const rowBusyActionsRef = useRef({});
 
   // ===== 加载数据 =====
   const loadData = useCallback(async (tab) => {
@@ -199,20 +212,61 @@ export default function App() {
 
   // ===== 通知 =====
   const showNotice = useCallback((message, type = 'info') => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setNotice({ message, type, visible: true });
-    setTimeout(() => setNotice((n) => ({ ...n, visible: false })), 3000);
+    noticeTimerRef.current = setTimeout(() => {
+      setNotice((n) => ({ ...n, visible: false }));
+      noticeTimerRef.current = null;
+    }, type === 'error' ? 5000 : 3600);
+  }, []);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+  }, []);
+
+  const setBusyActionState = useCallback((key, busy) => {
+    const next = { ...busyActionsRef.current };
+    if (busy) next[key] = true;
+    else delete next[key];
+    busyActionsRef.current = next;
+    setBusyActions(next);
+  }, []);
+
+  const withBusyAction = useCallback(async (key, job) => {
+    if (!key) return job();
+    if (busyActionsRef.current[key]) return undefined;
+    setBusyActionState(key, true);
+    try {
+      return await job();
+    } finally {
+      setBusyActionState(key, false);
+    }
+  }, [setBusyActionState]);
+
+  const setRowBusyActionState = useCallback((key, busy) => {
+    const next = { ...rowBusyActionsRef.current };
+    if (busy) next[key] = true;
+    else delete next[key];
+    rowBusyActionsRef.current = next;
+    setRowBusyActions(next);
   }, []);
 
   // ===== 确认弹窗 =====
-  const showConfirm = useCallback(({ title, message, confirmText }) => {
+  const showConfirm = useCallback(({ title, message, detail = '', confirmText, confirmTone = 'danger' }) => {
     return new Promise((resolve) => {
-      setConfirmDialog({ open: true, title, message, confirmText, onConfirm: resolve });
+      setConfirmDialog({ open: true, title, message, detail, confirmText, confirmTone, onConfirm: resolve });
     });
   }, []);
 
   const handleConfirm = useCallback((result) => {
     if (confirmDialog.onConfirm) confirmDialog.onConfirm(result);
-    setConfirmDialog((d) => ({ ...d, open: false, onConfirm: null }));
+    setConfirmDialog((d) => ({
+      ...d,
+      open: false,
+      detail: '',
+      confirmTone: 'danger',
+      onConfirm: null,
+    }));
   }, [confirmDialog]);
 
   const idleClaimNotice = useMemo(
@@ -223,63 +277,69 @@ export default function App() {
 
   // ===== 导出 =====
   const handleExportCsv = useCallback(() => {
-    if (filteredData.length === 0) {
-      showNotice('没有数据可导出。', 'warning');
-      return;
-    }
-    const columns = getExportColumns(currentTab, allData);
-    const headers = columns.map((c) => c.label);
-    const rows = filteredData.map((item) => columns.map((c) => {
-      let val = item[c.key];
-      if (c.key === 'type') return val === 'video' ? '视频' : '图文';
-      if (c.key === 'title') return stripHashtags(String(val || ''));
-      if (c.key === 'content') return cleanDisplayBodyText(String(val || ''));
-      if (c.key === 'hashtags') return getHashtagsForItem(item).join('\n');
-      if (c.key === 'batchSelectionMode') return formatBatchSelectionModeLabel(val);
-      if (c.key === 'dataQuality') return formatDataQualityLabel(val);
-      if (c.key === 'qualityReason') return formatQualityReasonLabel(val);
-      if (c.key === 'sourceTier') return formatSourceTierLabel(val);
-      if (c.key === 'authorFollowed' || c.key === 'shareRestricted' || c.key === 'followedByMe') return val ? '是' : '否';
-      if (c.key === 'handle') return getUnifiedAuthorHandle(item);
-      if (c.key === 'images') return Array.isArray(val) ? val.join('\n') : '';
-      if (c.key === 'atUserList') return Array.isArray(val) ? val.map((v) => `${v.nickname || ''}(${v.userId || ''})`).join('\n') : '';
-      if (c.key === 'topicIds') return Array.isArray(val) ? val.join('\n') : '';
-      if (c.key === 'url' || c.key === 'noteUrl' || c.key === 'profileUrl') return toDisplayUrl(getPreferredRecordUrl(item, c.key) || val);
-      if (c.key === 'createdAt') return val ? new Date(val).toLocaleString('zh-CN') : '';
-      return String(val ?? '');
-    }));
-    const csv = generateCsv(headers, rows);
-    const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
-    downloadFile(csv, filename + '.csv', 'text/csv;charset=utf-8;');
-    showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.csv`, 'success');
-  }, [filteredData, currentTab, allData, showNotice]);
+    withBusyAction('exportCsv', async () => {
+      if (filteredData.length === 0) {
+        showNotice('没有数据可导出。', 'warning');
+        return;
+      }
+      const columns = getExportColumns(currentTab, allData);
+      const headers = columns.map((c) => c.label);
+      const rows = filteredData.map((item) => columns.map((c) => {
+        let val = item[c.key];
+        if (c.key === 'type') return val === 'video' ? '视频' : '图文';
+        if (c.key === 'title') return stripHashtags(String(val || ''));
+        if (c.key === 'content') return cleanDisplayBodyText(String(val || ''));
+        if (c.key === 'hashtags') return getHashtagsForItem(item).join('\n');
+        if (c.key === 'batchSelectionMode') return formatBatchSelectionModeLabel(val);
+        if (c.key === 'dataQuality') return formatDataQualityLabel(val);
+        if (c.key === 'qualityReason') return formatQualityReasonLabel(val);
+        if (c.key === 'sourceTier') return formatSourceTierLabel(val);
+        if (c.key === 'authorFollowed' || c.key === 'shareRestricted' || c.key === 'followedByMe') return val ? '是' : '否';
+        if (c.key === 'handle') return getUnifiedAuthorHandle(item);
+        if (c.key === 'images') return Array.isArray(val) ? val.join('\n') : '';
+        if (c.key === 'atUserList') return Array.isArray(val) ? val.map((v) => `${v.nickname || ''}(${v.userId || ''})`).join('\n') : '';
+        if (c.key === 'topicIds') return Array.isArray(val) ? val.join('\n') : '';
+        if (c.key === 'url' || c.key === 'noteUrl' || c.key === 'profileUrl') return toDisplayUrl(getPreferredRecordUrl(item, c.key) || val);
+        if (c.key === 'createdAt') return val ? new Date(val).toLocaleString('zh-CN') : '';
+        return String(val ?? '');
+      }));
+      const csv = generateCsv(headers, rows);
+      const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+      downloadFile(csv, filename + '.csv', 'text/csv;charset=utf-8;');
+      showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.csv`, 'success');
+    });
+  }, [filteredData, currentTab, allData, showNotice, withBusyAction]);
 
   const handleExportJson = useCallback(() => {
-    if (filteredData.length === 0) {
-      showNotice('没有数据可导出。', 'warning');
-      return;
-    }
-    const json = JSON.stringify(filteredData, null, 2);
-    const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
-    downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
-    showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.json`, 'success');
-  }, [filteredData, currentTab, showNotice]);
+    withBusyAction('exportJson', async () => {
+      if (filteredData.length === 0) {
+        showNotice('没有数据可导出。', 'warning');
+        return;
+      }
+      const json = JSON.stringify(filteredData, null, 2);
+      const filename = `灵感爆爆爆_${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+      downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
+      showNotice(`已导出 ${filteredData.length} 条${getTabLabel(currentTab)}：${filename}.json`, 'success');
+    });
+  }, [filteredData, currentTab, showNotice, withBusyAction]);
 
   const handleExportSelected = useCallback(() => {
-    if (currentSelected.size === 0) {
-      showNotice(`请先勾选要导出的${getTabLabel(currentTab)}。`, 'warning');
-      return;
-    }
-    const selectedItems = allData.filter((item) => currentSelected.has(getItemId(item, currentTab)));
-    if (selectedItems.length === 0) {
-      showNotice(`没有选中的${getTabLabel(currentTab)}可导出。`, 'warning');
-      return;
-    }
-    const json = JSON.stringify(selectedItems, null, 2);
-    const filename = `灵感爆爆爆_已选${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
-    downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
-    showNotice(`已导出 ${selectedItems.length} 条选中${getTabLabel(currentTab)}：${filename}.json`, 'success');
-  }, [currentSelected, allData, currentTab, showNotice]);
+    withBusyAction('exportSelected', async () => {
+      if (currentSelected.size === 0) {
+        showNotice(`请先勾选要导出的${getTabLabel(currentTab)}。`, 'warning');
+        return;
+      }
+      const selectedItems = allData.filter((item) => currentSelected.has(getItemId(item, currentTab)));
+      if (selectedItems.length === 0) {
+        showNotice(`没有选中的${getTabLabel(currentTab)}可导出。`, 'warning');
+        return;
+      }
+      const json = JSON.stringify(selectedItems, null, 2);
+      const filename = `灵感爆爆爆_已选${getTabLabel(currentTab)}_${new Date().toISOString().slice(0, 10)}`;
+      downloadFile(json, filename + '.json', 'application/json;charset=utf-8;');
+      showNotice(`已导出 ${selectedItems.length} 条选中${getTabLabel(currentTab)}：${filename}.json`, 'success');
+    });
+  }, [currentSelected, allData, currentTab, showNotice, withBusyAction]);
 
   // ===== 删除 =====
   const handleDeleteSelected = useCallback(async () => {
@@ -291,39 +351,49 @@ export default function App() {
     const confirmed = await showConfirm({
       title: `确认删除选中${getTabLabel(currentTab)}`,
       message: `确定要删除已选中的 ${selectedItems.length} 条${getTabLabel(currentTab)}吗？此操作不可恢复。`,
+      detail: '删除后这些记录会从插件本地数据库中移除，后续导出和同步都不会再出现。',
       confirmText: '删除选中',
     });
     if (!confirmed) return;
-    try {
-      const deleteActionMap = { notes: MSG.DELETE_NOTE, comments: MSG.DELETE_COMMENT, authors: MSG.DELETE_AUTHOR };
-      const deleteAction = deleteActionMap[currentTab];
-      for (const item of selectedItems) {
-        const idKey = currentTab === 'notes' ? 'noteId' : currentTab === 'comments' ? 'id' : 'userId';
-        await sendToParent(deleteAction, { [idKey]: getItemId(item, currentTab) });
+    await withBusyAction('deleteSelected', async () => {
+      try {
+        const deleteActionMap = { notes: MSG.DELETE_NOTE, comments: MSG.DELETE_COMMENT, authors: MSG.DELETE_AUTHOR };
+        const deleteAction = deleteActionMap[currentTab];
+        for (const item of selectedItems) {
+          const idKey = currentTab === 'notes' ? 'noteId' : currentTab === 'comments' ? 'id' : 'userId';
+          await sendToParent(deleteAction, { [idKey]: getItemId(item, currentTab) });
+        }
+        const next = new Set(currentSelected);
+        selectedItems.forEach((item) => next.delete(getItemId(item, currentTab)));
+        setCurrentSelected(next);
+        showNotice(`已删除 ${selectedItems.length} 条选中${getTabLabel(currentTab)}。`, 'success');
+        loadData(currentTab);
+      } catch (error) {
+        showNotice(`删除失败：${error.message || '未知错误'}`, 'error');
       }
-      const next = new Set(currentSelected);
-      selectedItems.forEach((item) => next.delete(getItemId(item, currentTab)));
-      setCurrentSelected(next);
-      showNotice(`已删除 ${selectedItems.length} 条选中${getTabLabel(currentTab)}。`, 'success');
-      loadData(currentTab);
-    } catch (error) {
-      showNotice(`删除失败：${error.message || '未知错误'}`, 'error');
-    }
-  }, [currentSelected, allData, currentTab, showNotice, showConfirm, loadData, setCurrentSelected]);
+    });
+  }, [currentSelected, allData, currentTab, showNotice, showConfirm, loadData, setCurrentSelected, withBusyAction]);
 
   // ===== 清空 =====
   const handleClearAll = useCallback(async () => {
     const confirmed = await showConfirm({
       title: '确认清空数据',
       message: `确定要清空所有${getTabLabel(currentTab)}数据吗？此操作不可恢复。`,
+      detail: '建议先导出一份 JSON 或 CSV 备份，再执行清空。',
       confirmText: '确认清空',
     });
     if (!confirmed) return;
-    const actionMap = { notes: MSG.CLEAR_ALL_NOTES, comments: MSG.CLEAR_ALL_COMMENTS, authors: MSG.CLEAR_ALL_AUTHORS };
-    await sendToParent(actionMap[currentTab]);
-    showNotice(`已清空当前${getTabLabel(currentTab)}数据。`, 'info');
-    loadData(currentTab);
-  }, [currentTab, showNotice, showConfirm, loadData]);
+    await withBusyAction('clearAll', async () => {
+      try {
+        const actionMap = { notes: MSG.CLEAR_ALL_NOTES, comments: MSG.CLEAR_ALL_COMMENTS, authors: MSG.CLEAR_ALL_AUTHORS };
+        await sendToParent(actionMap[currentTab]);
+        showNotice(`已清空当前${getTabLabel(currentTab)}数据。`, 'warning');
+        loadData(currentTab);
+      } catch (error) {
+        showNotice(`清空失败：${error.message || '未知错误'}`, 'error');
+      }
+    });
+  }, [currentTab, showNotice, showConfirm, loadData, withBusyAction]);
 
   // ===== 同步到工作台 =====
   const handleSyncToWorkbench = useCallback(async () => {
@@ -332,38 +402,40 @@ export default function App() {
       showNotice(`请先勾选要同步到工作台的${getTabLabel(currentTab)}。`, 'warning');
       return;
     }
-    try {
-      showNotice(`正在同步 ${selectedItems.length} 条${getTabLabel(currentTab)}到工作台...`, 'info');
-      const payload = buildWorkbenchSyncPayload(currentTab, selectedItems);
-      const result = await sendToParent(MSG.SYNC_TO_WORKBENCH, payload);
-      if (result?.success) {
-        const imported = result.imported || 0;
-        const skipped = result.skipped || 0;
-        const total = selectedItems.length;
-        const meta = result.meta || {};
-        const details = [];
-        if (meta.notesReceived != null) details.push(`笔记 ${meta.notesReceived}`);
-        if (meta.commentsReceived != null) details.push(`评论 ${meta.commentsReceived}`);
-        if (meta.authorsReceived != null) details.push(`博主 ${meta.authorsReceived}`);
-        const detailText = details.length ? `（${details.join('，')}）` : '';
-        const failReason = meta.failReason || meta.errorReason || '';
-        if (imported === total) {
-          showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');
-        } else if (imported > 0) {
-          const reasonText = failReason ? `，原因：${failReason}` : '';
-          showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${detailText}${reasonText}`, 'warning');
+    await withBusyAction('syncWorkbench', async () => {
+      try {
+        showNotice(`正在同步 ${selectedItems.length} 条${getTabLabel(currentTab)}到工作台...`, 'info');
+        const payload = buildWorkbenchSyncPayload(currentTab, selectedItems);
+        const result = await sendToParent(MSG.SYNC_TO_WORKBENCH, payload);
+        if (result?.success) {
+          const imported = result.imported || 0;
+          const skipped = result.skipped || 0;
+          const total = selectedItems.length;
+          const meta = result.meta || {};
+          const details = [];
+          if (meta.notesReceived != null) details.push(`笔记 ${meta.notesReceived}`);
+          if (meta.commentsReceived != null) details.push(`评论 ${meta.commentsReceived}`);
+          if (meta.authorsReceived != null) details.push(`博主 ${meta.authorsReceived}`);
+          const detailText = details.length ? `（${details.join('，')}）` : '';
+          const failReason = meta.failReason || meta.errorReason || '';
+          if (imported === total) {
+            showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');
+          } else if (imported > 0) {
+            const reasonText = failReason ? `，原因：${failReason}` : '';
+            showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${detailText}${reasonText}`, 'warning');
+          } else {
+            const reasonText = failReason ? `，原因：${failReason}` : '';
+            showNotice(`所有${getTabLabel(currentTab)}都已存在，跳过 ${skipped} 条${detailText}${reasonText}`, 'info');
+          }
         } else {
-          const reasonText = failReason ? `，原因：${failReason}` : '';
-          showNotice(`所有${getTabLabel(currentTab)}都已存在，跳过 ${skipped} 条${detailText}${reasonText}`, 'info');
+          const errorMsg = result?.error || result?.meta?.failReason || '未知错误';
+          showNotice(`同步失败：${errorMsg}`, 'error');
         }
-      } else {
-        const errorMsg = result?.error || result?.meta?.failReason || '未知错误';
-        showNotice(`同步失败：${errorMsg}`, 'error');
+      } catch (error) {
+        showNotice(`同步失败：${error.message || '未知错误'}`, 'error');
       }
-    } catch (error) {
-      showNotice(`同步失败：${error.message || '未知错误'}`, 'error');
-    }
-  }, [currentSelected, allData, currentTab, showNotice]);
+    });
+  }, [currentSelected, allData, currentTab, showNotice, withBusyAction]);
 
   // ===== Tab 切换 =====
   const handleTabChange = useCallback((tab) => {
@@ -378,6 +450,9 @@ export default function App() {
   // ===== 渲染单元格 =====
   const renderCell = useCallback((item, col) => {
     const val = item[col.key];
+    const renderStatusPill = (label, tone, extraClass = '') => (
+      <span className={`table-status-pill tone-${tone}${extraClass ? ` ${extraClass}` : ''}`}>{label}</span>
+    );
     if (col.key === 'url' || col.key === 'noteUrl' || col.key === 'profileUrl' || col.key === 'avatarUrl') {
       const actionText = LINK_ACTION_TEXT[col.key] || '打开';
       return renderLinkAction(getPreferredRecordUrl(item, col.key) || val, actionText);
@@ -389,7 +464,7 @@ export default function App() {
       return String(val || '-');
     }
     if (col.key === 'platform') {
-      return val === 'douyin' ? '抖音' : '小红书';
+      return renderStatusPill(val === 'douyin' ? '抖音' : '小红书', val === 'douyin' ? 'warning' : 'neutral');
     }
     if (col.key === 'contentId') {
       const contentId = String(item.contentId || item.noteId || '').trim();
@@ -449,7 +524,8 @@ export default function App() {
     }
     if (col.key === 'dataQuality') {
       const label = formatDataQualityLabel(val);
-      return <span title={String(val || '')}>{label}</span>;
+      const tone = String(val || '') === 'full' ? 'success' : String(val || '') === 'degraded' ? 'warning' : 'neutral';
+      return <span title={String(val || '')}>{renderStatusPill(label, tone)}</span>;
     }
     if (col.key === 'qualityReason') {
       const label = formatQualityReasonLabel(val);
@@ -457,7 +533,8 @@ export default function App() {
     }
     if (col.key === 'sourceTier') {
       const label = formatSourceTierLabel(val);
-      return <span title={String(val || '')}>{label}</span>;
+      const tone = String(val || '') === 'api' || String(val || '') === 'mixed' ? 'info' : String(val || '') === 'dom' ? 'warning' : 'neutral';
+      return <span title={String(val || '')}>{renderStatusPill(label, tone)}</span>;
     }
     if (col.key === 'batchRank') {
       const rank = Number(val || 0);
@@ -520,17 +597,9 @@ export default function App() {
       const failed = Number(summary.failed || 0);
       const success = Number(summary.success || 0);
       const total = Number(summary.total || 0);
-      const statusMap = {
-        '下载中': { cls: 'running', text: '下载中' },
-        '已完成': { cls: 'done', text: '已完成' },
-        '部分失败': { cls: 'partial', text: '部分失败' },
-        '失败': { cls: 'failed', text: '失败' },
-        '无媒体': { cls: 'pending', text: '无媒体' },
-        '待下载': { cls: 'pending', text: '待下载' },
-      };
-      const mapped = statusMap[statusRaw] || statusMap['待下载'];
+      const mapped = getMediaStatusMeta(statusRaw);
       const tip = `成功 ${success}/${total}，失败 ${failed}`;
-      return <span title={tip} className={`media-status ${mapped.cls}`}>{mapped.text}</span>;
+      return <span title={tip} className={`media-status tone-${mapped.tone}`}>{mapped.label}</span>;
     }
     if (col.key === 'atUserList') {
       const list = Array.isArray(item.atUserList) ? item.atUserList : [];
@@ -550,25 +619,50 @@ export default function App() {
     if (tableWrapperRef.current) tableWrapperRef.current.scrollTop = 0;
   }, []);
 
+  const emptyState = useMemo(() => {
+    if (loading) {
+      return {
+        title: '正在加载数据',
+        hint: '正在从插件本地数据库读取当前标签页的数据，请稍候。',
+        tone: 'info',
+      };
+    }
+    if (allData.length === 0) {
+      return {
+        title: '还没有采集数据',
+        hint: '先去小红书或抖音页面执行采集，再回到这里筛选、导出和同步。',
+        tone: 'neutral',
+      };
+    }
+    return {
+      title: '当前筛选条件下没有结果',
+      hint: '可以清空关键词、日期或类型筛选，看看是否还有其它数据。',
+      tone: 'warning',
+    };
+  }, [loading, allData.length]);
+
   // ===== 渲染 =====
+  const noticeMeta = displayNotice ? getFeedbackMeta(displayNotice.type) : null;
   return (
     <div className="dashboard-container">
       {displayNotice && (
         <section className={`dashboard-notice ${displayNotice.type}`}>
-          {displayNotice.message}
+          <span
+            className="dashboard-notice-icon"
+            aria-hidden="true"
+            dangerouslySetInnerHTML={{ __html: icon(noticeMeta.icon, { size: 16 }) }}
+          />
+          <div className="dashboard-notice-copy">
+            <strong>{noticeMeta.title}</strong>
+            <p>{displayNotice.message}</p>
+          </div>
         </section>
       )}
 
       <nav className="dashboard-nav">
         <div className="dashboard-brand">
-          <div className="dashboard-brand-mark" aria-hidden="true">
-            <img className="dashboard-brand-logo" src={BRAND_LOGO_SRC} alt="" />
-          </div>
-          <div className="dashboard-brand-copy">
-            <div className="dashboard-brand-banner-shell" aria-hidden="true">
-              <img className="dashboard-brand-banner" src={BRAND_BANNER_SRC} alt="" />
-            </div>
-            <h1>灵感爆爆爆 数据面板</h1>
+          <div className="dashboard-brand-banner-shell" aria-hidden="true">
+            <img className="dashboard-brand-banner" src={BRAND_BANNER_SRC} alt="" />
           </div>
         </div>
         <div className="nav-tabs">
@@ -624,26 +718,35 @@ export default function App() {
             className="toolbar-btn secondary"
             style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
             onClick={handleExportSelected}
+            disabled={Boolean(busyActions.exportSelected)}
           >
-            导出选中
+            {busyActions.exportSelected ? '导出中...' : '导出选中'}
           </button>
           <button
             className="toolbar-btn danger"
             style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
             onClick={handleDeleteSelected}
+            disabled={Boolean(busyActions.deleteSelected)}
           >
-            删除选中
+            {busyActions.deleteSelected ? '删除中...' : '删除选中'}
           </button>
           <button
             className="toolbar-btn primary"
             style={{ display: selectedCount > 0 ? 'inline-block' : 'none' }}
             onClick={handleSyncToWorkbench}
+            disabled={Boolean(busyActions.syncWorkbench)}
           >
-            同步到工作台
+            {busyActions.syncWorkbench ? '同步中...' : '同步到工作台'}
           </button>
-          <button className="toolbar-btn" onClick={handleExportCsv}>导出 CSV</button>
-          <button className="toolbar-btn" onClick={handleExportJson}>导出 JSON</button>
-          <button className="toolbar-btn danger" onClick={handleClearAll}>清空</button>
+          <button className="toolbar-btn" onClick={handleExportCsv} disabled={Boolean(busyActions.exportCsv)}>
+            {busyActions.exportCsv ? '导出中...' : '导出 CSV'}
+          </button>
+          <button className="toolbar-btn" onClick={handleExportJson} disabled={Boolean(busyActions.exportJson)}>
+            {busyActions.exportJson ? '导出中...' : '导出 JSON'}
+          </button>
+          <button className="toolbar-btn danger" onClick={handleClearAll} disabled={Boolean(busyActions.clearAll)}>
+            {busyActions.clearAll ? '清空中...' : '清空'}
+          </button>
         </div>
       </div>
 
@@ -660,11 +763,13 @@ export default function App() {
       <div className="data-table-wrapper" ref={tableWrapperRef}>
         {loading || totalCount === 0 ? (
           <div className="empty-state">
-            <svg className="empty-state-icon" viewBox="0 0 24 24" width="48" height="48" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 8v13H3V8"/><path d="M1 3h22v5H1z"/><path d="M10 12h4"/>
-            </svg>
-            <p>暂无数据</p>
-            <p className="empty-hint">去小红书或抖音页面采集一些数据吧</p>
+            <span
+              className={`empty-state-icon tone-${emptyState.tone}`}
+              aria-hidden="true"
+              dangerouslySetInnerHTML={{ __html: icon(loading ? 'loader' : emptyState.tone === 'warning' ? 'alertTriangle' : 'package', { size: 42 }) }}
+            />
+            <p>{emptyState.title}</p>
+            <p className="empty-hint">{emptyState.hint}</p>
           </div>
         ) : (
           <table className={`data-table data-table-${currentTab}`}>
@@ -709,10 +814,9 @@ export default function App() {
                           onClick={async (e) => {
                             const noteId = String(item.noteId || '').trim();
                             if (!noteId) return;
-                            const btn = e.currentTarget;
-                            const oldText = btn.textContent;
-                            btn.textContent = '下载中...';
-                            btn.disabled = true;
+                            const busyKey = `download:${noteId}`;
+                            if (rowBusyActionsRef.current[busyKey]) return;
+                            setRowBusyActionState(busyKey, true);
                             try {
                               const result = await sendToParent(MSG.DOWNLOAD_NOTE_MEDIA, { noteId }, { timeoutMs: 10 * 60 * 1000 });
                               if (result?.success) {
@@ -730,23 +834,27 @@ export default function App() {
                             } catch (err) {
                               showNotice(`下载失败：${err?.message || err}`, 'error');
                             } finally {
-                              btn.textContent = oldText || '媒体';
-                              btn.disabled = false;
+                              setRowBusyActionState(busyKey, false);
                             }
                           }}
+                          disabled={Boolean(rowBusyActions[`download:${String(item.noteId || '').trim()}`])}
                         >
-                          媒体
+                          {rowBusyActions[`download:${String(item.noteId || '').trim()}`] ? '下载中...' : '媒体'}
                         </button>
                       )}
                       <button
                         className="delete-btn"
                         onClick={async () => {
+                          const busyKey = `delete:${id}`;
+                          if (rowBusyActionsRef.current[busyKey]) return;
                           const confirmed = await showConfirm({
                             title: '确认删除',
                             message: '确定要删除这条数据吗？此操作不可恢复。',
+                            detail: '删除后这条记录不会再参与导出、同步或媒体下载。',
                             confirmText: '删除',
                           });
                           if (!confirmed) return;
+                          setRowBusyActionState(busyKey, true);
                           try {
                             const deleteActionMap = { notes: MSG.DELETE_NOTE, comments: MSG.DELETE_COMMENT, authors: MSG.DELETE_AUTHOR };
                             const idKey = currentTab === 'notes' ? 'noteId' : currentTab === 'comments' ? 'id' : 'userId';
@@ -755,10 +863,13 @@ export default function App() {
                             loadData(currentTab);
                           } catch (error) {
                             showNotice(`删除失败：${error.message || '未知错误'}`, 'error');
+                          } finally {
+                            setRowBusyActionState(busyKey, false);
                           }
                         }}
+                        disabled={Boolean(rowBusyActions[`delete:${id}`])}
                       >
-                        删除
+                        {rowBusyActions[`delete:${id}`] ? '删除中...' : '删除'}
                       </button>
                     </td>
                   </tr>
@@ -799,8 +910,10 @@ export default function App() {
       {confirmDialog.open && (
         <div className="dashboard-dialog-overlay" style={{ display: 'flex' }} aria-hidden="false">
           <div className="dashboard-dialog" role="dialog" aria-modal="true">
+            <span className={`dashboard-dialog-badge tone-${confirmDialog.confirmTone}`}>{confirmDialog.confirmTone === 'danger' ? '高风险操作' : '确认操作'}</span>
             <h2>{confirmDialog.title}</h2>
             <p>{confirmDialog.message}</p>
+            {confirmDialog.detail ? <div className="dashboard-dialog-detail">{confirmDialog.detail}</div> : null}
             <div className="dashboard-dialog-actions">
               <button className="toolbar-btn" onClick={() => handleConfirm(false)}>取消</button>
               <button className="toolbar-btn danger" onClick={() => handleConfirm(true)}>{confirmDialog.confirmText}</button>

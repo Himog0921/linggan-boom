@@ -149,3 +149,45 @@ test('selectReachableTaskTab skips dead tabs and keeps trying the next live xhs 
 
   assert.equal(selected?.id, 22);
 });
+
+test('selectReachableTaskTab avoids hijacking the currently visible tab when a background candidate is available', async () => {
+  const selected = await selectReachableTaskTab([
+    {
+      id: 11,
+      url: 'https://www.xiaohongshu.com/user/profile/demo',
+      active: true,
+      windowId: 501,
+    },
+    {
+      id: 22,
+      url: 'https://www.xiaohongshu.com/user/profile/demo',
+      active: false,
+      windowId: 888,
+    },
+  ], 'https://www.xiaohongshu.com/user/profile/demo', async (tab) => ({
+    accepted: tab.id === 22,
+  }), {
+    avoidActiveInWindowId: 501,
+    strictlyAvoidActiveInWindow: true,
+  });
+
+  assert.equal(selected?.id, 22);
+});
+
+test('selectReachableTaskTab returns null instead of reusing the currently visible tab when foreground reuse is forbidden', async () => {
+  const selected = await selectReachableTaskTab([
+    {
+      id: 11,
+      url: 'https://www.xiaohongshu.com/user/profile/demo',
+      active: true,
+      windowId: 501,
+    },
+  ], 'https://www.xiaohongshu.com/user/profile/demo', async () => ({
+    accepted: true,
+  }), {
+    avoidActiveInWindowId: 501,
+    strictlyAvoidActiveInWindow: true,
+  });
+
+  assert.equal(selected, null);
+});

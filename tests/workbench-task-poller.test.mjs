@@ -3,11 +3,19 @@ import assert from 'node:assert/strict';
 
 import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
 
+function claimTask(tasksOrFactory) {
+  return async () => {
+    const tasks = typeof tasksOrFactory === 'function' ? await tasksOrFactory() : tasksOrFactory;
+    const task = Array.isArray(tasks) ? tasks[0] : tasks;
+    return { task: task || null };
+  };
+}
+
 test('task poller claims a pending task and patches completion state', async () => {
   const patches = [];
   const recordBatches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_1',
         taskType: 'xhs.batchNotes',
@@ -91,6 +99,7 @@ test('task poller claims a pending task and patches completion state', async () 
         records: {
           notes: [
             {
+              platform: '',
               noteId: 'note_1',
               platformContentId: 'note_1',
               title: '标题 1',
@@ -109,7 +118,20 @@ test('task poller claims a pending task and patches completion state', async () 
               collects: 0,
               comments: 0,
               shares: 0,
+              authorId: '',
+              authorPlatformId: '',
+              authorEntityId: '',
               authorName: '',
+              authorAvatar: '',
+              publishedAt: null,
+              publishedAtText: '',
+              type: '',
+              lastUpdateTime: null,
+              collectionRunId: '',
+              monitorMode: '',
+              monitorId: '',
+              taskStrategy: '',
+              monitorMeta: {},
             },
           ],
           comments: [],
@@ -135,7 +157,7 @@ test('task poller marks task running immediately when dispatch already returns a
   const events = [];
   const lookups = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_started_1',
         taskType: 'xhs.batchNotes',
@@ -218,20 +240,16 @@ test('task poller marks task running immediately when dispatch already returns a
   assert.equal(patches[1][1].pluginRunId, 'run_started_1');
 });
 
-test('task poller surfaces idle claim reason details without falling back to pending tasks', async () => {
+test('task poller surfaces idle claim reason details from the lease endpoint', async () => {
   const poller = createTaskPoller({
     claimTaskLease: async () => ({
       task: null,
-      fallbackToPending: false,
       reason: {
         code: 'no_available_account',
         message: '没有可用账号',
       },
       nextPollAfterMs: 30000,
     }),
-    fetchPendingTasks: async () => {
-      throw new Error('pending fallback should not be used');
-    },
   });
 
   const result = await poller.tick();
@@ -246,7 +264,6 @@ test('task poller surfaces idle claim reason details without falling back to pen
       code: 'no_available_account',
       message: '没有可用账号',
     },
-    fallbackToPending: false,
   });
   assert.deepEqual(poller.getState().lastIdleReason, {
     taskId: '',
@@ -259,7 +276,6 @@ test('task poller surfaces idle claim reason details without falling back to pen
       code: 'no_available_account',
       message: '没有可用账号',
     },
-    fallbackToPending: false,
   });
 });
 
@@ -267,7 +283,7 @@ test('task poller preserves author profile fields when reporting monitor results
   const patches = [];
   const recordBatches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_author_profile',
         taskType: 'xhs.collectAuthor',
@@ -371,10 +387,102 @@ test('task poller preserves author profile fields when reporting monitor results
   assert.equal(recordBatches[0][0].payload.avatar, 'https://images.example.com/avatar.jpg');
 });
 
+test('task poller preserves note author and publish-time fields when reporting monitor note results', async () => {
+  const patches = [];
+  const recordBatches = [];
+  const poller = createTaskPoller({
+    claimTaskLease: claimTask([
+      {
+        id: 'task_author_notes',
+        taskType: 'xhs.collectAuthor',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'author_baseline',
+        payload: { monitorId: 'monitor_author_2' },
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_author_notes',
+      resultLookup: { externalTaskId: 'task_author_notes' },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_author_notes',
+        status: 'done',
+        resultSummary: { notes: 1, itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
+        records: {
+          notes: [
+            {
+              platform: 'xhs',
+              noteId: 'note_50',
+              platformContentId: 'note_50',
+              title: '最近一条作品',
+              content: '正文内容',
+              url: 'https://www.xiaohongshu.com/explore/note_50',
+              canonicalUrl: 'https://www.xiaohongshu.com/explore/note_50',
+              rawUrl: 'https://www.xiaohongshu.com/explore/note_50?xsec_token=abc123',
+              likes: 520,
+              collects: 88,
+              comments: 34,
+              shares: 12,
+              authorId: 'author_target_1',
+              authorPlatformId: 'author_target_1',
+              authorEntityId: 'xhs_author_target_1',
+              authorName: '目标博主',
+              authorAvatar: 'https://images.example.com/author.jpg',
+              publishedAt: 1776766122,
+              publishedAtText: '4月21日 18:08',
+              type: 'video',
+              lastUpdateTime: 1776766999,
+              monitorMode: 'author_surface',
+              monitorId: 'monitor_author_2',
+              taskStrategy: 'author_baseline',
+              monitorMeta: {
+                monitorId: 'monitor_author_2',
+                taskStrategy: 'author_baseline',
+                targetUrl: 'https://www.xiaohongshu.com/user/profile/author_target_1',
+              },
+            },
+          ],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueRecords: async (records) => {
+      recordBatches.push(records);
+      return records;
+    },
+  });
+
+  await poller.tick();
+  await poller.tick();
+
+  const note = patches[1][1].resultSummary.records.notes[0];
+  assert.equal(note.authorId, 'author_target_1');
+  assert.equal(note.authorPlatformId, 'author_target_1');
+  assert.equal(note.publishedAt, 1776766122);
+  assert.equal(note.publishedAtText, '4月21日 18:08');
+  assert.equal(note.type, 'video');
+  assert.equal(note.monitorMeta.targetUrl, 'https://www.xiaohongshu.com/user/profile/author_target_1');
+  assert.equal(recordBatches[0][0].payload.authorId, 'author_target_1');
+  assert.equal(recordBatches[0][0].payload.publishedAt, 1776766122);
+  assert.equal(recordBatches[0][0].payload.type, 'video');
+});
+
 test('task poller leaves task pending when no executable context is available', async () => {
   const patches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       { id: 'task_2', taskType: 'douyin.collectAuthor', platform: 'douyin' },
     ]),
     patchTask: async (taskId, patch) => {
@@ -400,7 +508,7 @@ test('task poller leaves task pending when no executable context is available', 
 test('task poller stores selected account and consumes quota only after dispatch', async () => {
   const quotaUpdates = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_account_1',
         taskType: 'xhs.batchNotes',
@@ -435,7 +543,7 @@ test('task poller stores selected account and consumes quota only after dispatch
 test('task poller does not consume quota when dispatch never starts', async () => {
   const quotaUpdates = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_account_rejected',
         taskType: 'xhs.batchNotes',
@@ -469,7 +577,7 @@ test('task poller does not consume quota when dispatch never starts', async () =
 test('task poller maps paused status and keeps polling active task', async () => {
   const patches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_3',
         taskType: 'xhs.batchComments',
@@ -553,7 +661,7 @@ test('task poller maps paused status and keeps polling active task', async () =>
 test('task poller maps stopped status to final stopped patch with partial results', async () => {
   const patches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_4',
         taskType: 'douyin.batchComments',
@@ -637,7 +745,7 @@ test('task poller maps stopped status to final stopped patch with partial result
 test('task poller can recover and continue polling a tracked in-flight task after restart', async () => {
   const patches = [];
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => [],
+    claimTaskLease: claimTask([]),
     fetchTrackableTasks: async () => ([
       {
         id: 'task_5',
@@ -721,7 +829,7 @@ test('task poller releases stale tracked tasks before claiming fresh pending wor
         updatedAt: '2026-04-09T10:00:00.000Z',
       },
     ]),
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'fresh_task',
         taskType: 'xhs.batchNotes',
@@ -779,7 +887,7 @@ test('task poller releases recovered paused monitor connection failures before p
         errorMessage: 'Could not establish connection. Receiving end does not exist.',
       },
     ]),
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'fresh_after_pause',
         taskType: 'xhs.collectAuthor',
@@ -895,7 +1003,7 @@ test('task poller releases dispatched tasks that never produce a startup run', a
   let nowMs = Date.parse('2026-04-20T15:00:00.000Z');
   const poller = createTaskPoller({
     now: () => nowMs,
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_startup_timeout',
         taskType: 'xhs.batchNotes',
@@ -953,7 +1061,7 @@ test('task poller does not startup-timeout tasks that were locally marked paused
   let nowMs = Date.parse('2026-04-20T16:00:00.000Z');
   const poller = createTaskPoller({
     now: () => nowMs,
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_risk_pause',
         taskType: 'xhs.batchNotes',
@@ -1004,7 +1112,7 @@ test('task poller only consumes deferred replacement account usage after a run s
   const consumedAccountIds = [];
   let resultLookupCount = 0;
   const poller = createTaskPoller({
-    fetchPendingTasks: async () => ([
+    claimTaskLease: claimTask([
       {
         id: 'task_risk_resume',
         taskType: 'xhs.batchNotes',

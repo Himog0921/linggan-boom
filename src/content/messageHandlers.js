@@ -9,9 +9,12 @@ import {
   buildXhsSurfaceNoteRecords,
 } from '../workbench/runtime/monitorTask.js';
 import { buildDouyinSingleCommentRunPatch } from '../platforms/douyin/commentTaskSupport.js';
+import { checkXhsAuthorMonitorTarget } from '../platforms/xhs/batchController.js';
+import { checkDouyinAuthorMonitorTarget } from '../platforms/douyin/batchController.js';
 export function createContentMessageHandlers({
   MSG,
   isDouyinPage,
+  assertPluginAuthorized,
   collectNote,
   collectComments,
   collectAuthor,
@@ -36,6 +39,21 @@ export function createContentMessageHandlers({
   discoverXhsSurfaceNotes,
   discoverDouyinSurfaceTargets,
 } = {}) {
+  const buildAuthorBaselineShortfallNote = ({
+    requestedCount = 0,
+    discoveredCount = 0,
+    succeededCount = 0,
+  } = {}) => {
+    const requested = Math.max(0, Number(requestedCount || 0) || 0);
+    const discovered = Math.max(0, Number(discoveredCount || 0) || 0);
+    const succeeded = Math.max(0, Number(succeededCount || 0) || 0);
+    if (requested <= 0 || discovered >= requested) return '';
+    if (succeeded > 0 && succeeded !== discovered) {
+      return `这轮原计划建档 ${requested} 条，但当前主页最终只发现 ${discovered} 条可采作品，实际写入 ${succeeded} 条，所以先按现有作品完成建档。`;
+    }
+    return `这轮原计划建档 ${requested} 条，但当前主页最终只发现 ${discovered} 条可采作品，所以先按现有作品完成建档。`;
+  };
+
   const normalizeCsvValue = (value) => {
     if (value == null) return '';
     if (Array.isArray(value)) return JSON.stringify(value);
@@ -52,6 +70,34 @@ export function createContentMessageHandlers({
   });
 
   const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
+
+  const resolveXhsSurfaceContainerSelector = () => {
+    const pathname = String(globalThis.window?.location?.pathname || '').trim();
+    return /\/user\/profile\//i.test(pathname) ? '#userPostedFeeds' : '.feeds-container';
+  };
+
+  const ensurePluginAuthorized = async () => {
+    if (typeof assertPluginAuthorized === 'function') {
+      return assertPluginAuthorized();
+    }
+    return null;
+  };
+
+  const assertAuthorMonitorTarget = (monitorMeta = null) => {
+    if (!monitorMeta) return;
+    const check = isDouyinPage()
+      ? checkDouyinAuthorMonitorTarget(monitorMeta)
+      : checkXhsAuthorMonitorTarget(monitorMeta, { mode: 'profile' });
+    if (check?.ok || check?.code !== 'target_mismatch') return;
+    const error = new Error(String(check.message || '当前页博主身份与任务目标不一致'));
+    error.code = 'target_mismatch';
+    error.reasonCode = 'target_mismatch';
+    error.eventType = 'target_mismatch';
+    error.userMessage = error.message;
+    error.targetAuthorId = check.targetAuthorId || '';
+    error.currentAuthorId = check.currentAuthorId || '';
+    throw error;
+  };
 
   const createRemoteRun = async ({
     platform,
@@ -108,6 +154,7 @@ export function createContentMessageHandlers({
 
   return {
     [MSG.COLLECT_SINGLE_NOTE]: async (msg = {}) => {
+      await ensurePluginAuthorized();
       const triggerSource = String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual';
       const monitorMeta = getMonitorMetaFromMessage(msg);
       const expectedNoteId = String(
@@ -198,6 +245,7 @@ export function createContentMessageHandlers({
     },
 
     [MSG.COLLECT_SINGLE_COMMENT]: async (msg = {}) => {
+      await ensurePluginAuthorized();
       const triggerSource = String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual';
       const commentDepthMode = String(msg.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL) === COMMENT_DEPTH_MODE.ALL_REPLIES
         ? COMMENT_DEPTH_MODE.ALL_REPLIES
@@ -285,6 +333,7 @@ export function createContentMessageHandlers({
     },
 
     [MSG.DOWNLOAD_CURRENT_COMMENT_IMAGES]: async (msg = {}) => {
+      await ensurePluginAuthorized();
       if (!isDouyinPage()) {
         throw new Error('当前页面暂不支持从 Popup 下载评论图片区');
       }
@@ -372,6 +421,7 @@ export function createContentMessageHandlers({
     },
 
     [MSG.COLLECT_AUTHOR]: async (msg = {}) => {
+      await ensurePluginAuthorized();
       const triggerSource = String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual';
       const monitorMeta = getMonitorMetaFromMessage(msg);
       const isMonitorSurface = Boolean(monitorMeta?.surfaceOnly);
@@ -399,7 +449,9 @@ export function createContentMessageHandlers({
           return records;
         }
         if (platform === 'xhs' && typeof discoverXhsSurfaceNotes === 'function') {
-          const cards = await discoverXhsSurfaceNotes('.feeds-container');
+          const cards = await discoverXhsSurfaceNotes(resolveXhsSurfaceContainerSelector(), 10, {
+            expectedCount: scanLimit,
+          });
           const records = buildXhsSurfaceNoteRecords(cards, {
             monitorMeta,
             collectionRunId,
@@ -426,7 +478,18 @@ export function createContentMessageHandlers({
       });
       const runXhsBaselineBatchCollection = async (remoteRun = null) => {
         if (!isAuthorBaselineMonitor || !BatchNoteController) {
-          return { planned: 0, succeeded: 0, failed: 0, targetIds: [], contentIds: [], stopped: false };
+          return {
+            planned: 0,
+            succeeded: 0,
+            failed: 0,
+            targetIds: [],
+            contentIds: [],
+            stopped: false,
+            completionNote: '',
+            requestedCount: baselineBatchCount,
+            discoveredCount: 0,
+            shortfallCount: baselineBatchCount,
+          };
         }
         const controller = new BatchNoteController();
         await controller.start('profile', () => {}, {
@@ -450,11 +513,20 @@ export function createContentMessageHandlers({
           targetIds,
           contentIds,
           stopped: Boolean(controller?._stoppedByUser),
+          completionNote: buildAuthorBaselineShortfallNote({
+            requestedCount: baselineBatchCount,
+            discoveredCount: targetIds.length,
+            succeededCount: Array.isArray(controller.collected) ? controller.collected.length : 0,
+          }),
+          requestedCount: baselineBatchCount,
+          discoveredCount: targetIds.length,
+          shortfallCount: Math.max(0, baselineBatchCount - targetIds.length),
         };
       };
       const runAuthorCollection = async (remoteRun = null) => {
         if (isDouyinPage()) {
           try {
+            assertAuthorMonitorTarget(monitorMeta);
             const result = await collectDouyinAuthor({
               collectionRunId: remoteRun?.collectionRunId || '',
               triggerSource,
@@ -491,8 +563,20 @@ export function createContentMessageHandlers({
           }
         }
         let author = null;
-        let batchResult = { planned: 0, succeeded: 0, failed: 0, targetIds: [], contentIds: [], stopped: false };
+        let batchResult = {
+          planned: 0,
+          succeeded: 0,
+          failed: 0,
+          targetIds: [],
+          contentIds: [],
+          stopped: false,
+          completionNote: '',
+          requestedCount: 0,
+          discoveredCount: 0,
+          shortfallCount: 0,
+        };
         try {
+          assertAuthorMonitorTarget(monitorMeta);
           author = await collectAuthor({
             collectionRunId: remoteRun?.collectionRunId || '',
             triggerSource,
@@ -514,6 +598,10 @@ export function createContentMessageHandlers({
             itemsFailed: batchResult.failed,
             targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
             contentIds: batchResult.contentIds,
+            completionNote: batchResult.completionNote || undefined,
+            requestedCount: batchResult.requestedCount || undefined,
+            discoveredCount: batchResult.discoveredCount || undefined,
+            shortfallCount: batchResult.shortfallCount || undefined,
           });
           reportDone('author', 1);
           return {
@@ -593,11 +681,21 @@ export function createContentMessageHandlers({
       return { success: true, result };
     },
 
-    [MSG.GET_ALL_NOTES]: () => noteStore.getAll(),
-    [MSG.GET_ALL_COMMENTS]: () => commentStore.getAll(),
-    [MSG.GET_ALL_AUTHORS]: () => authorStore.getAll(),
+    [MSG.GET_ALL_NOTES]: async () => {
+      await ensurePluginAuthorized();
+      return noteStore.getAll();
+    },
+    [MSG.GET_ALL_COMMENTS]: async () => {
+      await ensurePluginAuthorized();
+      return commentStore.getAll();
+    },
+    [MSG.GET_ALL_AUTHORS]: async () => {
+      await ensurePluginAuthorized();
+      return authorStore.getAll();
+    },
 
     [MSG.DOWNLOAD_NOTE_MEDIA]: async (msg) => {
+      await ensurePluginAuthorized();
       const noteId = msg.noteId || '';
       if (!noteId) return { success: false, error: 'noteId required' };
       const note = await noteStore.getById(noteId);
@@ -615,6 +713,7 @@ export function createContentMessageHandlers({
     [MSG.CLEAR_ALL_AUTHORS]: () => authorStore.clear(),
 
     [MSG.EXPORT_CSV]: async (msg) => {
+      await ensurePluginAuthorized();
       const type = msg.type || 'notes';
       if (type === 'notes') {
         const notes = await noteStore.getAll();
@@ -661,6 +760,7 @@ export function createContentMessageHandlers({
     },
 
     [MSG.EXPORT_JSON]: async () => {
+      await ensurePluginAuthorized();
       const data = {
         notes: await noteStore.getAll(),
         comments: await commentStore.getAll(),
@@ -673,6 +773,7 @@ export function createContentMessageHandlers({
     },
 
     [MSG.RUN_DATA_MAINTENANCE]: async () => {
+      await ensurePluginAuthorized();
       if (typeof backfillLegacyAiReadyFields !== 'function') {
         throw new Error('数据维护能力未接入');
       }
@@ -680,7 +781,10 @@ export function createContentMessageHandlers({
       return { success: true, stats };
     },
 
-    [MSG.TOGGLE_DASHBOARD]: () => ({ success: true, toggleDashboard: true }),
+    [MSG.TOGGLE_DASHBOARD]: async () => {
+      await ensurePluginAuthorized();
+      return { success: true, toggleDashboard: true };
+    },
 
     getDocumentCookie: async () => {
       return { success: true, cookieString: document.cookie || '' };

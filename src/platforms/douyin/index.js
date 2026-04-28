@@ -23,6 +23,7 @@ import {
   runDouyinSelectorPreflight,
 } from './selectorHealth.js';
 import { createManagedTaskController } from '../../shared/managedTaskController.js';
+import { assertActivePluginAuthorization } from '../../workbench/runtime/pluginAuthorization.js';
 
 /**
  * 抖音平台适配器实现
@@ -46,6 +47,15 @@ const DouyinAdapter = {
     cleanupIndicator: null,
   },
   _selectorProbeTimer: null,
+
+  async _ensurePluginAuthorized() {
+    try {
+      return await assertActivePluginAuthorization();
+    } catch (error) {
+      showDouyinToast(String(error?.userMessage || error?.message || '当前浏览器还没有插件授权'), 'warning');
+      throw error;
+    }
+  },
 
   /**
    * 初始化：设置 SPA 路由监听 + MutationObserver
@@ -164,10 +174,10 @@ const DouyinAdapter = {
   _getBatchCommentDialogConfig(mode = 'profile') {
     const isSearchMode = String(mode || '').trim() === 'search';
     return {
-      title: isSearchMode ? '批量采集搜索结果评论' : '批量采集评论',
+      title: isSearchMode ? '批量采集搜索结果评论' : '批量采集博主页评论',
       description: isSearchMode
-        ? '从当前搜索结果列表中挑选前 N 条视频采评论。你可以设置评论上限，并决定只采一级+二级，还是尽量展开更多回复。'
-        : '从当前博主页里挑选前 N 条视频采评论。你可以设置评论上限，并决定只采一级+二级，还是尽量展开更多回复。',
+        ? '从当前搜索结果里选前 N 条视频采评论，可按顺位或高赞优先。'
+        : '从当前博主页里选前 N 条视频采评论，可按顺位或高赞优先。',
       confirmText: '开始采集',
     };
   },
@@ -646,6 +656,7 @@ const DouyinAdapter = {
         break;
 
       case 'dy_collectVideo': {
+        await this._ensurePluginAuthorized();
         showDouyinToast('采集中...', 'info');
         const result = await collectDouyinVideo();
         if (result.ok) {
@@ -657,6 +668,7 @@ const DouyinAdapter = {
       }
 
       case 'dy_downloadVideo': {
+        await this._ensurePluginAuthorized();
         showDouyinToast('准备下载，请稍候...', 'info');
         const result = await downloadDouyinVideo();
         if (result.ok) {
@@ -668,6 +680,7 @@ const DouyinAdapter = {
       }
 
       case 'dy_collectComments': {
+        await this._ensurePluginAuthorized();
         console.log('[灵感爆爆爆] 采集评论：弹出设置对话框');
         const values = await showDouyinActionDialog({
           title: '采集当前评论',
@@ -742,6 +755,7 @@ const DouyinAdapter = {
       }
 
       case 'dy_collectCommentImages': {
+        await this._ensurePluginAuthorized();
         if (!isStrictDouyinDetailPage()) {
           showDouyinToast('请先进入抖音视频详情页，再执行评论图片区下载', 'warning');
           break;
@@ -805,6 +819,7 @@ const DouyinAdapter = {
       }
 
       case 'dy_collectAuthor': {
+        await this._ensurePluginAuthorized();
         showDouyinToast('采集博主信息...', 'info');
         const result = await collectDouyinAuthor();
         if (result.ok) {
@@ -816,6 +831,7 @@ const DouyinAdapter = {
       }
 
       case 'dy_batchVideos': {
+        await this._ensurePluginAuthorized();
         const dialogConfig = this._getBatchVideoDialogConfig(params.mode);
         const values = await showDouyinActionDialog({
           ...dialogConfig,
@@ -859,42 +875,44 @@ const DouyinAdapter = {
       }
 
       case 'dy_batchComments': {
+        await this._ensurePluginAuthorized();
         const dialogConfig = this._getBatchCommentDialogConfig(params.mode);
         const values = await showDouyinActionDialog({
           ...dialogConfig,
           fields: [
             {
               name: 'maxCount',
-              label: '视频数量',
+              label: '视频数',
               type: 'number',
               defaultValue: '10',
               min: 1,
               max: 20,
               quickOptions: [5, 10, 20],
-              helpText: '先用少量视频验证策略，再扩大范围。',
+              helpText: '建议先试 5 或 10 条。',
             },
             {
               name: 'topByLikes',
-              label: '按点赞 Top N 选取',
+              label: '高赞优先（Top N）',
               type: 'checkbox',
               defaultValue: false,
-              helpText: '不勾选时按当前列表顺位采；勾选后先按点赞数排序，再取前 N 条视频。',
+              helpText: '关闭=按当前顺位；开启=按点赞排序后取前 N 条。',
             },
             {
               name: 'maxCommentsPerVideo',
-              label: '每条视频评论上限',
+              label: '单条评论上限',
               type: 'number',
               defaultValue: '',
               min: 0,
+              placeholder: '例如 50；留空 = 采全',
               quickOptions: [20, 50, 100, 0],
-              helpText: '不填或填 0 表示尽可能采集全部评论。',
+              helpText: '留空或填 0 = 尽量采全。',
             },
             {
               name: 'allReplies',
-              label: '尽量展开全部回复',
+              label: '展开更多回复',
               type: 'checkbox',
               defaultValue: false,
-              helpText: '关闭时优先采一级+二级；开启后会继续尝试展开更多回复。',
+              helpText: '关闭=一级+二级；开启=继续展开更多层。',
             },
           ],
         });

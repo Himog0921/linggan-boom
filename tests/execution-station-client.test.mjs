@@ -23,6 +23,10 @@ test('execution station client stores registration identity and keeps it after h
     storageArea,
     randomUUID: () => 'station-key-1',
     resolveServerUrl: async () => 'http://localhost:3000',
+    resolveAuthorization: async () => ({
+      authorizationId: 'auth_1',
+      authorizationToken: 'auth_token_1',
+    }),
     fetchFn: async (url, options = {}) => {
       requests.push([url, options]);
       if (url.endsWith('/api/execution-stations/register')) {
@@ -67,4 +71,8 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(stored.stationToken, 'token-1');
   assert.equal(stored.stationKey, 'station-key-1');
   assert.equal(requests.length, 2);
+  assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
+  assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
+  assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
+  assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
 });

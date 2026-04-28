@@ -329,9 +329,6 @@ export function getColumns(tab, allData) {
           { key: 'content', label: '正文' },
           { key: 'images', label: '图片数' },
           { key: 'topicIds', label: '话题数' },
-          { key: 'atUserList', label: '@用户数' },
-          { key: 'authorFollowed', label: '已关注作者' },
-          { key: 'shareRestricted', label: '限制分享' },
           { key: 'lastUpdateTime', label: '最后修改时间' },
         ];
       }
@@ -416,9 +413,6 @@ export function getExportColumns(tab, allData) {
       return [...base,
         { key: 'images', label: '图片' },
         { key: 'topicIds', label: '话题数' },
-        { key: 'atUserList', label: '@用户' },
-        { key: 'authorFollowed', label: '已关注作者' },
-        { key: 'shareRestricted', label: '限制分享' },
       ];
     }
     case 'comments':

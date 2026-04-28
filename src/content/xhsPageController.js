@@ -10,6 +10,7 @@ import {
 
 export function createXhsPageController({
   MSG,
+  assertPluginAuthorized,
   collectComments,
   collectCommentImages,
   collectNote,
@@ -39,6 +40,13 @@ export function createXhsPageController({
   let activeTaskType = null;
   let selectorProbeTimer = null;
   let lastTaskSnapshot = null;
+
+  async function ensurePluginAuthorized() {
+    if (typeof assertPluginAuthorized === 'function') {
+      return assertPluginAuthorized();
+    }
+    return null;
+  }
 
   function syncTaskUI(progress = {}) {
     const taskType = progress.taskType || activeTaskType;
@@ -213,6 +221,7 @@ export function createXhsPageController({
         }
 
         case 'collectComment': {
+          await ensurePluginAuthorized();
           let commentSettings;
           try {
             commentSettings = await showCommentLimitDialog({
@@ -235,6 +244,7 @@ export function createXhsPageController({
         }
 
         case 'collectAuthor': {
+          await ensurePluginAuthorized();
           showToast('正在采集博主信息...', 'info');
           const author = await collectAuthor();
           showToast(`博主采集成功：${author.name}`, 'success');
@@ -243,6 +253,7 @@ export function createXhsPageController({
         }
 
         case 'batchNotes': {
+          await ensurePluginAuthorized();
           let batchSettings;
           try {
             batchSettings = await showBatchSettingsDialog({
@@ -272,6 +283,7 @@ export function createXhsPageController({
         }
 
         case 'batchComments': {
+          await ensurePluginAuthorized();
           let batchSettings;
           try {
             batchSettings = await showBatchSettingsDialog({
@@ -333,6 +345,7 @@ export function createXhsPageController({
           break;
 
         case 'collectCommentImages':
+          await ensurePluginAuthorized();
           await commentImageController.start();
           break;
       }

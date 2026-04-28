@@ -57,6 +57,23 @@ test('canDispatchTaskFromCapabilityReport rejects page type mismatches for remot
   assert.equal(result.reasonCode, 'page_type_mismatch');
 });
 
+test('canDispatchTaskFromCapabilityReport rejects mismatched profile targets for author tasks', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'profile',
+    url: 'https://www.xiaohongshu.com/user/profile/current-author',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.collectAuthor'],
+    },
+  }, 'xhs.collectAuthor', {
+    pageType: 'profile',
+    url: 'https://www.xiaohongshu.com/user/profile/target-author',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'page_target_mismatch');
+});
+
 test('mapTaskEnvelopeToCapabilityCheck converts task envelope into capability check payload', () => {
   const capabilityCheck = mapTaskEnvelopeToCapabilityCheck({
     type: 'task.envelope',

@@ -20,6 +20,10 @@ test('buildResultSummary counts records and failed items', () => {
     runRecord: {
       itemsPlanned: 5,
       itemsFailed: 2,
+      completionNote: '这轮原计划建档 50 条，但当前主页最终只发现 28 条可采作品，所以先按现有作品完成建档。',
+      requestedCount: 50,
+      discoveredCount: 28,
+      shortfallCount: 22,
     },
   });
 
@@ -29,6 +33,10 @@ test('buildResultSummary counts records and failed items', () => {
   assert.equal(summary.mediaAssets, 2);
   assert.equal(summary.downloadedMediaAssets, 1);
   assert.equal(summary.failedItems, 2);
+  assert.equal(summary.completionNote, '这轮原计划建档 50 条，但当前主页最终只发现 28 条可采作品，所以先按现有作品完成建档。');
+  assert.equal(summary.requestedCount, 50);
+  assert.equal(summary.discoveredCount, 28);
+  assert.equal(summary.shortfallCount, 22);
   assert.deepEqual(summary.dataQualityBreakdown, {
     full: 3,
     degraded: 2,

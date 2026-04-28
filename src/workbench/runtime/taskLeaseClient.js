@@ -1,6 +1,6 @@
 import { normalizeServerUrl } from '../../shared/utils.js';
 
-const DEFAULT_SERVER_URL = 'http://localhost:3000';
+const DEFAULT_SERVER_URL = 'https://lingganboom.fun';
 const DEFAULT_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
 
 function normalizeString(value = '') {
@@ -44,7 +44,6 @@ export function createTaskLeaseIdleSnapshot(claim = {}) {
     idleReasonMessage: message,
     nextPollAfterMs,
     reason,
-    fallbackToPending: Boolean(claim?.fallbackToPending),
   };
 }
 
@@ -75,11 +74,22 @@ async function readErrorText(response) {
   return response.text().catch(() => '');
 }
 
-async function postJson({ serverUrl = '', path = '', body = {}, fetchFn = globalThis.fetch?.bind(globalThis) }) {
+async function postJson({
+  serverUrl = '',
+  path = '',
+  body = {},
+  fetchFn = globalThis.fetch?.bind(globalThis),
+  authorizationToken = '',
+} = {}) {
   if (typeof fetchFn !== 'function') throw new Error('fetch unavailable');
+  const headers = { 'Content-Type': 'application/json' };
+  const normalizedAuthorizationToken = normalizeString(authorizationToken);
+  if (normalizedAuthorizationToken) {
+    headers.Authorization = `Bearer ${normalizedAuthorizationToken}`;
+  }
   const response = await fetchFn(`${normalizeServerUrl(serverUrl, DEFAULT_SERVER_URL)}${path}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(body),
   });
   if (!response.ok) {
@@ -138,6 +148,8 @@ export async function claimCollectionTaskLease({
   serverUrl = '',
   stationId = '',
   stationToken = '',
+  authorizationId = '',
+  authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
   fetchFn,
@@ -147,7 +159,9 @@ export async function claimCollectionTaskLease({
     serverUrl,
     path: '/api/collection-tasks/claim',
     fetchFn,
+    authorizationToken,
     body: {
+      authorizationId: normalizeString(authorizationId),
       stationId: normalizeString(stationId),
       stationToken: normalizeString(stationToken),
       capabilities: toStringArray(capabilities),
@@ -179,6 +193,8 @@ export async function renewCollectionTaskLease({
   stationId = '',
   stationToken = '',
   leaseToken = '',
+  authorizationId = '',
+  authorizationToken = '',
   status = 'running',
   fetchFn,
   store = null,
@@ -188,7 +204,9 @@ export async function renewCollectionTaskLease({
     serverUrl,
     path: `/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/lease`,
     fetchFn,
+    authorizationToken,
     body: {
+      authorizationId: normalizeString(authorizationId),
       stationId: normalizeString(stationId),
       stationToken: normalizeString(stationToken),
       leaseToken: normalizeString(leaseToken),

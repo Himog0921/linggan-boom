@@ -50,7 +50,6 @@ function injectNoteDetailButtons() {
     right: '20px',
     zIndex: '2147483640',
     margin: '0',
-    boxShadow: '5px 5px 0 #121212',
     flexDirection: 'column',
     alignItems: 'stretch',
     minWidth: '180px',
@@ -58,13 +57,15 @@ function injectNoteDetailButtons() {
 
   renderButtonGroup(container, {
     platform: 'xhs',
+    brandVariant: 'banner',
+    floatingKey: 'xhs.note-detail',
     buttons: [
       { text: '采集当前笔记', action: 'collectNote', style: 'primary' },
       { text: '采集当前评论', action: 'collectComment', style: 'secondary' },
       { text: '采集评论图片', action: 'collectCommentImages', style: 'secondary' },
     ],
-    containerStyle: { flexDirection: 'column', alignItems: 'stretch' },
-    brandStyle: { marginRight: '0', marginBottom: '6px', textAlign: 'center' },
+    containerStyle: { flexDirection: 'column', alignItems: 'stretch', boxShadow: 'none' },
+    brandStyle: { marginRight: '0', marginBottom: '10px', justifyContent: 'center', width: '100%' },
     buttonStyle: { width: '100%' },
   });
 
@@ -84,6 +85,22 @@ function injectBatchButtons(mode) {
       { text: '批量笔记', action: 'batchNotes', style: 'primary', data: { mode } },
       { text: '批量评论', action: 'batchComments', style: 'secondary', data: { mode } },
     ],
+    containerStyle: {
+      padding: '8px 14px',
+      gap: '10px',
+      marginBottom: '10px',
+      boxShadow: '4px 4px 0 #121212',
+    },
+    brandStyle: {
+      marginRight: '8px',
+      padding: '0',
+    },
+    buttonStyle: {
+      padding: '7px 16px',
+      borderRadius: '8px',
+      boxShadow: '1px 1px 0 #121212',
+      whiteSpace: 'nowrap',
+    },
   });
 
   header.parentElement.insertBefore(container, header);
@@ -99,25 +116,17 @@ function injectProfileButtons() {
     right: isNarrow ? '12px' : '18px',
     zIndex: '2147483640',
     margin: '0',
-    padding: '8px 10px',
-    gap: '6px',
-    borderRadius: '10px',
-    border: '2px solid #121212',
-    boxShadow: '3px 3px 0 #121212',
-    maxWidth: isNarrow ? '340px' : '520px',
-    background: '#ffdd57',
-    flexWrap: isNarrow ? 'wrap' : 'nowrap',
   });
 
   renderButtonGroup(container, {
     platform: 'xhs',
     compact: true,
+    floatingKey: 'xhs.profile',
     buttons: [
       { text: '采集博主', action: 'collectAuthor', style: 'primary' },
       { text: '批量笔记', action: 'batchNotes', style: 'secondary', data: { mode: 'profile' } },
       { text: '批量评论', action: 'batchComments', style: 'secondary', data: { mode: 'profile' } },
     ],
-    brandStyle: { fontSize: '13px', marginRight: '4px', marginBottom: '2px', display: 'inline-block', width: 'auto', textAlign: 'left', whiteSpace: 'nowrap' },
     buttonStyle: { padding: '7px 12px', fontSize: '13px', borderRadius: '8px', boxShadow: '1px 1px 0 #121212', whiteSpace: 'nowrap' },
   });
 

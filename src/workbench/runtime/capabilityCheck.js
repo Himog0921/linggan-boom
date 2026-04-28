@@ -13,6 +13,20 @@ function normalizeCapabilityPageMode(report = {}) {
   return '';
 }
 
+function normalizeUrl(value = '') {
+  return String(value || '').trim();
+}
+
+function extractProfileIdentity(url = '') {
+  const normalizedUrl = normalizeUrl(url);
+  if (!normalizedUrl) return '';
+
+  const match = normalizedUrl.match(/xiaohongshu\.com\/user\/profile\/([^/?#]+)/i)
+    || normalizedUrl.match(/douyin\.com\/user\/([^/?#]+)/i)
+    || normalizedUrl.match(/douyin\.com\/@([^/?#]+)/i);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
 export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', target = {}) {
   const supportedTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
     ? report.capabilities.canRunTaskTypes
@@ -34,6 +48,18 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
       reasonCode: REMOTE_ERROR_CODE.PAGE_TYPE_MISMATCH,
       reasonMessage: `当前页面类型不对：任务需要 ${expectedPageType}，实际是 ${actualPageType}`,
     };
+  }
+
+  if (expectedPageType === 'profile') {
+    const targetProfileId = extractProfileIdentity(target?.url);
+    const currentProfileId = extractProfileIdentity(report?.url);
+    if (targetProfileId && currentProfileId && targetProfileId !== currentProfileId) {
+      return {
+        accepted: false,
+        reasonCode: REMOTE_ERROR_CODE.PAGE_TARGET_MISMATCH,
+        reasonMessage: `当前页面不是任务目标博主：任务要 ${targetProfileId}，实际是 ${currentProfileId}`,
+      };
+    }
   }
 
   if (!report?.readiness?.ready) {

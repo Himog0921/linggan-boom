@@ -1,4 +1,5 @@
 import db from './index.js';
+import { buildHeartbeatPatchForRun } from './collectionRunStatus.js';
 
 function now() {
   return Date.now();
@@ -169,10 +170,15 @@ export const collectionRunStore = {
   },
 
   async markHeartbeat(collectionRunId, timestamp = now(), patch = {}) {
-    return this.updateById(collectionRunId, {
-      ...patch,
-      lastHeartbeatAt: Number.isFinite(Number(timestamp)) ? Number(timestamp) : now(),
-    });
+    const id = String(collectionRunId || '').trim();
+    if (!id) return null;
+    const existing = await this.getById(id);
+    if (!existing) return null;
+
+    const heartbeatPatch = buildHeartbeatPatchForRun(existing, patch, timestamp);
+    if (!heartbeatPatch) return existing;
+
+    return this.updateById(id, heartbeatPatch);
   },
 
   async markResultUploadStatus(collectionRunId, resultUploadStatus = 'pending', patch = {}) {

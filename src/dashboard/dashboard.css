@@ -32,6 +32,9 @@ select:focus-visible {
   font-size: 12px;
   font-weight: 700;
   line-height: 1.5;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
 }
 
 .dashboard-notice.info {
@@ -50,14 +53,35 @@ select:focus-visible {
   background: #ffd4d4;
 }
 
+.dashboard-notice-icon {
+  display: inline-flex;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.dashboard-notice-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.dashboard-notice-copy strong {
+  display: block;
+  font-size: 11px;
+  margin-bottom: 1px;
+}
+
+.dashboard-notice-copy p {
+  margin: 0;
+}
+
 .dashboard-nav {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  gap: 16px;
+  gap: 12px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
-  padding: 16px 18px;
+  margin-bottom: 12px;
+  padding: 10px 16px;
   border: 3px solid #121212;
   box-shadow: 7px 7px 0 #121212;
   border-radius: 14px;
@@ -67,55 +91,24 @@ select:focus-visible {
 .dashboard-brand {
   display: flex;
   align-items: center;
-  gap: 14px;
-  min-width: 0;
-}
-
-.dashboard-brand-mark {
-  flex: 0 0 64px;
-  width: 64px;
-  padding: 6px;
-  border: 2px solid #121212;
-  border-radius: 16px;
-  box-shadow: 3px 3px 0 #121212;
-  background: #fff6d8;
-}
-
-.dashboard-brand-logo {
-  display: block;
-  width: 100%;
-  height: auto;
-  border-radius: 10px;
-}
-
-.dashboard-brand-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
   min-width: 0;
 }
 
 .dashboard-brand-banner-shell {
   width: fit-content;
   max-width: 100%;
-  padding: 4px 6px;
+  padding: 5px 5px;
   border: 2px solid #121212;
-  border-radius: 10px;
+  border-radius: 12px;
   box-shadow: 2px 2px 0 #121212;
   background: #fff7d1;
 }
 
 .dashboard-brand-banner {
   display: block;
-  width: 164px;
+  width: 154px;
   max-width: 100%;
   height: auto;
-}
-
-.dashboard-brand h1 {
-  font-size: 24px;
-  color: #121212;
-  line-height: 1.08;
 }
 
 .nav-tabs {
@@ -240,6 +233,14 @@ select:focus-visible {
   background: #2aa8c8;
 }
 
+.toolbar-btn.primary {
+  background: #3bb8d8;
+}
+
+.toolbar-btn.primary:hover {
+  background: #2aa8c8;
+}
+
 .toolbar-btn.danger {
   color: #121212;
   background: #e03e3e;
@@ -252,6 +253,11 @@ select:focus-visible {
 .toolbar-btn:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+  transform: none;
+  box-shadow: 2px 2px 0 #121212;
+}
+
+.toolbar-btn:disabled:hover {
   transform: none;
   box-shadow: 2px 2px 0 #121212;
 }
@@ -278,7 +284,7 @@ select:focus-visible {
 
 .dashboard-dialog h2 {
   font-size: 18px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .dashboard-dialog p {
@@ -286,7 +292,38 @@ select:focus-visible {
   font-weight: 600;
   font-size: 13px;
   line-height: 1.6;
-  margin-bottom: 16px;
+  margin-bottom: 12px;
+}
+
+.dashboard-dialog-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 9px;
+  border-radius: 999px;
+  border: 2px solid #121212;
+  box-shadow: 1px 1px 0 #121212;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
+  margin-bottom: 10px;
+}
+
+.dashboard-dialog-badge.tone-danger {
+  background: #ffd4d4;
+}
+
+.dashboard-dialog-detail {
+  border: 2px dashed #121212;
+  border-radius: 10px;
+  background: #fff8e8;
+  padding: 9px 10px;
+  margin-bottom: 14px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: #5f5f5f;
+  font-family: 'Segoe UI', sans-serif;
+  font-weight: 600;
 }
 
 .dashboard-dialog-actions {
@@ -509,6 +546,7 @@ select:focus-visible {
 .data-table .download-btn:disabled {
   opacity: 0.7;
   cursor: wait;
+  transform: none;
 }
 
 .data-table .delete-btn {
@@ -526,6 +564,11 @@ select:focus-visible {
 .data-table .download-btn:hover,
 .data-table .delete-btn:hover {
   transform: translate(-1px, -1px);
+}
+
+.data-table .download-btn:disabled:hover,
+.data-table .delete-btn:disabled:hover {
+  transform: none;
 }
 
 .media-cell {
@@ -585,25 +628,30 @@ select:focus-visible {
   white-space: nowrap;
 }
 
-.media-status.done {
-  background: #7dd87a;
+.media-status.tone-success { background: #7dd87a; }
+.media-status.tone-warning { background: #ffcc00; }
+.media-status.tone-error { background: #e03e3e; color: #fff; }
+.media-status.tone-neutral { background: #e8e8e8; color: #666; }
+.media-status.tone-info { background: #3bb8d8; }
+
+.table-status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 2px solid #121212;
+  box-shadow: 1px 1px 0 #121212;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+  white-space: nowrap;
 }
 
-.media-status.partial {
-  background: #ffcc00;
-}
-
-.media-status.failed {
-  background: #e03e3e;
-}
-
-.media-status.pending {
-  background: #e8e8e8;
-}
-
-.media-status.running {
-  background: #3bb8d8;
-}
+.table-status-pill.tone-success { background: #d4f5d3; }
+.table-status-pill.tone-warning { background: #fff0b0; }
+.table-status-pill.tone-info { background: #c8f0fa; }
+.table-status-pill.tone-neutral { background: #f1ece2; color: #666; border-color: #8f8577; box-shadow: none; }
 
 .media-preview-modal {
   position: fixed;
@@ -676,7 +724,15 @@ select:focus-visible {
 .empty-state-icon {
   display: block;
   margin: 0 auto 16px;
-  opacity: 0.45;
+  opacity: 0.7;
+}
+
+.empty-state-icon.tone-info {
+  animation: dashboard-spin 0.8s linear infinite;
+}
+
+.empty-state-icon.tone-warning {
+  color: #e49b00;
 }
 
 .empty-state p:first-child {
@@ -691,6 +747,11 @@ select:focus-visible {
   color: #888;
   font-family: 'Segoe UI', sans-serif;
   font-weight: 600;
+}
+
+@keyframes dashboard-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
 .pagination-bar {
@@ -779,7 +840,7 @@ select:focus-visible {
   }
 
   .dashboard-brand {
-    width: 100%;
+    width: auto;
   }
 
   .toolbar {

@@ -39,6 +39,10 @@ export function buildResultSummary({
     itemsPlanned: normalizeCount(runRecord.itemsPlanned, 0),
     itemsSucceeded: normalizeCount(runRecord.itemsSucceeded, 0),
     failedItems: normalizeCount(runRecord.itemsFailed, 0),
+    completionNote: typeof runRecord.completionNote === 'string' ? runRecord.completionNote.trim() : '',
+    requestedCount: normalizeCount(runRecord.requestedCount, 0),
+    discoveredCount: normalizeCount(runRecord.discoveredCount, 0),
+    shortfallCount: normalizeCount(runRecord.shortfallCount, 0),
     dataQualityBreakdown: buildBreakdown(allRecords, 'dataQuality'),
     sourceTierBreakdown: buildBreakdown(allRecords, 'sourceTier'),
   };

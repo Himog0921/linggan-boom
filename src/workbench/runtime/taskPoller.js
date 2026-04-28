@@ -175,6 +175,7 @@ function sanitizeNoteRecord(note = {}) {
   const rawUrl = String(note.rawUrl || canonicalUrl || url).trim();
 
   return {
+    platform: String(note.platform || '').trim(),
     noteId: String(note.noteId || note.platformContentId || note.contentId || '').trim(),
     platformContentId: String(note.platformContentId || note.noteId || note.contentId || '').trim(),
     title: String(note.title || '').trim(),
@@ -193,7 +194,28 @@ function sanitizeNoteRecord(note = {}) {
     collects: toFiniteNumber(note.collects, 0),
     comments: toFiniteNumber(note.comments, 0),
     shares: toFiniteNumber(note.shares, 0),
+    authorId: String(note.authorId || note.authorPlatformId || note.userId || '').trim(),
+    authorPlatformId: String(note.authorPlatformId || note.authorId || note.userId || '').trim(),
+    authorEntityId: String(note.authorEntityId || '').trim(),
     authorName: String(note.authorName || note.author || '').trim(),
+    authorAvatar: firstText(note.authorAvatar) || firstText(note.avatar),
+    publishedAt: note.publishedAt ?? note.publishTime ?? note.releaseDate ?? null,
+    publishedAtText:
+      firstText(note.publishedAtText)
+      || firstText(note.publishTimeText)
+      || firstText(note.releaseDateText)
+      || firstText(note.releaseDate)
+      || firstText(note.timeText)
+      || firstText(note.time),
+    type: String(note.type || note.contentType || note.noteType || note.itemType || '').trim(),
+    lastUpdateTime: note.lastUpdateTime ?? null,
+    collectionRunId: String(note.collectionRunId || '').trim(),
+    monitorMode: String(note.monitorMode || '').trim(),
+    monitorId: String(note.monitorId || note.monitorMeta?.monitorId || '').trim(),
+    taskStrategy: String(note.taskStrategy || note.monitorMeta?.taskStrategy || '').trim(),
+    monitorMeta: note.monitorMeta && typeof note.monitorMeta === 'object' && !Array.isArray(note.monitorMeta)
+      ? { ...note.monitorMeta }
+      : {},
   };
 }
 
@@ -409,9 +431,6 @@ function buildIdleTickResult(claimed = {}, idleSnapshot = null) {
   }
   if (reason) {
     result.reason = reason;
-  }
-  if (claimed?.fallbackToPending != null) {
-    result.fallbackToPending = Boolean(claimed.fallbackToPending);
   }
   return result;
 }
@@ -975,29 +994,19 @@ export function createTaskPoller(deps = {}) {
         return await pollActiveTask();
       }
 
-      if (typeof deps.claimTaskLease === 'function') {
-        const claimed = await deps.claimTaskLease();
-        if (claimed?.task) {
-          return await claimTask(claimed.task, claimed.lease || null);
-        }
-        const idleSnapshot = createTaskLeaseIdleSnapshot(claimed);
-        if (!claimed?.fallbackToPending) {
-          state.lastIdleReason = idleSnapshot;
-          return buildIdleTickResult(claimed, idleSnapshot);
-        }
-        state.lastIdleReason = idleSnapshot;
-      } else {
+      if (typeof deps.claimTaskLease !== 'function') {
         state.lastIdleReason = null;
+        return buildIdleTickResult({}, null);
       }
-      const tasks = typeof deps.fetchPendingTasks === 'function'
-        ? await deps.fetchPendingTasks()
-        : [];
-      const nextTask = Array.isArray(tasks) ? tasks[0] : null;
-      if (!nextTask) {
-        return buildIdleTickResult(state.lastIdleReason || {}, state.lastIdleReason);
+
+      const claimed = await deps.claimTaskLease();
+      if (claimed?.task) {
+        return await claimTask(claimed.task, claimed.lease || null);
       }
-      state.lastIdleReason = null;
-      return await claimTask(nextTask);
+
+      const idleSnapshot = createTaskLeaseIdleSnapshot(claimed);
+      state.lastIdleReason = idleSnapshot;
+      return buildIdleTickResult(claimed, idleSnapshot);
     } finally {
       state.ticking = false;
     }

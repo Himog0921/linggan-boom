@@ -1,7 +1,7 @@
 import { normalizeServerUrl } from '../../shared/utils.js';
 
 const STORAGE_KEY = 'workbenchExecutionStation';
-const DEFAULT_SERVER_URL = 'http://localhost:3000';
+const DEFAULT_SERVER_URL = 'https://lingganboom.fun';
 
 function normalizeString(value = '') {
   return String(value || '').trim();
@@ -43,6 +43,7 @@ export function createExecutionStationClient({
   storageArea = globalThis.chrome?.storage?.local,
   fetchFn = globalThis.fetch?.bind(globalThis),
   resolveServerUrl = async () => DEFAULT_SERVER_URL,
+  resolveAuthorization = async () => ({}),
   randomUUID = () => globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
   now = () => Date.now(),
 } = {}) {
@@ -74,9 +75,19 @@ export function createExecutionStationClient({
       throw createHttpError('fetch unavailable', { retryable: true });
     }
     const baseUrl = normalizeServerUrl(await resolveServerUrl(), DEFAULT_SERVER_URL);
+    const authorization = await resolveAuthorization();
+    const authorizationToken = normalizeString(
+      authorization?.authorizationToken
+      || authorization?.apiToken
+      || authorization?.token,
+    );
+    const headers = { 'Content-Type': 'application/json' };
+    if (authorizationToken) {
+      headers.Authorization = `Bearer ${authorizationToken}`;
+    }
     const response = await fetchFn(`${baseUrl}${path}`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(body),
     });
     if (!response.ok) {
@@ -96,8 +107,10 @@ export function createExecutionStationClient({
     browserLabel = '',
   } = {}) {
     const stationKey = await ensureStationKey();
+    const authorization = await resolveAuthorization();
     const data = await postJson('/api/execution-stations/register', {
       pairingCode: normalizeString(pairingCode),
+      authorizationId: normalizeString(authorization?.authorizationId),
       stationKey,
       pluginVersion: normalizeString(pluginVersion),
       browserLabel: normalizeString(browserLabel),
@@ -122,6 +135,7 @@ export function createExecutionStationClient({
     platformAccounts = [],
   } = {}) {
     const identity = await getStoredStationIdentity();
+    const authorization = await resolveAuthorization();
     const stationId = normalizeString(identity.stationId);
     const stationToken = normalizeString(identity.stationToken);
     if (!stationId || !stationToken) {
@@ -132,6 +146,7 @@ export function createExecutionStationClient({
       const data = await postJson('/api/execution-stations/heartbeat', {
         stationId,
         stationToken,
+        authorizationId: normalizeString(authorization?.authorizationId),
         status: normalizeString(status) || 'online',
         pluginVersion: normalizeString(pluginVersion),
         capabilities: toStringArray(capabilities.length ? capabilities : identity.capabilities),
@@ -156,9 +171,26 @@ export function createExecutionStationClient({
     }
   }
 
+  async function clearStationIdentity({ preserveStationKey = true } = {}) {
+    const existing = await getStoredStationIdentity();
+    if (!preserveStationKey || !normalizeString(existing.stationKey)) {
+      if (storageArea?.remove) {
+        await storageArea.remove(STORAGE_KEY);
+        return {};
+      }
+      return writeStorage(storageArea, STORAGE_KEY, {});
+    }
+    return writeStorage(storageArea, STORAGE_KEY, {
+      stationKey: normalizeString(existing.stationKey),
+      updatedAt: now(),
+      clearedAt: now(),
+    });
+  }
+
   return {
     getStoredStationIdentity,
     saveStationIdentity,
+    clearStationIdentity,
     registerWithPairingCode,
     sendHeartbeat,
   };

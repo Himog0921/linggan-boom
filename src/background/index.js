@@ -4,7 +4,6 @@ import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
-  fetchPendingCollectionTasks,
   fetchTrackableCollectionTasks,
   patchCollectionTask,
   fetchCollectionTaskControlRequests,
@@ -38,6 +37,11 @@ import { createTaskDeltaReporter } from '../workbench/runtime/taskDeltaReporter.
 import { normalizeProgressEvent } from '../workbench/runtime/progressEvent.js';
 import { navigateToTask, closeTab } from '../workbench/runtime/navigationOrchestrator.js';
 import { getPersistentExecutorInstanceId } from '../workbench/runtime/executorIdentity.js';
+import {
+  createPluginAuthorizationClient,
+  getPluginAuthorizationBlockedMessage,
+  hasActivePluginAuthorization,
+} from '../workbench/runtime/pluginAuthorization.js';
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
 import { accountStore } from '../db/accountStore.js';
@@ -519,32 +523,71 @@ function scoreTaskTabCandidate(tab = {}, targetUrl = '') {
   return 0;
 }
 
-async function selectReachableTaskTab(candidates = [], targetUrl = '', capabilityCheck = async () => ({ accepted: false })) {
+function isForegroundActiveTaskTab(tab = {}, focusedWindowId = null) {
+  const normalizedFocusedWindowId = Number.isFinite(Number(focusedWindowId))
+    ? Number(focusedWindowId)
+    : null;
+  if (!normalizedFocusedWindowId) return false;
+  return Boolean(tab?.active) && Number(tab?.windowId || 0) === normalizedFocusedWindowId;
+}
+
+async function selectReachableTaskTab(
+  candidates = [],
+  targetUrl = '',
+  capabilityCheck = async () => ({ accepted: false }),
+  options = {},
+) {
+  const avoidActiveInWindowId = Number.isFinite(Number(options?.avoidActiveInWindowId))
+    ? Number(options.avoidActiveInWindowId)
+    : null;
+  const strictlyAvoidActiveInWindow = Boolean(options?.strictlyAvoidActiveInWindow && avoidActiveInWindowId);
   const rankedCandidates = [...(Array.isArray(candidates) ? candidates : [])]
     .filter((tab) => tab?.id)
     .sort((a, b) => scoreTaskTabCandidate(b, targetUrl) - scoreTaskTabCandidate(a, targetUrl));
 
-  for (const tab of rankedCandidates) {
-    try {
-      const capability = await capabilityCheck(tab);
-      if (capability?.accepted) {
-        return tab;
+  const preferredCandidates = avoidActiveInWindowId
+    ? rankedCandidates.filter((tab) => !isForegroundActiveTaskTab(tab, avoidActiveInWindowId))
+    : rankedCandidates;
+  const fallbackCandidates = avoidActiveInWindowId
+    ? rankedCandidates.filter((tab) => isForegroundActiveTaskTab(tab, avoidActiveInWindowId))
+    : [];
+
+  const candidateGroups = strictlyAvoidActiveInWindow
+    ? [preferredCandidates]
+    : [preferredCandidates, fallbackCandidates];
+
+  for (const group of candidateGroups) {
+    for (const tab of group) {
+      try {
+        const capability = await capabilityCheck(tab);
+        if (capability?.accepted) {
+          return tab;
+        }
+      } catch (error) {
+        if (isRecoverableConnectionError(error)) {
+          continue;
+        }
+        throw error;
       }
-    } catch (error) {
-      if (isRecoverableConnectionError(error)) {
-        continue;
-      }
-      throw error;
     }
   }
 
   return null;
 }
 
+async function keepTaskExecutionTabAlive(tabId = 0) {
+  const normalizedTabId = Number(tabId || 0);
+  if (!normalizedTabId) return;
+  await chrome.tabs.update(normalizedTabId, { autoDiscardable: false }).catch(() => {});
+}
+
 async function resolveTaskExecutionTabId(task = {}) {
   const taskId = String(task.id || '').trim();
   const cachedTabId = getWorkbenchTaskTabId(taskId);
-  if (cachedTabId) return cachedTabId;
+  if (cachedTabId) {
+    await keepTaskExecutionTabAlive(cachedTabId);
+    return cachedTabId;
+  }
 
   const targetUrl = String(task.target || '').trim();
   if (!isUrlLike(targetUrl)) {
@@ -553,13 +596,24 @@ async function resolveTaskExecutionTabId(task = {}) {
 
   const tabs = await chrome.tabs.query({ url: getPlatformTabQuery(task) });
   const mappedCapabilityTask = mapTaskEnvelopeToCapabilityCheck(buildTaskEnvelopeFromCollectionTask(task));
+  let focusedWindowId = null;
+  try {
+    const focusedWindow = await chrome.windows?.getLastFocused?.();
+    focusedWindowId = Number(focusedWindow?.id || 0) || null;
+  } catch {
+    focusedWindowId = null;
+  }
   const tab = await selectReachableTaskTab(tabs, targetUrl, async (candidate) => (
     bgHandlers[MSG.WORKBENCH_CAPABILITY_CHECK]({
       tabId: candidate.id,
       task: mappedCapabilityTask,
     }, {})
-  ));
+  ), {
+    avoidActiveInWindowId: focusedWindowId,
+    strictlyAvoidActiveInWindow: true,
+  });
   if (tab?.id) {
+    await keepTaskExecutionTabAlive(tab.id);
     setWorkbenchTaskContext(taskId, {
       taskId,
       externalTaskId: taskId,
@@ -939,6 +993,10 @@ const bgHandlers = {
 
   // 批量笔记采集（转发到 content script）
   [MSG.START_BATCH_NOTES]: async (msg, sender) => {
+    const authorizationStatus = await getPluginAuthorizationSnapshot();
+    if (!authorizationStatus.authorized) {
+      throw new Error(authorizationStatus.authorizationMessage);
+    }
     const tabId = msg.tabId || sender.tab?.id;
     if (!tabId) return { error: 'No tabId' };
     chrome.action.setBadgeText({ text: '⏳', tabId });
@@ -980,6 +1038,10 @@ const bgHandlers = {
 
   // 批量评论采集（转发到 content script）
   [MSG.START_BATCH_COMMENTS]: async (msg, sender) => {
+    const authorizationStatus = await getPluginAuthorizationSnapshot();
+    if (!authorizationStatus.authorized) {
+      throw new Error(authorizationStatus.authorizationMessage);
+    }
     const tabId = msg.tabId || sender.tab?.id;
     if (!tabId) return { error: 'No tabId' };
     chrome.action.setBadgeText({ text: '评', tabId });
@@ -1036,16 +1098,30 @@ const bgHandlers = {
       return { success: false, error: 'No items to sync' };
     }
 
-    // 获取工作台配置
-    const config = await getFlywheelConfig();
-    const serverUrl = config?.serverUrl || 'http://localhost:3000';
+    const authorizationStatus = await getPluginAuthorizationSnapshot();
+    if (!authorizationStatus.authorized) {
+      return {
+        success: false,
+        error: authorizationStatus.authorizationMessage,
+        errorCode: 'plugin_authorization_required',
+      };
+    }
 
-    // 使用 Format B (plugin native format) 直接调用 API
-    // 与 popup.js 的实现保持一致
+    const config = await getFlywheelConfig();
+    const serverUrl = config?.serverUrl || 'https://lingganboom.fun';
+    const authorizationToken = String(
+      config?.apiToken
+      || authorizationStatus.authorization?.authorizationToken
+      || '',
+    ).trim();
+
     const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
     const resp = await fetch(`${url}/api/collect/batch`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
+      },
       body: JSON.stringify({ notes, comments, authors }),
       signal: AbortSignal.timeout(30000),
     });
@@ -1104,10 +1180,14 @@ const bgHandlers = {
   },
 
   [MSG.GET_EXECUTION_STATION_STATUS]: async () => {
+    const authorizationStatus = await getPluginAuthorizationSnapshot();
     const identity = await executionStationClient.getStoredStationIdentity();
     const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
     return {
       success: true,
+      authorized: authorizationStatus.authorized,
+      authorization: authorizationStatus.authorization,
+      authorizationMessage: authorizationStatus.authorizationMessage,
       registered: Boolean(identity?.stationId && identity?.stationToken),
       identity,
       capabilities: stationCapabilitiesForRole(normalizeStationRole(identity?.role)),
@@ -1115,11 +1195,61 @@ const bgHandlers = {
     };
   },
 
+  [MSG.AUTHORIZE_PLUGIN_ACCESS]: async (msg = {}) => {
+    const authorizationCode = String(msg.authorizationCode || '').trim();
+    const serverUrl = String(msg.serverUrl || '').trim();
+    if (serverUrl) {
+      await saveFlywheelConfig({ serverUrl, enabled: true });
+    }
+    if (!authorizationCode) {
+      return { success: false, error: 'authorization_code_required' };
+    }
+    try {
+      const authorization = await pluginAuthorizationClient.authorizeWithCode({
+        authorizationCode,
+        pluginVersion: getPluginVersion(),
+        browserLabel: String(msg.browserLabel || '').trim(),
+      });
+      await saveFlywheelConfig({
+        enabled: true,
+        apiToken: String(authorization.authorizationToken || '').trim(),
+      });
+      await executionStationClient.clearStationIdentity();
+      await taskLeaseStore.clear();
+      return {
+        success: true,
+        authorized: true,
+        authorization,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error?.message || error || 'authorize_plugin_access_failed'),
+      };
+    }
+  },
+
+  [MSG.CLEAR_PLUGIN_AUTHORIZATION]: async () => {
+    await pluginAuthorizationClient.clearAuthorization();
+    await saveFlywheelConfig({ apiToken: '' });
+    await executionStationClient.clearStationIdentity();
+    await taskLeaseStore.clear();
+    return { success: true };
+  },
+
   [MSG.REGISTER_EXECUTION_STATION]: async (msg = {}) => {
+    const authorizationStatus = await getPluginAuthorizationSnapshot();
     const pairingCode = String(msg.pairingCode || '').trim();
     const serverUrl = String(msg.serverUrl || '').trim();
     if (serverUrl) {
       await saveFlywheelConfig({ serverUrl, enabled: true });
+    }
+    if (!authorizationStatus.authorized) {
+      return {
+        success: false,
+        error: authorizationStatus.authorizationMessage,
+        errorCode: 'plugin_authorization_required',
+      };
     }
     if (!pairingCode) {
       return { success: false, error: 'pairing_code_required' };
@@ -1151,7 +1281,7 @@ const bgHandlers = {
 
   // ========== Cookie 管理 ==========
 
-  [MSG.GET_PLATFORM_COOKIES]: async () => {
+  [MSG.GET_PLATFORM_COOKIES]: async (msg = {}) => {
     const platformConfig = {
       xhs: {
         domains: ['.xiaohongshu.com', 'xiaohongshu.com', 'www.xiaohongshu.com'],
@@ -1164,6 +1294,10 @@ const bgHandlers = {
         origin: 'https://www.douyin.com',
       },
     };
+    const requestedPlatform = String(msg.platform || '').trim();
+    const activeConfigs = requestedPlatform && platformConfig[requestedPlatform]
+      ? { [requestedPlatform]: platformConfig[requestedPlatform] }
+      : platformConfig;
 
     const collectUnique = (batch, seen, target) => {
       for (const c of batch) {
@@ -1173,7 +1307,7 @@ const bgHandlers = {
     };
 
     const results = {};
-    for (const [platform, config] of Object.entries(platformConfig)) {
+    for (const [platform, config] of Object.entries(activeConfigs)) {
       const seen = new Set();
       const allCookies = [];
 
@@ -1225,9 +1359,14 @@ const bgHandlers = {
         capturedAt: new Date().toISOString(),
       };
     }
-    await chrome.storage.local.set({ platformCookies: results });
+    const stored = await chrome.storage.local.get('platformCookies');
+    const mergedResults = {
+      ...(stored.platformCookies || {}),
+      ...results,
+    };
+    await chrome.storage.local.set({ platformCookies: mergedResults });
     const success = Object.values(results).some((result) => Number(result?.count || 0) > 0);
-    return { success, results };
+    return { success, results: mergedResults };
   },
 
   [MSG.GET_STORED_PLATFORM_COOKIES]: async () => {
@@ -1512,7 +1651,7 @@ const bgHandlers = {
         const errMsg = String(error?.message || error || 'tab_result_lookup_failed');
         console.warn('[灵感爆爆爆] getResultPackage sendToTab 失败，回退到本地读取:', errMsg);
         if (/Could not establish connection|Receiving end does not exist/i.test(errMsg)) {
-          chrome.tabs.update(tabId, { active: true }).catch(() => {});
+          keepTaskExecutionTabAlive(tabId).catch(() => {});
         }
         // fallthrough to local packager
       }
@@ -1535,7 +1674,9 @@ const bgHandlers = {
 };
 
 function shouldPollWorkbenchTasks(config = {}) {
-  return Boolean(String(config?.serverUrl || '').trim()) && config?.enabled !== false;
+  return Boolean(String(config?.serverUrl || '').trim())
+    && config?.enabled !== false
+    && Boolean(String(config?.apiToken || '').trim());
 }
 
 function getPluginVersion() {
@@ -1546,12 +1687,21 @@ function getPluginVersion() {
   }
 }
 
+const pluginAuthorizationClient = createPluginAuthorizationClient({
+  storageArea: chrome.storage?.local,
+  resolveServerUrl: async () => {
+    const config = await getFlywheelConfig();
+    return config?.serverUrl || '';
+  },
+});
+
 const executionStationClient = createExecutionStationClient({
   storageArea: chrome.storage?.local,
   resolveServerUrl: async () => {
     const config = await getFlywheelConfig();
     return config?.serverUrl || '';
   },
+  resolveAuthorization: async () => pluginAuthorizationClient.getStoredAuthorization(),
 });
 const taskLeaseStore = createTaskLeaseStorageStore({
   storageArea: chrome.storage?.local,
@@ -1563,6 +1713,17 @@ function normalizeStationRole(value = '') {
 
 function stationCapabilitiesForRole() {
   return MONITOR_STATION_CAPABILITIES;
+}
+
+async function getPluginAuthorizationSnapshot() {
+  const authorization = await pluginAuthorizationClient.getStoredAuthorization();
+  return {
+    authorized: hasActivePluginAuthorization(authorization),
+    authorization,
+    authorizationMessage: hasActivePluginAuthorization(authorization)
+      ? ''
+      : getPluginAuthorizationBlockedMessage(authorization),
+  };
 }
 
 async function collectStationPlatformAccountsForIdentity(identity = null) {
@@ -1618,11 +1779,6 @@ const taskPoller = createTaskPoller({
     if (!normalizedAccountId) return;
     await accountStore.updateUsage(normalizedAccountId);
   },
-  fetchPendingTasks: async () => {
-    const config = await getFlywheelConfig();
-    if (!shouldPollWorkbenchTasks(config)) return [];
-    return fetchPendingCollectionTasks(config, { limit: 5 });
-  },
   fetchTrackableTasks: async () => {
     const config = await getFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return [];
@@ -1632,8 +1788,16 @@ const taskPoller = createTaskPoller({
     const config = await getFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
     const identity = await executionStationClient.getStoredStationIdentity();
+    const authorization = await pluginAuthorizationClient.getStoredAuthorization();
     if (!identity?.stationId || !identity?.stationToken) {
-      return { task: null, fallbackToPending: true };
+      return {
+        task: null,
+        nextPollAfterMs: 30000,
+        reason: {
+          code: 'station_not_registered',
+          message: '请先把插件绑定为手动工位或监控工位，绑定后才会接单。',
+        },
+      };
     }
     const role = normalizeStationRole(identity?.role);
     const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
@@ -1641,6 +1805,8 @@ const taskPoller = createTaskPoller({
       serverUrl: config.serverUrl,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
+      authorizationId: authorization.authorizationId,
+      authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: stationCapabilitiesForRole(role),
       platformAccounts,
       store: taskLeaseStore,
@@ -1649,6 +1815,7 @@ const taskPoller = createTaskPoller({
   renewTaskLease: async (taskId, lease = {}, options = {}) => {
     const config = await getFlywheelConfig();
     const identity = await executionStationClient.getStoredStationIdentity();
+    const authorization = await pluginAuthorizationClient.getStoredAuthorization();
     if (!shouldPollWorkbenchTasks(config) || !identity?.stationId || !identity?.stationToken) {
       return { success: false, skipped: true, reason: 'station_not_registered' };
     }
@@ -1658,6 +1825,8 @@ const taskPoller = createTaskPoller({
       stationId: identity.stationId,
       stationToken: identity.stationToken,
       leaseToken: lease.leaseToken,
+      authorizationId: authorization.authorizationId,
+      authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       status: options?.status || 'running',
       store: taskLeaseStore,
     });

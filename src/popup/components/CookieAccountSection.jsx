@@ -1,8 +1,24 @@
 import React from 'react';
+import { getAccountStatusMeta } from '../../shared/feedback.js';
 
-export default function CookieAccountSection({ cookieStatus, accounts, onGetCookies, onOpenAddAccount, onRemoveAccount }) {
-  const xhsData = cookieStatus?.xhs;
-  const dyData = cookieStatus?.douyin;
+export default function CookieAccountSection({
+  currentPlatform = 'unknown',
+  cookieStatus,
+  accounts,
+  onGetCookies,
+  onOpenAddAccount,
+  onRemoveAccount,
+  gettingCookies = false,
+  openingAddAccount = false,
+  removingAccountId = '',
+}) {
+  const currentPlatformKey = currentPlatform === 'douyin'
+    ? 'douyin'
+    : currentPlatform === 'xhs'
+      ? 'xhs'
+      : null;
+  const currentPlatformLabel = currentPlatformKey === 'douyin' ? '抖音' : currentPlatformKey === 'xhs' ? '小红书' : '当前平台';
+  const currentCookieData = currentPlatformKey ? cookieStatus?.[currentPlatformKey] : null;
   const accountCount = Array.isArray(accounts) ? accounts.length : 0;
 
   const formatCookieTime = (ts) => {
@@ -13,30 +29,40 @@ export default function CookieAccountSection({ cookieStatus, accounts, onGetCook
 
   return (
     <div className="cookie-bottom-section">
-      <div className="data-subsection">
+      <div className="data-subsection cookie-status-card">
         <div className="section-heading compact">
           <div>
             <h2>Cookie 状态</h2>
-            <p>最新抓取时间会影响当前页面是否能直接执行采集与同步。</p>
+            <p>只显示当前平台，抓取时间会影响当前页采集与同步。</p>
           </div>
         </div>
-        <div className="cookie-status-row">
-          <div className="cookie-platform-status">
-            <span className="cookie-platform-label">小红书</span>
-            <span id="cookieXhsBadge" className={`cookie-platform-badge ${xhsData?.count > 0 ? 'captured' : 'not-captured'}`}>
-              {xhsData?.count > 0 ? `${xhsData.count} 条 ${formatCookieTime(xhsData.capturedAt)}` : '未获取'}
-            </span>
-          </div>
-          <div className="cookie-platform-status">
-            <span className="cookie-platform-label">抖音</span>
-            <span id="cookieDouyinBadge" className={`cookie-platform-badge ${dyData?.count > 0 ? 'captured' : 'not-captured'}`}>
-              {dyData?.count > 0 ? `${dyData.count} 条 ${formatCookieTime(dyData.capturedAt)}` : '未获取'}
-            </span>
-          </div>
+        <div className="cookie-status-row single-platform">
+          {currentPlatformKey ? (
+            <div className="cookie-platform-status">
+              <span className="cookie-platform-label">{currentPlatformLabel}</span>
+              <span
+                id={`cookie${currentPlatformKey === 'xhs' ? 'Xhs' : 'Douyin'}Badge`}
+                className={`cookie-platform-badge ${currentCookieData?.count > 0 ? 'captured' : 'not-captured'}`}
+              >
+                {currentCookieData?.count > 0 ? `${currentCookieData.count} 条 ${formatCookieTime(currentCookieData.capturedAt)}` : '未获取'}
+              </span>
+            </div>
+          ) : (
+            <div className="cookie-platform-status">
+              <span className="cookie-platform-label">未识别页面</span>
+              <span className="cookie-platform-badge not-captured">请先打开小红书或抖音页面</span>
+            </div>
+          )}
+          <button
+            id="btnGetCookies"
+            className={`popup-btn primary cookie-fetch-btn${gettingCookies ? ' is-busy' : ''}`}
+            onClick={onGetCookies}
+            disabled={!currentPlatformKey || gettingCookies}
+            aria-busy={gettingCookies ? 'true' : 'false'}
+          >
+            {currentPlatformKey ? (gettingCookies ? '获取中...' : '获取 Cookie') : '切到支持页'}
+          </button>
         </div>
-        <button id="btnGetCookies" className="popup-btn primary" onClick={onGetCookies}>
-          一键获取 Cookie
-        </button>
       </div>
 
       <div className="data-subsection">
@@ -50,25 +76,31 @@ export default function CookieAccountSection({ cookieStatus, accounts, onGetCook
 
         <div id="accountList">
           {accountCount === 0 ? (
-            <div className="empty-inline-note">暂无采集账号</div>
+            <div className="empty-inline-note empty-account-state">
+              <strong>还没有采集账号</strong>
+              <p>先抓取当前平台 Cookie，或手动粘贴 Cookie 保存一个执行账号。</p>
+            </div>
           ) : (
             accounts.map((a) => {
-              const statusText = a.status === 'cooldown'
-                ? `冷却中（${new Date(a.cooldownUntil).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })} 恢复）`
-                : a.status === 'disabled'
-                  ? '已禁用'
-                  : '可用';
-              const statusColor = a.status === 'available' ? '#22c55e' : a.status === 'cooldown' ? '#f59e0b' : '#999';
+              const statusMeta = getAccountStatusMeta(a.status, a.cooldownUntil);
               return (
                 <div key={a.accountId} className="account-item">
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div className="account-item-name">{a.name || '未命名'}</div>
                     <div className="account-item-meta">
-                      {a.dailyQuotaUsed || 0}/{a.dailyQuotaLimit || 100} · <span style={{ color: statusColor }}>{statusText}</span>
+                      <span>{a.dailyQuotaUsed || 0}/{a.dailyQuotaLimit || 100}</span>
+                      <span className={`account-status-pill tone-${statusMeta.tone}`}>{statusMeta.label}</span>
+                      <span>{statusMeta.detail}</span>
                     </div>
                   </div>
                   <div className="account-item-actions">
-                    <button className="delete" onClick={() => onRemoveAccount(a.accountId)}>删除</button>
+                    <button
+                      className="delete"
+                      onClick={() => onRemoveAccount(a.accountId)}
+                      disabled={removingAccountId === a.accountId}
+                    >
+                      {removingAccountId === a.accountId ? '删除中...' : '删除'}
+                    </button>
                   </div>
                 </div>
               );
@@ -76,8 +108,13 @@ export default function CookieAccountSection({ cookieStatus, accounts, onGetCook
           )}
         </div>
 
-        <button id="btnAddAccount" className="popup-btn outline" onClick={onOpenAddAccount}>
-          + 手动添加账号
+        <button
+          id="btnAddAccount"
+          className={`popup-btn outline${openingAddAccount ? ' is-busy' : ''}`}
+          onClick={onOpenAddAccount}
+          disabled={openingAddAccount}
+        >
+          {openingAddAccount ? '正在打开...' : '+ 手动添加账号'}
         </button>
       </div>
     </div>

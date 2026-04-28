@@ -110,7 +110,9 @@ export class BatchCommentController extends BaseBatchController {
         current: 0,
         message: '正在扫描页面作品并准备评论任务...',
       });
-      noteList = await discoverWithScroll(this._containerSelector, mode === COLLECT_MODE.PROFILE ? 14 : 10);
+      noteList = await discoverWithScroll(this._containerSelector, mode === COLLECT_MODE.PROFILE ? 14 : 10, {
+        expectedCount: safeCount,
+      });
     }
 
     if (this._topByLikes) {

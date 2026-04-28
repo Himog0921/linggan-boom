@@ -1,6 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { COMMENT_DEPTH_MODE } from '../../shared/constants.js';
 import { PLATFORM } from '../utils.js';
+import {
+  getPopupBatchSettingsStorageKey,
+  inferPopupBatchDefaults,
+  readPopupBatchSettings,
+  summarizeBatchPlan,
+  writePopupBatchSettings,
+} from '../../shared/feedback.js';
 
 const COUNT_OPTIONS = [5, 10, 20, 50];
 
@@ -25,6 +32,18 @@ export default function BatchSettingsModal({
   const showCommentDepth = type === 'comments';
   const showCommentLimit = type === 'comments';
   const showCountOptions = !isSingleComment;
+  const settingsStorageKey = getPopupBatchSettingsStorageKey({
+    type,
+    platform,
+    mode,
+    isSingleComment,
+  });
+  const inferredDefaults = inferPopupBatchDefaults({
+    type,
+    platform,
+    mode,
+    isSingleComment,
+  });
 
   const dialogTitle = commentLimitOptions?.title || (type === 'comments'
     ? '批量采集评论'
@@ -38,30 +57,52 @@ export default function BatchSettingsModal({
 
   useEffect(() => {
     if (open) {
-      setCount(10);
-      setTopByLikes(false);
-      setCommentLimit('');
-      setCommentDepthMode(COMMENT_DEPTH_MODE.TWO_LEVEL);
+      const remembered = readPopupBatchSettings(settingsStorageKey) || {};
+      setCount(Number(remembered.count || inferredDefaults.count || 10));
+      setTopByLikes(Boolean(remembered.topByLikes ?? inferredDefaults.topByLikes));
+      setCommentLimit(String(remembered.commentLimit ?? inferredDefaults.commentLimit ?? ''));
+      setCommentDepthMode(
+        remembered.commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES
+          ? COMMENT_DEPTH_MODE.ALL_REPLIES
+          : (inferredDefaults.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL),
+      );
     }
-  }, [open]);
+  }, [open, settingsStorageKey, inferredDefaults.count, inferredDefaults.topByLikes, inferredDefaults.commentLimit, inferredDefaults.commentDepthMode]);
 
   if (!open) return null;
 
   const handleConfirm = () => {
-    onConfirm({
+    const nextSettings = {
       count,
       topByLikes: showTopByLikes ? topByLikes : false,
       commentLimit: showCommentLimit ? Math.max(0, parseInt(String(commentLimit).trim(), 10) || 0) : 0,
       commentDepthMode: showCommentDepth ? commentDepthMode : COMMENT_DEPTH_MODE.TWO_LEVEL,
       maxTotal: isSingleComment ? Math.max(0, parseInt(String(commentLimit).trim(), 10) || 0) : undefined,
-    });
+    };
+    writePopupBatchSettings(settingsStorageKey, nextSettings);
+    onConfirm(nextSettings);
   };
+  const plan = summarizeBatchPlan({
+    platform,
+    type,
+    mode,
+    count,
+    topByLikes,
+    commentLimit,
+    commentDepthMode,
+    isSingleComment,
+  });
 
   return (
     <div id="batchSettingsOverlay" className="batch-settings-overlay" style={{ display: 'flex' }} aria-hidden="false">
       <div className="batch-settings-dialog" role="dialog" aria-modal="true" aria-labelledby="batchSettingsTitle">
         <h2 id="batchSettingsTitle">{dialogTitle}</h2>
         <p className="batch-settings-subtitle">{dialogSubtitle}</p>
+        <div className="batch-plan-card">
+          <span className="batch-plan-badge">智能默认值</span>
+          <strong>{plan.title}</strong>
+          <p>{plan.detail}</p>
+        </div>
 
         {showCountOptions && (
           <>
@@ -134,7 +175,7 @@ export default function BatchSettingsModal({
             <input
               id="commentLimitInput"
               type="number"
-              placeholder="例如 20"
+              placeholder={isSingleComment ? '例如 20' : (platform === PLATFORM.DOUYIN ? '推荐 30' : '推荐 20')}
               min="0"
               value={commentLimit}
               onChange={(e) => setCommentLimit(e.target.value)}

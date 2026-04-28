@@ -37,7 +37,15 @@ test('BatchNoteController reports a workbench record delta after collecting one 
       collects: 3,
       comments: 4,
       shares: 5,
+      authorId: 'author_xhs_1',
+      authorPlatformId: 'author_xhs_1',
+      authorEntityId: 'xhs_author_xhs_1',
       authorName: '作者',
+      authorAvatar: 'https://images.example.com/author.jpg',
+      publishedAt: 1776766122,
+      publishedAtText: '4月21日 18:08',
+      type: 'video',
+      dataSource: '__INITIAL_STATE__',
     });
   } finally {
     delete globalThis.chrome;
@@ -51,6 +59,7 @@ test('BatchNoteController reports a workbench record delta after collecting one 
   assert.equal(messages[0].externalTaskId, 'task_xhs_1');
   assert.match(messages[0].collectedAt, /^\d{4}-\d{2}-\d{2}T/);
   assert.deepEqual(messages[0].record, {
+    platform: 'xhs',
     noteId: 'note_xhs_1',
     platformContentId: 'note_xhs_1',
     title: 'ADHD 采集样例',
@@ -69,6 +78,18 @@ test('BatchNoteController reports a workbench record delta after collecting one 
     collects: 3,
     comments: 4,
     shares: 5,
+    authorId: 'author_xhs_1',
+    authorPlatformId: 'author_xhs_1',
+    authorEntityId: 'xhs_author_xhs_1',
     authorName: '作者',
+    authorAvatar: 'https://images.example.com/author.jpg',
+    publishedAt: 1776766122,
+    publishedAtText: '4月21日 18:08',
+    type: 'video',
+    contentType: 'video',
+    dataSource: '__INITIAL_STATE__',
+    dataQuality: '',
+    qualityReason: '',
+    sourceTier: '',
   });
 });

@@ -76,38 +76,29 @@ body[data-theme="ac-ui"] .popup-header {
   border: var(--ac-line);
   border-radius: var(--ac-radius);
   box-shadow: var(--ac-shadow);
-  padding: 12px 14px;
+  padding: 12px 14px 13px;
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
 }
 
-body[data-theme="ac-ui"] .header-brand-mark {
-  border: 1px solid #ddd;
-  border-radius: 10px;
-  background: #fff;
-  box-shadow: var(--ac-shadow);
-}
-
 body[data-theme="ac-ui"] .header-brand-banner-shell {
   border: 1px solid #ddd;
-  border-radius: 10px;
+  border-radius: 12px;
   background: #fff;
   box-shadow: var(--ac-shadow);
+  padding: 5px 8px;
 }
 
 body[data-theme="ac-ui"] .header-brand-banner {
-  width: 120px;
+  width: 140px;
 }
 
 body[data-theme="ac-ui"] .popup-header h1 {
-  font-size: 17px;
+  font-size: 16px;
   letter-spacing: 0.2px;
   line-height: 1.2;
-  display: flex;
-  align-items: center;
-  gap: 6px;
   font-weight: 700;
 }
 
@@ -129,6 +120,18 @@ body[data-theme="ac-ui"] .header-badge {
   font-size: 10px;
   font-weight: 700;
   color: var(--ac-text);
+}
+
+body[data-theme="ac-ui"] .header-badge.is-xhs {
+  background: #ff2442;
+  border-color: #ff2442;
+  color: #fff;
+}
+
+body[data-theme="ac-ui"] .header-badge.is-douyin {
+  background: #121212;
+  border-color: #121212;
+  color: #fff;
 }
 
 /* ===== Theme Toggle ===== */

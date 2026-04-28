@@ -17,6 +17,7 @@
   ],
   "host_permissions": [
     "http://localhost:*/*",
+    "https://lingganboom.fun/*",
     "https://xiaohongshu.com/*",
     "https://*.xiaohongshu.com/*",
     "https://www.xiaohongshu.com/*",
@@ -71,6 +72,7 @@
         "dashboard.css",
         "lgboom-logo.svg",
         "lgboom-banner.svg",
+        "lgboom-inject-logo.svg",
         "*.js",
         "*.css",
         "injected/noteMap.js",
@@ -86,6 +88,7 @@
         "dashboard.css",
         "lgboom-logo.svg",
         "lgboom-banner.svg",
+        "lgboom-inject-logo.svg",
         "*.js",
         "*.css",
         "injected/douyinApiCapture.js"

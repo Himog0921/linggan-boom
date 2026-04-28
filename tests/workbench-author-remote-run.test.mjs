@@ -170,124 +170,143 @@ test('remote author collection can acknowledge async dispatch before collector f
 
 test('remote xhs author baseline waits for profile batch notes and reuses the same collection run', async () => {
   const calls = [];
+  const previousWindow = globalThis.window;
   let batchStarted = false;
   let releaseBatch;
   const batchDone = new Promise((resolve) => {
     releaseBatch = resolve;
   });
 
-  class FakeBatchNoteController {
-    constructor() {
-      this.noteList = [];
-      this.collected = [];
-      this.failed = [];
-      this.collectionRunId = '';
-      this._stoppedByUser = false;
-    }
-
-    async start(mode, onProgress, options = {}) {
-      batchStarted = true;
-      calls.push(['batchStart', mode, options]);
-      this.collectionRunId = options.collectionRunId;
-      this.noteList = [
-        { noteId: 'note_1' },
-        { noteId: 'note_2' },
-      ];
-      this.collected = [
-        { noteId: 'note_1', contentId: 'xhs_note_1' },
-        { noteId: 'note_2', contentId: 'xhs_note_2' },
-      ];
-      await batchDone;
-    }
-  }
-
-  const collectionRunStore = {
-    async createRun(input) {
-      calls.push(['createRun', input]);
-      return { collectionRunId: 'run_author_baseline_1' };
-    },
-    async markDone(runId, payload) {
-      calls.push(['markDone', runId, payload]);
-      return { collectionRunId: runId, ...payload };
-    },
-    async markStopped() {
-      throw new Error('markStopped should not be called');
-    },
-    async markFailed() {
-      throw new Error('markFailed should not be called');
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/user/profile/xhs_author_1',
+      pathname: '/user/profile/xhs_author_1',
+      origin: 'https://www.xiaohongshu.com',
     },
   };
 
-  const handlers = createContentMessageHandlers({
-    MSG,
-    isDouyinPage: () => false,
-    collectAuthor: async (options = {}) => ({
-      userId: 'xhs_author_1',
-      platformAuthorId: 'xhs_author_1',
-      name: '作者C',
-      collectionRunId: options.collectionRunId,
-    }),
-    collectDouyinAuthor: async () => ({ ok: true, data: {} }),
-    BatchNoteController: FakeBatchNoteController,
-    noteStore: { count: async () => 0, getAll: async () => [] },
-    commentStore: { count: async () => 0, getAll: async () => [] },
-    authorStore: { count: async () => 0, getAll: async () => [] },
-    reportDone: () => {},
-    batchMessageHandlers: {},
-    extractNoteId: () => '',
-    downloadNoteMediaFromRecord: async () => ({}),
-    generateCsv: () => '',
-    downloadFile: () => {},
-    backfillLegacyAiReadyFields: async () => ({}),
-    getPageContext: async () => ({ platform: 'xhs', pageType: 'profile' }),
-    collectionRunStore,
-  });
+  try {
+    class FakeBatchNoteController {
+      constructor() {
+        this.noteList = [];
+        this.collected = [];
+        this.failed = [];
+        this.collectionRunId = '';
+        this._stoppedByUser = false;
+      }
 
-  const pending = handlers[MSG.COLLECT_AUTHOR]({
-    triggerSource: 'workbench_dispatch',
-    externalTaskMeta: {
-      externalTaskId: 'wb_task_author_baseline_1',
-      externalTaskType: 'xhs.collectAuthor',
-      protocolVersion: 'v1',
+      async start(mode, onProgress, options = {}) {
+        batchStarted = true;
+        calls.push(['batchStart', mode, options]);
+        this.collectionRunId = options.collectionRunId;
+        this.noteList = [
+          { noteId: 'note_1' },
+          { noteId: 'note_2' },
+        ];
+        this.collected = [
+          { noteId: 'note_1', contentId: 'xhs_note_1' },
+          { noteId: 'note_2', contentId: 'xhs_note_2' },
+        ];
+        await batchDone;
+      }
+    }
+
+    const collectionRunStore = {
+      async createRun(input) {
+        calls.push(['createRun', input]);
+        return { collectionRunId: 'run_author_baseline_1' };
+      },
+      async markDone(runId, payload) {
+        calls.push(['markDone', runId, payload]);
+        return { collectionRunId: runId, ...payload };
+      },
+      async markStopped() {
+        throw new Error('markStopped should not be called');
+      },
+      async markFailed() {
+        throw new Error('markFailed should not be called');
+      },
+    };
+
+    const handlers = createContentMessageHandlers({
+      MSG,
+      isDouyinPage: () => false,
+      collectAuthor: async (options = {}) => ({
+        userId: 'xhs_author_1',
+        platformAuthorId: 'xhs_author_1',
+        name: '作者C',
+        collectionRunId: options.collectionRunId,
+      }),
+      collectDouyinAuthor: async () => ({ ok: true, data: {} }),
+      BatchNoteController: FakeBatchNoteController,
+      noteStore: { count: async () => 0, getAll: async () => [] },
+      commentStore: { count: async () => 0, getAll: async () => [] },
+      authorStore: { count: async () => 0, getAll: async () => [] },
+      reportDone: () => {},
+      batchMessageHandlers: {},
+      extractNoteId: () => '',
+      downloadNoteMediaFromRecord: async () => ({}),
+      generateCsv: () => '',
+      downloadFile: () => {},
+      backfillLegacyAiReadyFields: async () => ({}),
+      getPageContext: async () => ({ platform: 'xhs', pageType: 'profile' }),
+      collectionRunStore,
+    });
+
+    const pending = handlers[MSG.COLLECT_AUTHOR]({
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'wb_task_author_baseline_1',
+        externalTaskType: 'xhs.collectAuthor',
+        protocolVersion: 'v1',
+        monitorMeta: {
+          monitorId: 'monitor_author_1',
+          taskStrategy: 'author_baseline',
+          scanLimit: 50,
+          surfaceOnly: true,
+          targetUrl: 'https://www.xiaohongshu.com/user/profile/xhs_author_1',
+        },
+      },
+    });
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    assert.equal(batchStarted, true);
+    assert.equal(calls.findIndex(([type]) => type === 'markDone'), -1);
+
+    releaseBatch();
+    const result = await pending;
+
+    assert.equal(result.success, true);
+    assert.equal(result.collectionRunId, 'run_author_baseline_1');
+    assert.deepEqual(calls[1], ['batchStart', 'profile', {
+      count: 50,
+      topByLikes: false,
+      triggerSource: 'workbench_dispatch',
+      collectionRunId: 'run_author_baseline_1',
       monitorMeta: {
         monitorId: 'monitor_author_1',
         taskStrategy: 'author_baseline',
         scanLimit: 50,
         surfaceOnly: true,
+        targetUrl: 'https://www.xiaohongshu.com/user/profile/xhs_author_1',
       },
-    },
-  });
-
-  await new Promise((resolve) => setTimeout(resolve, 0));
-
-  assert.equal(batchStarted, true);
-  assert.equal(calls.findIndex(([type]) => type === 'markDone'), -1);
-
-  releaseBatch();
-  const result = await pending;
-
-  assert.equal(result.success, true);
-  assert.equal(result.collectionRunId, 'run_author_baseline_1');
-  assert.deepEqual(calls[1], ['batchStart', 'profile', {
-    count: 50,
-    topByLikes: false,
-    triggerSource: 'workbench_dispatch',
-    collectionRunId: 'run_author_baseline_1',
-    monitorMeta: {
-      monitorId: 'monitor_author_1',
-      taskStrategy: 'author_baseline',
-      scanLimit: 50,
-      surfaceOnly: true,
-    },
-    surfaceOnly: false,
-  }]);
-  assert.deepEqual(calls[2], ['markDone', 'run_author_baseline_1', {
-    itemsPlanned: 3,
-    itemsSucceeded: 3,
-    itemsFailed: 0,
-    targetIds: ['xhs_author_1', 'note_1', 'note_2'],
-    contentIds: ['xhs_note_1', 'xhs_note_2'],
-  }]);
+      surfaceOnly: false,
+    }]);
+    assert.deepEqual(calls[2], ['markDone', 'run_author_baseline_1', {
+      itemsPlanned: 3,
+      itemsSucceeded: 3,
+      itemsFailed: 0,
+      targetIds: ['xhs_author_1', 'note_1', 'note_2'],
+      contentIds: ['xhs_note_1', 'xhs_note_2'],
+      completionNote: '这轮原计划建档 50 条，但当前主页最终只发现 2 条可采作品，所以先按现有作品完成建档。',
+      requestedCount: 50,
+      discoveredCount: 2,
+      shortfallCount: 48,
+    }]);
+  } finally {
+    globalThis.window = previousWindow;
+  }
 });
 
 test('content workbench result handler proxies to page-side result packager', async () => {

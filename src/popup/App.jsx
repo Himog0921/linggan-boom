@@ -26,6 +26,7 @@ import FlywheelSection from './components/FlywheelSection.jsx';
 import CookieAccountSection from './components/CookieAccountSection.jsx';
 import BatchSettingsModal from './components/BatchSettingsModal.jsx';
 import AddAccountModal from './components/AddAccountModal.jsx';
+import ConfirmModal from './components/ConfirmModal.jsx';
 
 const TABS = [
   { id: 'tab-collect', label: '采集', ariaControls: 'panel-collect' },
@@ -33,7 +34,9 @@ const TABS = [
   { id: 'tab-config', label: '配置', ariaControls: 'panel-config' },
 ];
 
-const BRAND_LOGO_SRC = getBrandAssetUrl(BRAND_ASSETS.logo);
+const CONTENT_WORKBENCH_PROD_URL = 'https://lingganboom.fun';
+const CONTENT_WORKBENCH_LOCAL_URL = 'http://localhost:3000';
+
 const BRAND_BANNER_SRC = getBrandAssetUrl(BRAND_ASSETS.banner);
 
 const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
@@ -75,12 +78,14 @@ export default function App() {
   const [batchControlsVisible, setBatchControlsVisible] = useState(false);
   const [batchPaused, setBatchPaused] = useState(false);
   const [batchStopping, setBatchStopping] = useState(false);
+  const [busyActions, setBusyActions] = useState({});
 
   const [notice, setNotice] = useState({ message: '', type: 'info', visible: false });
   const [idleClaimSnapshot, setIdleClaimSnapshot] = useState(null);
 
   const [flywheelUrl, setFlywheelUrl] = useState('');
   const [flywheelStatus, setFlywheelStatus] = useState('unconfigured');
+  const [authorizationCode, setAuthorizationCode] = useState('');
   const [stationPairingCode, setStationPairingCode] = useState('');
   const [stationStatus, setStationStatus] = useState({ registered: false });
 
@@ -94,6 +99,18 @@ export default function App() {
   const batchModalResolveRef = useRef(null);
 
   const [addAccountModalOpen, setAddAccountModalOpen] = useState(false);
+  const [removingAccountId, setRemovingAccountId] = useState('');
+  const [confirmDialog, setConfirmDialog] = useState({
+    open: false,
+    title: '',
+    message: '',
+    detail: '',
+    confirmText: '',
+    confirmTone: 'danger',
+    onConfirm: null,
+  });
+  const noticeTimerRef = useRef(null);
+  const busyActionsRef = useRef({});
 
   useEffect(() => {
     let mounted = true;
@@ -257,12 +274,87 @@ export default function App() {
   }, []);
 
   const showNotice = useCallback((message, type = 'info') => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
     setNotice({ message, type, visible: true });
+    noticeTimerRef.current = setTimeout(() => {
+      setNotice((current) => ({ ...current, visible: false }));
+      noticeTimerRef.current = null;
+    }, type === 'error' ? 5000 : 3600);
   }, []);
 
   const hideNotice = useCallback(() => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current);
+      noticeTimerRef.current = null;
+    }
     setNotice({ message: '', type: 'info', visible: false });
   }, []);
+
+  const handleWorkbenchUrlChange = useCallback((nextUrl) => {
+    const value = String(nextUrl || '');
+    setFlywheelUrl(value);
+    setFlywheelStatus(value.trim() ? 'configured' : 'unconfigured');
+  }, []);
+
+  const handleUseWorkbenchPreset = useCallback(async (serverUrl) => {
+    const value = String(serverUrl || '').trim();
+    handleWorkbenchUrlChange(value);
+    try {
+      await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, {
+        config: { serverUrl: value, enabled: true },
+      });
+    } catch {}
+  }, [handleWorkbenchUrlChange]);
+
+  useEffect(() => () => {
+    if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current);
+  }, []);
+
+  const setBusyActionState = useCallback((key, busy) => {
+    const next = { ...busyActionsRef.current };
+    if (busy) next[key] = true;
+    else delete next[key];
+    busyActionsRef.current = next;
+    setBusyActions(next);
+  }, []);
+
+  const withBusyAction = useCallback(async (key, job) => {
+    if (!key) return job();
+    if (busyActionsRef.current[key]) return undefined;
+    setBusyActionState(key, true);
+    try {
+      return await job();
+    } finally {
+      setBusyActionState(key, false);
+    }
+  }, [setBusyActionState]);
+
+  const showConfirmDialog = useCallback(({ title, message, detail = '', confirmText = '确认', confirmTone = 'danger' }) => {
+    return new Promise((resolve) => {
+      setConfirmDialog({
+        open: true,
+        title,
+        message,
+        detail,
+        confirmText,
+        confirmTone,
+        onConfirm: resolve,
+      });
+    });
+  }, []);
+
+  const handleConfirmResolve = useCallback((result) => {
+    if (confirmDialog.onConfirm) confirmDialog.onConfirm(result);
+    setConfirmDialog({
+      open: false,
+      title: '',
+      message: '',
+      detail: '',
+      confirmText: '',
+      confirmTone: 'danger',
+      onConfirm: null,
+    });
+  }, [confirmDialog]);
 
   const idleClaimNotice = useMemo(
     () => formatTaskLeaseIdleNotice(idleClaimSnapshot),
@@ -302,6 +394,16 @@ export default function App() {
     }
   }, []);
 
+  const requirePluginAuthorization = useCallback(() => {
+    if (stationStatus?.authorized) return true;
+    setActiveTab('tab-config');
+    showNotice(
+      stationStatus?.authorizationMessage || '当前浏览器还没有插件授权。请先去内容工作台设置生成授权码，再回到插件激活。',
+      'warning',
+    );
+    return false;
+  }, [showNotice, stationStatus]);
+
   const handleThemeToggle = useCallback(async () => {
     const next = currentTheme === 'ac-ui' ? 'default' : 'ac-ui';
     try { await setTheme(next); } catch {}
@@ -310,24 +412,28 @@ export default function App() {
   }, [currentTheme]);
 
   const handleCollectNote = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (!capabilities.canCollectPrimary) {
       showNotice(getPrimaryActionWarning(platform, mode, capabilities), 'warning');
       return;
     }
-    hideNotice();
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    setProgressStatus(platform === PLATFORM.DOUYIN ? '正在发起视频采集...' : '正在发起笔记采集...');
-    try {
-      await sendToTab(tabId, { action: MSG.COLLECT_SINGLE_NOTE });
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [capabilities, platform, mode, tabId, hideNotice, showNotice]);
+    await withBusyAction('collectPrimary', async () => {
+      hideNotice();
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      setProgressStatus(platform === PLATFORM.DOUYIN ? '正在发起视频采集...' : '正在发起笔记采集...');
+      try {
+        await sendToTab(tabId, { action: MSG.COLLECT_SINGLE_NOTE });
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [capabilities, platform, mode, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleCollectSecondary = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (!capabilities.canCollectSecondary) {
       showNotice(getSecondaryActionWarning(platform, mode, capabilities), 'warning');
       return;
@@ -355,21 +461,24 @@ export default function App() {
         commentDepthMode,
       };
     }
-    hideNotice();
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    const action = isCommentScene ? MSG.COLLECT_SINGLE_COMMENT : MSG.COLLECT_AUTHOR;
-    setProgressStatus(isCommentScene ? '正在发起评论采集...' : '正在发起博主采集...');
-    try {
-      await sendToTab(tabId, isCommentScene ? payload : { action });
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [capabilities, platform, mode, tabId, hideNotice, showNotice]);
+    await withBusyAction('collectSecondary', async () => {
+      hideNotice();
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      const action = isCommentScene ? MSG.COLLECT_SINGLE_COMMENT : MSG.COLLECT_AUTHOR;
+      setProgressStatus(isCommentScene ? '正在发起评论采集...' : '正在发起博主采集...');
+      try {
+        await sendToTab(tabId, isCommentScene ? payload : { action });
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [capabilities, platform, mode, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleCommentImages = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (!capabilities.canDownloadCommentImages) {
       showNotice('请先进入抖音严格详情页，再执行评论图片区下载。', 'warning');
       return;
@@ -383,212 +492,302 @@ export default function App() {
     const commentDepthMode = settings.commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES
       ? COMMENT_DEPTH_MODE.ALL_REPLIES
       : COMMENT_DEPTH_MODE.TWO_LEVEL;
-    hideNotice();
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    setProgressStatus('正在下载当前视频评论图片区...');
-    try {
-      const result = await sendToTab(tabId, {
-        action: MSG.DOWNLOAD_CURRENT_COMMENT_IMAGES,
-        maxTotal: settings.maxTotal,
-        maxSubComments: commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 0 : undefined,
-        commentDepthMode,
-      });
-      setProgressVisible(false);
-      if (result?.stopped) {
-        showNotice(
-          result?.downloaded > 0
-            ? `评论图片区已停止，已打包 ${result?.downloaded || 0}/${result?.total || 0}，高清 ${result?.hdCount || 0}`
-            : (result?.message || '评论图片区下载已停止'),
-          'warning',
-        );
-      } else {
-        showNotice(
-          `评论图片区下载完成：成功 ${result?.downloaded || 0}/${result?.total || 0}，高清 ${result?.hdCount || 0}`,
-          'info',
-        );
+    await withBusyAction('commentImages', async () => {
+      hideNotice();
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      setProgressStatus('正在下载当前视频评论图片区...');
+      try {
+        const result = await sendToTab(tabId, {
+          action: MSG.DOWNLOAD_CURRENT_COMMENT_IMAGES,
+          maxTotal: settings.maxTotal,
+          maxSubComments: commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 0 : undefined,
+          commentDepthMode,
+        });
+        setProgressVisible(false);
+        if (result?.stopped) {
+          showNotice(
+            result?.downloaded > 0
+              ? `评论图片区已停止，已打包 ${result?.downloaded || 0}/${result?.total || 0}，高清 ${result?.hdCount || 0}`
+              : (result?.message || '评论图片区下载已停止'),
+            'warning',
+          );
+        } else {
+          showNotice(
+            `评论图片区下载完成：成功 ${result?.downloaded || 0}/${result?.total || 0}，高清 ${result?.hdCount || 0}`,
+            'success',
+          );
+        }
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
       }
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [capabilities, tabId, hideNotice, showNotice]);
+    });
+  }, [capabilities, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleBatchNotes = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (!capabilities.canBatchNotes) {
       showNotice(getBatchActionWarning(platform, mode, capabilities), 'warning');
       return;
     }
     const settings = await openBatchSettings('notes', platform);
     if (!settings) return;
-    hideNotice();
-    try {
-      await sendToBackground(MSG.START_BATCH_NOTES, {
-        tabId,
-        mode,
-        count: settings.count,
-        topByLikes: settings.topByLikes,
-      });
-      setProgressVisible(true);
-      setProgressCurrent(0);
-      setProgressTotal(settings.count);
-      setProgressStatus('批量笔记任务已启动');
-      setBatchControlsVisible(true);
-      setBatchPaused(false);
-      setBatchStopping(false);
-    } catch (err) {
-      setProgressVisible(false);
-      setBatchControlsVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [capabilities, platform, mode, tabId, hideNotice, showNotice]);
+    await withBusyAction('batchNotes', async () => {
+      hideNotice();
+      try {
+        await sendToBackground(MSG.START_BATCH_NOTES, {
+          tabId,
+          mode,
+          count: settings.count,
+          topByLikes: settings.topByLikes,
+        });
+        setProgressVisible(true);
+        setProgressCurrent(0);
+        setProgressTotal(settings.count);
+        setProgressStatus('批量笔记任务已启动');
+        setBatchControlsVisible(true);
+        setBatchPaused(false);
+        setBatchStopping(false);
+        showNotice(`已启动批量笔记：本轮预计采集 ${settings.count} 条。`, 'info');
+      } catch (err) {
+        setProgressVisible(false);
+        setBatchControlsVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [capabilities, platform, mode, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleBatchComments = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (!capabilities.canBatchComments) {
       showNotice(getBatchActionWarning(platform, mode, capabilities), 'warning');
       return;
     }
     const settings = await openBatchSettings('comments', platform);
     if (!settings) return;
-    hideNotice();
-    try {
-      await sendToBackground(MSG.START_BATCH_COMMENTS, {
-        tabId,
-        mode,
-        count: settings.count,
-        topByLikes: settings.topByLikes,
-        commentLimit: settings.commentLimit,
-        commentDepthMode: settings.commentDepthMode,
-      });
-      setProgressVisible(true);
-      setProgressCurrent(0);
-      setProgressTotal(settings.count || 0);
-      setProgressStatus('批量评论任务已启动');
-      setProgressDepthMode(settings.commentDepthMode);
-      setBatchControlsVisible(true);
-      setBatchPaused(false);
-      setBatchStopping(false);
-    } catch (err) {
-      setProgressVisible(false);
-      setBatchControlsVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [capabilities, platform, mode, tabId, hideNotice, showNotice]);
+    await withBusyAction('batchComments', async () => {
+      hideNotice();
+      try {
+        await sendToBackground(MSG.START_BATCH_COMMENTS, {
+          tabId,
+          mode,
+          count: settings.count,
+          topByLikes: settings.topByLikes,
+          commentLimit: settings.commentLimit,
+          commentDepthMode: settings.commentDepthMode,
+        });
+        setProgressVisible(true);
+        setProgressCurrent(0);
+        setProgressTotal(settings.count || 0);
+        setProgressStatus('批量评论任务已启动');
+        setProgressDepthMode(settings.commentDepthMode);
+        setBatchControlsVisible(true);
+        setBatchPaused(false);
+        setBatchStopping(false);
+        showNotice(`已启动批量评论：本轮预计处理 ${settings.count} 条内容。`, 'info');
+      } catch (err) {
+        setProgressVisible(false);
+        setBatchControlsVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [capabilities, platform, mode, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handlePause = useCallback(async () => {
-    hideNotice();
-    try {
-      await Promise.all([
-        sendToBackground(MSG.PAUSE_BATCH_NOTES, { tabId }),
-        sendToBackground(MSG.PAUSE_BATCH_COMMENTS, { tabId }),
-      ]);
-      setBatchPaused(true);
-      showNotice('任务已暂停，可随时继续。', 'info');
-    } catch (err) {
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [tabId, hideNotice, showNotice]);
+    await withBusyAction('pauseBatch', async () => {
+      hideNotice();
+      try {
+        await Promise.all([
+          sendToBackground(MSG.PAUSE_BATCH_NOTES, { tabId }),
+          sendToBackground(MSG.PAUSE_BATCH_COMMENTS, { tabId }),
+        ]);
+        setBatchPaused(true);
+        showNotice('任务已暂停，可随时继续。', 'info');
+      } catch (err) {
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [tabId, hideNotice, showNotice, withBusyAction]);
 
   const handleResume = useCallback(async () => {
-    hideNotice();
-    try {
-      await Promise.all([
-        sendToBackground(MSG.RESUME_BATCH_NOTES, { tabId }),
-        sendToBackground(MSG.RESUME_BATCH_COMMENTS, { tabId }),
-      ]);
-      setBatchPaused(false);
-      showNotice('任务继续执行中。', 'info');
-    } catch (err) {
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [tabId, hideNotice, showNotice]);
+    await withBusyAction('resumeBatch', async () => {
+      hideNotice();
+      try {
+        await Promise.all([
+          sendToBackground(MSG.RESUME_BATCH_NOTES, { tabId }),
+          sendToBackground(MSG.RESUME_BATCH_COMMENTS, { tabId }),
+        ]);
+        setBatchPaused(false);
+        showNotice('任务继续执行中。', 'info');
+      } catch (err) {
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [tabId, hideNotice, showNotice, withBusyAction]);
 
   const handleStop = useCallback(async () => {
-    hideNotice();
-    setBatchStopping(true);
-    try {
-      await Promise.all([
-        sendToBackground(MSG.STOP_BATCH_NOTES, { tabId }),
-        sendToBackground(MSG.STOP_BATCH_COMMENTS, { tabId }),
-      ]);
-      setBatchControlsVisible(false);
-      setProgressVisible(false);
-      setBatchStopping(false);
-      showNotice('任务已停止。', 'info');
-    } catch (err) {
-      setBatchStopping(false);
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [tabId, hideNotice, showNotice]);
+    const confirmed = await showConfirmDialog({
+      title: '确认停止当前任务',
+      message: '停止后会结束当前批量执行，本轮未处理完的内容不会继续自动采集。',
+      detail: '如果只是暂时离开，优先使用“暂停”，这样可以稍后继续当前进度。',
+      confirmText: '确认停止',
+      confirmTone: 'danger',
+    });
+    if (!confirmed) return;
+    await withBusyAction('stopBatch', async () => {
+      hideNotice();
+      setBatchStopping(true);
+      try {
+        await Promise.all([
+          sendToBackground(MSG.STOP_BATCH_NOTES, { tabId }),
+          sendToBackground(MSG.STOP_BATCH_COMMENTS, { tabId }),
+        ]);
+        setBatchControlsVisible(false);
+        setProgressVisible(false);
+        setBatchStopping(false);
+        showNotice('任务已停止。', 'warning');
+      } catch (err) {
+        setBatchStopping(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [tabId, hideNotice, showNotice, withBusyAction, showConfirmDialog]);
 
   const handleDashboard = useCallback(async () => {
-    hideNotice();
-    try {
-      await sendToBackground(MSG.TOGGLE_DASHBOARD, { tabId });
-    } catch (err) {
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [tabId, hideNotice, showNotice]);
+    if (!requirePluginAuthorization()) return;
+    await withBusyAction('openDashboard', async () => {
+      hideNotice();
+      try {
+        await sendToBackground(MSG.TOGGLE_DASHBOARD, { tabId });
+      } catch (err) {
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleExport = useCallback(async () => {
-    hideNotice();
-    try {
-      await sendToTab(tabId, { action: MSG.EXPORT_JSON });
-      showNotice('导出任务已发起。', 'info');
-    } catch (err) {
-      showNotice(toFriendlyError(err), 'warning');
-    }
-  }, [tabId, hideNotice, showNotice]);
+    if (!requirePluginAuthorization()) return;
+    await withBusyAction('quickExport', async () => {
+      hideNotice();
+      try {
+        await sendToTab(tabId, { action: MSG.EXPORT_JSON });
+        showNotice('导出任务已发起。', 'success');
+      } catch (err) {
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleMaintenance = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     if (platform === PLATFORM.UNKNOWN) {
       showNotice('请先打开小红书或抖音页面，再执行数据维护。', 'warning');
       return;
     }
-    hideNotice();
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    setProgressStatus('正在整理历史数据...');
-    try {
-      const response = await sendToTab(tabId, { action: MSG.RUN_DATA_MAINTENANCE });
-      setProgressVisible(false);
-      const mStats = unwrapTabResponseData(response, response?.stats || {}) || {};
-      showNotice(formatMaintenanceStats(mStats), 'info');
-      loadStats(tabId);
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
+    await withBusyAction('maintenance', async () => {
+      hideNotice();
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      setProgressStatus('正在整理历史数据...');
+      try {
+        const response = await sendToTab(tabId, { action: MSG.RUN_DATA_MAINTENANCE });
+        setProgressVisible(false);
+        const mStats = unwrapTabResponseData(response, response?.stats || {}) || {};
+        showNotice(formatMaintenanceStats(mStats), 'success');
+        loadStats(tabId);
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [platform, tabId, hideNotice, showNotice, loadStats, withBusyAction, requirePluginAuthorization]);
+
+  const handlePluginAuthorize = useCallback(async () => {
+    const serverUrl = flywheelUrl.trim();
+    const code = authorizationCode.trim();
+    if (!serverUrl) {
+      showNotice('请先配置工作台地址。', 'warning');
+      return;
     }
-  }, [platform, tabId, hideNotice, showNotice, loadStats]);
+    if (!code) {
+      showNotice('请输入内容工作台设置里生成的授权码。', 'warning');
+      return;
+    }
+    await withBusyAction('pluginAuthorize', async () => {
+      hideNotice();
+      try {
+        const result = await sendToBackground(MSG.AUTHORIZE_PLUGIN_ACCESS, {
+          serverUrl,
+          authorizationCode: code,
+          browserLabel: navigator.userAgent || '',
+        });
+        if (!result?.success) {
+          throw new Error(result?.error || '授权失败');
+        }
+        setAuthorizationCode('');
+        await loadStationStatus();
+        showNotice('插件授权已激活。接下来可以绑定执行工位并使用采集能力。', 'success');
+      } catch (err) {
+        showNotice(`授权失败：${toFriendlyError(err)}`, 'warning');
+      }
+    });
+  }, [authorizationCode, flywheelUrl, hideNotice, loadStationStatus, showNotice, withBusyAction]);
+
+  const handleClearPluginAuthorization = useCallback(async () => {
+    const confirmed = await showConfirmDialog({
+      title: '清除插件授权',
+      message: '清除后，这个浏览器将失去插件使用资格，并解除当前执行工位绑定。',
+      detail: '如果只是换工位，请保留授权，只重新绑定配对码。',
+      confirmText: '确认清除',
+      confirmTone: 'danger',
+    });
+    if (!confirmed) return;
+    await withBusyAction('clearPluginAuthorization', async () => {
+      hideNotice();
+      try {
+        await sendToBackground(MSG.CLEAR_PLUGIN_AUTHORIZATION);
+        setAuthorizationCode('');
+        setStationPairingCode('');
+        await loadStationStatus();
+        showNotice('插件授权已清除。', 'warning');
+      } catch (err) {
+        showNotice(`清除失败：${toFriendlyError(err)}`, 'warning');
+      }
+    });
+  }, [hideNotice, loadStationStatus, showConfirmDialog, showNotice, withBusyAction]);
 
   const handleFlywheelTest = useCallback(async () => {
     const serverUrl = flywheelUrl.trim();
     if (!serverUrl) {
-      showNotice('请输入飞轮服务器地址。', 'warning');
+      showNotice('请输入工作台地址。', 'warning');
       return;
     }
-    hideNotice();
-    setFlywheelStatus('testing');
-    try {
-      const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
-      const resp = await fetch(`${url}/api/collect/status`, { signal: AbortSignal.timeout(5000) });
-      if (resp.ok) {
-        setFlywheelStatus('connected');
-        await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, { config: { serverUrl, enabled: true } });
-        showNotice('连接成功！飞轮工作台已就绪。', 'info');
-      } else {
+    await withBusyAction('flywheelTest', async () => {
+      hideNotice();
+      setFlywheelStatus('testing');
+      try {
+        const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
+        const resp = await fetch(`${url}/api/collect/status`, { signal: AbortSignal.timeout(5000) });
+        if (resp.ok) {
+          setFlywheelStatus('connected');
+          await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, { config: { serverUrl, enabled: true } });
+          showNotice('连接成功！内容工作台已就绪。', 'success');
+        } else {
+          setFlywheelStatus('disconnected');
+          showNotice(`连接失败：服务器返回 ${resp.status}`, 'warning');
+        }
+      } catch (err) {
         setFlywheelStatus('disconnected');
-        showNotice(`连接失败：服务器返回 ${resp.status}`, 'warning');
+        showNotice(`连接失败：${err.message || '无法连接'}`, 'warning');
       }
-    } catch (err) {
-      setFlywheelStatus('disconnected');
-      showNotice(`连接失败：${err.message || '无法连接'}`, 'warning');
-    }
-  }, [flywheelUrl, hideNotice, showNotice]);
+    });
+  }, [flywheelUrl, hideNotice, showNotice, withBusyAction]);
 
   const handleStationPair = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     const serverUrl = flywheelUrl.trim();
     const code = stationPairingCode.trim();
     if (!serverUrl) {
@@ -599,136 +798,135 @@ export default function App() {
       showNotice('请输入工作台生成的配对码。', 'warning');
       return;
     }
-    setStationStatus({ registered: false, pairing: true });
-    try {
-      const result = await sendToBackground(MSG.REGISTER_EXECUTION_STATION, {
-        serverUrl,
-        pairingCode: code,
-        browserLabel: navigator.userAgent || '',
-      });
-      if (!result?.success) {
-        throw new Error(result?.error || '绑定失败');
+    await withBusyAction('stationPair', async () => {
+      setStationStatus((current) => ({ ...current, registered: false, pairing: true }));
+      try {
+        const result = await sendToBackground(MSG.REGISTER_EXECUTION_STATION, {
+          serverUrl,
+          pairingCode: code,
+          browserLabel: navigator.userAgent || '',
+        });
+        if (!result?.success) {
+          throw new Error(result?.error || '绑定失败');
+        }
+        setStationPairingCode('');
+        await loadStationStatus();
+        const stationRole = result?.identity?.role === 'manual' ? '手动采集工位' : '监控工位';
+        showNotice(`${stationRole}已绑定，这个浏览器会按这条车道接任务。`, 'success');
+      } catch (err) {
+        await loadStationStatus();
+        showNotice(`绑定失败：${toFriendlyError(err)}`, 'warning');
       }
-      setStationPairingCode('');
-      setStationStatus({
-        registered: true,
-        identity: result.identity,
-        heartbeat: result.heartbeat,
-      });
-      const stationRole = result?.identity?.role === 'manual' ? '手动采集工位' : '监控工位';
-      showNotice(`${stationRole}已绑定，这个浏览器会按这条车道接任务。`, 'info');
-    } catch (err) {
-      setStationStatus({ registered: false });
-      showNotice(`绑定失败：${toFriendlyError(err)}`, 'warning');
-    }
-  }, [flywheelUrl, stationPairingCode, showNotice]);
+    });
+  }, [flywheelUrl, stationPairingCode, showNotice, withBusyAction, requirePluginAuthorization, loadStationStatus]);
 
   const handleSyncToFlywheel = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
     const serverUrl = flywheelUrl.trim();
     if (!serverUrl) {
-      showNotice('请先配置飞轮服务器地址。', 'warning');
+      showNotice('请先配置工作台地址。', 'warning');
       return;
     }
-    hideNotice();
-    await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, { config: { serverUrl, enabled: true } });
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    setProgressStatus('正在读取本地数据...');
-    try {
-      const xhsTabs = await chrome.tabs.query({ url: '*://*.xiaohongshu.com/*' });
-      let dataTabId = xhsTabs.find(t => t.id === tabId)?.id || xhsTabs[0]?.id;
-      if (!dataTabId) {
-        setProgressVisible(false);
-        showNotice('请先打开小红书页面，插件需要通过页面读取采集数据。', 'warning');
-        return;
-      }
-
-      const [notesResp, commentsResp, authorsResp] = await Promise.all([
-        sendToTab(dataTabId, { action: MSG.GET_ALL_NOTES }),
-        sendToTab(dataTabId, { action: MSG.GET_ALL_COMMENTS }),
-        sendToTab(dataTabId, { action: MSG.GET_ALL_AUTHORS }),
-      ]);
-
-      const notes = Array.isArray(notesResp) ? notesResp : (notesResp?.data || []);
-      const comments = Array.isArray(commentsResp) ? commentsResp : (commentsResp?.data || []);
-      const authors = Array.isArray(authorsResp) ? authorsResp : (authorsResp?.data || []);
-
-      if (!notes || notes.length === 0) {
-        setProgressVisible(false);
-        showNotice('没有可同步的数据。请先在小红书页面采集笔记。', 'warning');
-        return;
-      }
-
-      setProgressStatus(`正在发送 ${notes.length} 条笔记到飞轮...`);
-
-      const mappedNotes = notes.map(mapNoteToFlywheel);
-      const mappedComments = (comments || []).map(mapCommentToFlywheel);
-      const mappedAuthors = (authors || []).map(mapAuthorToFlywheel);
-
-      const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
-      const resp = await fetch(`${url}/api/collect/batch`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notes: mappedNotes, comments: mappedComments, authors: mappedAuthors }),
-        signal: AbortSignal.timeout(30000),
-      });
-
-      setProgressVisible(false);
-      if (resp.ok) {
-        const data = await resp.json();
-        const m = data.meta || {};
-        const imported = data.imported || 0;
-        const skipped = data.skipped || 0;
-        showNotice(`发送完成：导入 ${imported} 条，跳过 ${skipped} 条（笔记 ${m.notesReceived || 0}，评论 ${m.commentsReceived || 0}，博主 ${m.authorsReceived || 0}）`, 'info');
-      } else {
-        const text = await resp.text().catch(() => '');
-        showNotice(`发送失败：服务器返回 ${resp.status} ${text}`, 'warning');
-      }
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(`发送失败：${err.message || '网络错误'}`, 'warning');
-    }
-  }, [flywheelUrl, tabId, hideNotice, showNotice]);
-
-  const handleGetCookies = useCallback(async () => {
-    hideNotice();
-    setProgressVisible(true);
-    setProgressCurrent(0);
-    setProgressTotal(1);
-    setProgressStatus('正在获取 Cookie...');
-    try {
-      const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES);
-      setProgressVisible(false);
-      setCookieStatus(result.results || {});
-      if (result.success) {
-        const xhs = result.results?.xhs;
-        const dy = result.results?.douyin;
-
-        if (xhs?.count > 0) {
-          const name = `小红书-${new Date().toLocaleDateString('zh-CN')} ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
-          await sendToBackground('addAccount', {
-            name,
-            cookieJson: JSON.stringify(xhs.cookies),
-            platform: 'xhs',
-            dailyQuotaLimit: 100,
-          });
-          loadAccounts();
+    await withBusyAction('syncFlywheel', async () => {
+      hideNotice();
+      await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, { config: { serverUrl, enabled: true } });
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      setProgressStatus('正在读取本地数据...');
+      try {
+        const xhsTabs = await chrome.tabs.query({ url: '*://*.xiaohongshu.com/*' });
+        const dataTabId = xhsTabs.find(t => t.id === tabId)?.id || xhsTabs[0]?.id;
+        if (!dataTabId) {
+          setProgressVisible(false);
+          showNotice('请先打开小红书页面，插件需要通过页面读取采集数据。', 'warning');
+          return;
         }
 
-        const parts = [];
-        if (xhs?.count > 0) parts.push(`小红书 ${xhs.count} 条`);
-        if (dy?.count > 0) parts.push(`抖音 ${dy.count} 条`);
-        const accountNote = xhs?.count > 0 ? '，小红书 Cookie 已自动保存为采集账号。' : '';
-        showNotice(`获取成功：${parts.join('，')}${accountNote}`, 'info');
-      } else {
-        showNotice('获取 Cookie 失败，请确认已登录小红书或抖音。', 'warning');
+        const [notesResp, commentsResp, authorsResp] = await Promise.all([
+          sendToTab(dataTabId, { action: MSG.GET_ALL_NOTES }),
+          sendToTab(dataTabId, { action: MSG.GET_ALL_COMMENTS }),
+          sendToTab(dataTabId, { action: MSG.GET_ALL_AUTHORS }),
+        ]);
+
+        const notes = Array.isArray(notesResp) ? notesResp : (notesResp?.data || []);
+        const comments = Array.isArray(commentsResp) ? commentsResp : (commentsResp?.data || []);
+        const authors = Array.isArray(authorsResp) ? authorsResp : (authorsResp?.data || []);
+
+        if (!notes || notes.length === 0) {
+          setProgressVisible(false);
+          showNotice('没有可同步的数据。请先在小红书页面采集笔记。', 'warning');
+          return;
+        }
+
+        setProgressStatus(`正在发送 ${notes.length} 条笔记到飞轮...`);
+
+        const result = await sendToBackground(MSG.SYNC_TO_WORKBENCH, {
+          notes: notes.map(mapNoteToFlywheel),
+          comments: (comments || []).map(mapCommentToFlywheel),
+          authors: (authors || []).map(mapAuthorToFlywheel),
+        });
+        setProgressVisible(false);
+        if (result?.success) {
+          const m = result.meta || {};
+          const imported = result.imported || 0;
+          const skipped = result.skipped || 0;
+          showNotice(`发送完成：导入 ${imported} 条，跳过 ${skipped} 条（笔记 ${m.notesReceived || 0}，评论 ${m.commentsReceived || 0}，博主 ${m.authorsReceived || 0}）`, imported > 0 ? 'success' : 'warning');
+        } else {
+          showNotice(`发送失败：${result?.error || '工作台拒绝了这次同步'}`, 'warning');
+        }
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(`发送失败：${err.message || '网络错误'}`, 'warning');
       }
-    } catch (err) {
-      setProgressVisible(false);
-      showNotice(toFriendlyError(err), 'warning');
+    });
+  }, [flywheelUrl, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
+
+  const handleGetCookies = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
+    if (platform === PLATFORM.UNKNOWN) {
+      showNotice('请先打开小红书或抖音页面，再抓取当前平台 Cookie。', 'warning');
+      return;
     }
-  }, [hideNotice, showNotice, loadAccounts]);
+    await withBusyAction('getCookies', async () => {
+      hideNotice();
+      setProgressVisible(true);
+      setProgressCurrent(0);
+      setProgressTotal(1);
+      const platformText = platform === PLATFORM.DOUYIN ? '抖音' : '小红书';
+      setProgressStatus(`正在获取${platformText} Cookie...`);
+      try {
+        const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES, { platform });
+        setProgressVisible(false);
+        setCookieStatus(result.results || {});
+        if (result.success) {
+          const xhs = result.results?.xhs;
+          const dy = result.results?.douyin;
+
+          if (platform === PLATFORM.XHS && xhs?.count > 0) {
+            const name = `小红书-${new Date().toLocaleDateString('zh-CN')} ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+            await sendToBackground('addAccount', {
+              name,
+              cookieJson: JSON.stringify(xhs.cookies),
+              platform: 'xhs',
+              dailyQuotaLimit: 100,
+            });
+            loadAccounts();
+          }
+
+          const currentResult = platform === PLATFORM.DOUYIN ? dy : xhs;
+          const currentLabel = platform === PLATFORM.DOUYIN ? '抖音' : '小红书';
+          const accountNote = platform === PLATFORM.XHS && xhs?.count > 0 ? '，小红书 Cookie 已自动保存为采集账号。' : '';
+          showNotice(`获取成功：${currentLabel} ${currentResult?.count || 0} 条${accountNote}`, 'success');
+        } else {
+          showNotice(`获取 Cookie 失败，请确认当前${platformText}页面已登录。`, 'warning');
+        }
+      } catch (err) {
+        setProgressVisible(false);
+        showNotice(toFriendlyError(err), 'warning');
+      }
+    });
+  }, [platform, hideNotice, showNotice, loadAccounts, withBusyAction, requirePluginAuthorization]);
 
   const openBatchSettings = useCallback((type, plat) => {
     return new Promise((resolve) => {
@@ -770,56 +968,81 @@ export default function App() {
   }, []);
 
   const handleAddAccount = useCallback(async (accountData) => {
+    if (!requirePluginAuthorization()) {
+      return { success: false, error: stationStatus?.authorizationMessage || 'plugin_authorization_required' };
+    }
     try {
       const response = await sendToBackground('addAccount', accountData);
       if (response?.success) {
-        setAddAccountModalOpen(false);
         loadAccounts();
-      } else {
-        alert(response?.error || '添加失败');
+        showNotice('采集账号已保存。', 'success');
+        return { success: true };
       }
+      return { success: false, error: response?.error || '添加失败' };
     } catch (err) {
-      alert(toFriendlyError(err));
+      return { success: false, error: toFriendlyError(err) };
     }
-  }, [loadAccounts]);
+  }, [loadAccounts, showNotice, requirePluginAuthorization, stationStatus]);
+
+  const handleOpenAddAccount = useCallback(async () => {
+    if (!requirePluginAuthorization()) return;
+    await withBusyAction('openAddAccount', async () => {
+      setAddAccountModalOpen(true);
+    });
+  }, [withBusyAction, requirePluginAuthorization]);
+
+  const handleRemoveAccount = useCallback(async (accountId) => {
+    const target = accounts.find((item) => item.accountId === accountId);
+    const confirmed = await showConfirmDialog({
+      title: '确认删除采集账号',
+      message: `删除后，这个账号不会再参与执行或监控。`,
+      detail: target?.name ? `将删除账号：${target.name}` : '删除后不可恢复，需要重新提取或手动添加。',
+      confirmText: '确认删除',
+      confirmTone: 'danger',
+    });
+    if (!confirmed) return;
+    setRemovingAccountId(accountId);
+    try {
+      await sendToBackground('removeAccount', { accountId });
+      loadAccounts();
+      showNotice('采集账号已删除。', 'success');
+    } catch (err) {
+      showNotice(toFriendlyError(err), 'warning');
+    } finally {
+      setRemovingAccountId('');
+    }
+  }, [accounts, loadAccounts, showConfirmDialog, showNotice]);
 
   const { scene, hint, tags } = getPageContextText(platform, mode, { isDyVideoPage, isDyStrictDetailPage, isStableSearchList });
 
   const platformLabel = platform === PLATFORM.XHS ? '小红书' : platform === PLATFORM.DOUYIN ? '抖音' : '未识别';
-  const subtitle = platform === PLATFORM.DOUYIN
-    ? '抖音内容采集模块（Beta）'
-    : platform === PLATFORM.XHS
-      ? '小红书数据采集工具箱'
-      : '请在小红书或抖音页面使用';
   const nextThemeLabel = currentTheme === 'ac-ui' ? '默认' : 'AC';
   const nextThemeTitle = currentTheme === 'ac-ui' ? '切换到默认主题' : '切换到 AC 主题';
 
   return (
     <div className="popup-container" data-theme={currentTheme === 'ac-ui' ? 'ac-ui' : undefined}>
       <header className="popup-header">
-        <div className="header-brand-stack">
-          <div className="header-brand-mark" aria-hidden="true">
-            <img className="header-brand-logo" src={BRAND_LOGO_SRC} alt="" />
-          </div>
-          <div className="header-copy">
-            <div className="header-brand-banner-shell" aria-hidden="true">
-              <img className="header-brand-banner" src={BRAND_BANNER_SRC} alt="" />
-            </div>
-            <h1>灵感爆爆爆</h1>
-            <p className="subtitle" id="platformSubtitle">{subtitle}</p>
+        <div className="header-brand-stage">
+          <div className="header-brand-banner-shell" aria-hidden="true">
+            <img className="header-brand-banner" src={BRAND_BANNER_SRC} alt="" />
           </div>
         </div>
-        <div className="header-controls">
-          <span className="header-badge" id="platformBadge">{platformLabel}</span>
-          <button
-            id="themeToggle"
-            className="theme-toggle-btn"
-            onClick={handleThemeToggle}
-            title={nextThemeTitle}
-            aria-label={nextThemeTitle}
-          >
-            {nextThemeLabel}
-          </button>
+        <div className="header-side">
+          <div className="header-controls">
+            <span className="header-badge" id="platformBadge">{platformLabel}</span>
+            <button
+              id="themeToggle"
+              className="theme-toggle-btn"
+              onClick={handleThemeToggle}
+              title={nextThemeTitle}
+              aria-label={nextThemeTitle}
+            >
+              {nextThemeLabel}
+            </button>
+          </div>
+          <div className="header-copy">
+            <h1>灵感爆爆爆</h1>
+          </div>
         </div>
       </header>
 
@@ -844,23 +1067,26 @@ export default function App() {
                   onCollectNote={handleCollectNote}
                   onCollectSecondary={handleCollectSecondary}
                   onCommentImages={handleCommentImages}
+                  busyPrimary={Boolean(busyActions.collectPrimary)}
+                  busySecondary={Boolean(busyActions.collectSecondary)}
+                  busyCommentImages={Boolean(busyActions.commentImages)}
                 />
                 <div className="btn-row">
                   <button
                     id="btnBatchNotes"
-                    className="popup-btn primary small"
-                    disabled={!capabilities.canBatchNotes}
+                    className={`popup-btn primary small${busyActions.batchNotes ? ' is-busy' : ''}`}
+                    disabled={!capabilities.canBatchNotes || Boolean(busyActions.batchNotes)}
                     onClick={handleBatchNotes}
                   >
-                    {platform === PLATFORM.DOUYIN ? '批量视频' : '批量笔记'}
+                    {busyActions.batchNotes ? '启动中...' : (platform === PLATFORM.DOUYIN ? '批量视频' : '批量笔记')}
                   </button>
                   <button
                     id="btnBatchComments"
-                    className="popup-btn primary small"
-                    disabled={!capabilities.canBatchComments}
+                    className={`popup-btn primary small${busyActions.batchComments ? ' is-busy' : ''}`}
+                    disabled={!capabilities.canBatchComments || Boolean(busyActions.batchComments)}
                     onClick={handleBatchComments}
                   >
-                    批量评论
+                    {busyActions.batchComments ? '启动中...' : '批量评论'}
                   </button>
                 </div>
               </div>
@@ -885,26 +1111,29 @@ export default function App() {
                   <>
                     <button
                       id="btnPause"
-                      className="popup-btn secondary small"
+                      className={`popup-btn secondary small${busyActions.pauseBatch ? ' is-busy' : ''}`}
                       onClick={handlePause}
+                      disabled={Boolean(busyActions.pauseBatch)}
                       style={{ display: batchPaused ? 'none' : 'block' }}
                     >
-                      暂停
+                      {busyActions.pauseBatch ? '暂停中...' : '暂停'}
                     </button>
                     <button
                       id="btnResume"
-                      className="popup-btn primary small"
+                      className={`popup-btn primary small${busyActions.resumeBatch ? ' is-busy' : ''}`}
                       onClick={handleResume}
+                      disabled={Boolean(busyActions.resumeBatch)}
                       style={{ display: batchPaused ? 'block' : 'none' }}
                     >
-                      继续
+                      {busyActions.resumeBatch ? '继续中...' : '继续'}
                     </button>
                     <button
                       id="btnStop"
-                      className="popup-btn danger small"
+                      className={`popup-btn danger small${busyActions.stopBatch ? ' is-busy' : ''}`}
                       onClick={handleStop}
+                      disabled={Boolean(busyActions.stopBatch)}
                     >
-                      停止
+                      {busyActions.stopBatch ? '停止中...' : '停止'}
                     </button>
                   </>
                 )}
@@ -912,14 +1141,14 @@ export default function App() {
             )}
 
             <div className="bottom-section">
-              <button className="popup-btn outline" id="btnDashboard" onClick={handleDashboard}>
-                打开工作台
+              <button className={`popup-btn outline${busyActions.openDashboard ? ' is-busy' : ''}`} id="btnDashboard" onClick={handleDashboard} disabled={Boolean(busyActions.openDashboard)}>
+                {busyActions.openDashboard ? '打开中...' : '打开工作台'}
               </button>
-              <button className="popup-btn outline" id="btnExport" onClick={handleExport}>
-                快速导出
+              <button className={`popup-btn outline${busyActions.quickExport ? ' is-busy' : ''}`} id="btnExport" onClick={handleExport} disabled={Boolean(busyActions.quickExport)}>
+                {busyActions.quickExport ? '导出中...' : '快速导出'}
               </button>
-              <button className="popup-btn outline" id="btnMaintenance" onClick={handleMaintenance}>
-                数据维护
+              <button className={`popup-btn outline${busyActions.maintenance ? ' is-busy' : ''}`} id="btnMaintenance" onClick={handleMaintenance} disabled={Boolean(busyActions.maintenance)}>
+                {busyActions.maintenance ? '整理中...' : '数据维护'}
               </button>
             </div>
           </div>
@@ -929,14 +1158,15 @@ export default function App() {
           <div id="panel-data" className="tab-panel" role="tabpanel" aria-labelledby="tab-data">
             <StatsSection stats={stats} />
             <CookieAccountSection
+              currentPlatform={platform}
               cookieStatus={cookieStatus}
               accounts={accounts}
               onGetCookies={handleGetCookies}
-              onOpenAddAccount={() => setAddAccountModalOpen(true)}
-              onRemoveAccount={async (accountId) => {
-                await sendToBackground('removeAccount', { accountId });
-                loadAccounts();
-              }}
+              onOpenAddAccount={handleOpenAddAccount}
+              onRemoveAccount={handleRemoveAccount}
+              gettingCookies={Boolean(busyActions.getCookies)}
+              openingAddAccount={Boolean(busyActions.openAddAccount)}
+              removingAccountId={removingAccountId}
             />
           </div>
         )}
@@ -946,19 +1176,34 @@ export default function App() {
             <FlywheelSection
               flywheelUrl={flywheelUrl}
               flywheelStatus={flywheelStatus}
+              authorizationCode={authorizationCode}
+              authorizationStatus={stationStatus}
               stationPairingCode={stationPairingCode}
               stationStatus={stationStatus}
-              onUrlChange={setFlywheelUrl}
+              onUrlChange={handleWorkbenchUrlChange}
+              onUsePresetUrl={handleUseWorkbenchPreset}
+              onAuthorizationCodeChange={setAuthorizationCode}
+              onAuthorize={handlePluginAuthorize}
+              onClearAuthorization={handleClearPluginAuthorization}
               onPairingCodeChange={setStationPairingCode}
               onTest={handleFlywheelTest}
               onPair={handleStationPair}
               onSync={handleSyncToFlywheel}
+              testing={Boolean(busyActions.flywheelTest)}
+              authorizing={Boolean(busyActions.pluginAuthorize)}
+              clearingAuthorization={Boolean(busyActions.clearPluginAuthorization)}
+              pairing={Boolean(busyActions.stationPair)}
+              syncing={Boolean(busyActions.syncFlywheel)}
+              presetUrls={{
+                production: CONTENT_WORKBENCH_PROD_URL,
+                local: CONTENT_WORKBENCH_LOCAL_URL,
+              }}
             />
           </div>
         )}
       </main>
 
-      {displayNotice && <Notice {...displayNotice} onClose={hideNotice} />}
+      {displayNotice && <Notice {...displayNotice} onClose={notice.visible ? hideNotice : null} />}
 
       <BatchSettingsModal
         open={batchModalOpen}
@@ -976,7 +1221,7 @@ export default function App() {
         onConfirm={handleAddAccount}
         onExtractCookie={async () => {
           try {
-            const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES);
+            const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES, { platform: PLATFORM.XHS });
             const xhs = result?.results?.xhs;
             return {
               success: Number(xhs?.count || 0) > 0,
@@ -989,6 +1234,17 @@ export default function App() {
           }
         }}
         onCookieResult={setCookieStatus}
+      />
+
+      <ConfirmModal
+        open={confirmDialog.open}
+        title={confirmDialog.title}
+        message={confirmDialog.message}
+        detail={confirmDialog.detail}
+        confirmText={confirmDialog.confirmText}
+        confirmTone={confirmDialog.confirmTone}
+        onConfirm={() => handleConfirmResolve(true)}
+        onCancel={() => handleConfirmResolve(false)}
       />
     </div>
   );
