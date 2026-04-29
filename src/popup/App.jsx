@@ -111,10 +111,6 @@ export default function App() {
     onConfirm: null,
   });
   const noticeTimerRef = useRef(null);
-  const showNoticeRef = useRef(showNotice);
-  const hideNoticeRef = useRef(hideNotice);
-  showNoticeRef.current = showNotice;
-  hideNoticeRef.current = hideNotice;
   const busyActionsRef = useRef({});
 
   useEffect(() => {
@@ -294,6 +290,11 @@ export default function App() {
     }
     setNotice({ message: '', type: 'info', visible: false });
   }, []);
+
+  const showNoticeRef = useRef(showNotice);
+  const hideNoticeRef = useRef(hideNotice);
+  showNoticeRef.current = showNotice;
+  hideNoticeRef.current = hideNotice;
 
   const handleWorkbenchUrlChange = useCallback((nextUrl) => {
     const value = String(nextUrl || '');
