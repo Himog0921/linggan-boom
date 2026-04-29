@@ -65,6 +65,7 @@ function renderLinkAction(url, actionText = '打开') {
 
 export default function App() {
   const [currentTab, setCurrentTab] = useState('notes');
+  const [imgErrorIds, setImgErrorIds] = useState(new Set());
   const [allData, setAllData] = useState([]);
   const [searchKeyword, setSearchKeyword] = useState('');
   const [filterType, setFilterType] = useState('all');
@@ -501,13 +502,13 @@ export default function App() {
       return val ? '是' : '否';
     }
     if (col.key === 'avatar') {
-      if (!val || val === 'undefined' || val === 'null') return '-';
+      if (!val || val === 'undefined' || val === 'null' || imgErrorIds.has(item.id)) return '-';
       return (
         <img
           src={val}
           alt=""
           style={{ width: 32, height: 32, borderRadius: '50%', border: '1px solid #ccc', objectFit: 'cover' }}
-          onError={(e) => { e.target.style.display = 'none'; e.target.parentElement.textContent = '-'; }}
+          onError={() => setImgErrorIds(prev => new Set(prev).add(item.id))}
         />
       );
     }

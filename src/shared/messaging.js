@@ -16,12 +16,19 @@ export function isContextValid() {
 /**
  * 发送消息到 Background Service Worker
  */
-export function sendToBackground(action, data = {}) {
+export function sendToBackground(action, data = {}, { timeoutMs = 15000 } = {}) {
   if (!isContextValid()) {
     return Promise.reject(new Error('Extension context invalidated'));
   }
   return new Promise((resolve, reject) => {
+    const timer = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+      ? setTimeout(() => {
+        reject(new Error(`sendToBackground timeout: ${String(action || 'unknown_action')}`));
+      }, Number(timeoutMs))
+      : null;
+
     chrome.runtime.sendMessage({ action, ...data }, (response) => {
+      if (timer) clearTimeout(timer);
       if (chrome.runtime.lastError) {
         reject(chrome.runtime.lastError);
       } else {

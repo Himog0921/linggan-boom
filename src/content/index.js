@@ -187,6 +187,19 @@ registerDashboardBridgeListener();
 if (isContextValid()) {
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (!isContextValid()) return; // 扩展已重载，忽略消息
+
+    // 工作台任务控制消息（停止/暂停）——直接处理，不经过 runtime messageHandlers
+    if (message.action === MSG.WORKBENCH_TASK_CONTROL) {
+      const batchNoteCtrl = xhsPageController.getBatchNoteCtrl?.();
+      const batchCommentCtrl = xhsPageController.getBatchCommentCtrl?.();
+      if (message.command === 'stop') {
+        batchNoteCtrl?.stop?.();
+        batchCommentCtrl?.stop?.();
+      }
+      sendResponse({ success: true });
+      return true;
+    }
+
     Promise.resolve(loadContentDataRuntime())
       .then((runtime) => {
         const handler = runtime.messageHandlers[message.action];

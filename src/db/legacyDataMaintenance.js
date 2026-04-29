@@ -6,6 +6,8 @@ import {
   normalizeMediaAssetRecord,
 } from './recordNormalization.js';
 
+const PAGE_SIZE = 500;
+
 function getChangedRecords(records = [], normalizeRecord) {
   const changed = [];
   for (const record of records) {
@@ -17,29 +19,35 @@ function getChangedRecords(records = [], normalizeRecord) {
   return changed;
 }
 
+async function paginatedBackfill(table, normalizeFn) {
+  let offset = 0;
+  let totalChanged = 0;
+  while (true) {
+    const records = await table.offset(offset).limit(PAGE_SIZE).toArray();
+    if (records.length === 0) break;
+    const changed = getChangedRecords(records, normalizeFn);
+    if (changed.length > 0) {
+      await table.bulkPut(changed);
+      totalChanged += changed.length;
+    }
+    offset += PAGE_SIZE;
+  }
+  return totalChanged;
+}
+
 export async function backfillLegacyAiReadyFields() {
   const [notes, comments, authors, mediaAssets] = await Promise.all([
-    db.notes.toArray(),
-    db.comments.toArray(),
-    db.authors.toArray(),
-    db.mediaAssets.toArray(),
+    paginatedBackfill(db.notes, normalizeNoteRecord),
+    paginatedBackfill(db.comments, normalizeCommentRecord),
+    paginatedBackfill(db.authors, normalizeAuthorRecord),
+    paginatedBackfill(db.mediaAssets, normalizeMediaAssetRecord),
   ]);
 
-  const changedNotes = getChangedRecords(notes, normalizeNoteRecord);
-  const changedComments = getChangedRecords(comments, normalizeCommentRecord);
-  const changedAuthors = getChangedRecords(authors, normalizeAuthorRecord);
-  const changedMediaAssets = getChangedRecords(mediaAssets, normalizeMediaAssetRecord);
-
-  if (changedNotes.length > 0) await db.notes.bulkPut(changedNotes);
-  if (changedComments.length > 0) await db.comments.bulkPut(changedComments);
-  if (changedAuthors.length > 0) await db.authors.bulkPut(changedAuthors);
-  if (changedMediaAssets.length > 0) await db.mediaAssets.bulkPut(changedMediaAssets);
-
   return {
-    notes: changedNotes.length,
-    comments: changedComments.length,
-    authors: changedAuthors.length,
-    mediaAssets: changedMediaAssets.length,
-    total: changedNotes.length + changedComments.length + changedAuthors.length + changedMediaAssets.length,
+    notes,
+    comments,
+    authors,
+    mediaAssets,
+    total: notes + comments + authors + mediaAssets,
   };
 }

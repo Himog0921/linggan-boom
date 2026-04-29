@@ -983,10 +983,10 @@ export class BatchNoteController extends BaseBatchController {
     const likesText = this._topByLikes
       ? ` 赞 ${formatCompactCount(noteInfo.__likesParsed ?? parseCount(noteInfo.likes))}`
       : '';
-    mark.innerHTML = `<span style="
-      background:#ff4757;color:#fff;padding:6px 16px;border-radius:20px;
-      font-size:14px;font-weight:800;box-shadow:0 2px 8px rgba(255,71,87,0.3);
-    ">${rankText}采集中...${likesText}</span>`;
+    const span = document.createElement('span');
+    span.style.cssText = 'background:#ff4757;color:#fff;padding:6px 16px;border-radius:20px;font-size:14px;font-weight:800;box-shadow:0 2px 8px rgba(255,71,87,0.3);';
+    span.textContent = `${rankText}采集中...${likesText}`;
+    mark.appendChild(span);
 
     const currentPosition = window.getComputedStyle(element).position;
     if (currentPosition === 'static') {

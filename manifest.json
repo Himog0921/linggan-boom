@@ -10,7 +10,6 @@
     "cookies",
     "downloads",
     "alarms",
-    "debugger",
     "scripting",
     "declarativeNetRequest",
     "declarativeNetRequestWithHostAccess"
@@ -70,11 +69,11 @@
         "dashboard.html",
         "dashboard.js",
         "dashboard.css",
+        "vendor.js",
+        "content.css",
         "lgboom-logo.svg",
         "lgboom-banner.svg",
         "lgboom-inject-logo.svg",
-        "*.js",
-        "*.css",
         "injected/noteMap.js",
         "injected/user.js",
         "injected/xhsApiCapture.js"
@@ -86,11 +85,11 @@
         "dashboard.html",
         "dashboard.js",
         "dashboard.css",
+        "vendor.js",
+        "content.css",
         "lgboom-logo.svg",
         "lgboom-banner.svg",
         "lgboom-inject-logo.svg",
-        "*.js",
-        "*.css",
         "injected/douyinApiCapture.js"
       ],
       "matches": ["https://www.douyin.com/*"]

@@ -55,10 +55,16 @@ export const workbenchOutboxStore = {
     if (!row.idempotencyKey || !row.taskId || !row.pluginRunId || !row.kind) {
       throw new Error('invalid_workbench_outbox_item');
     }
-    const existing = await getByKey(row.idempotencyKey);
-    if (existing) return existing;
-    await db.workbenchOutbox.put(row);
-    return row;
+    try {
+      await db.workbenchOutbox.put(row);
+      return row;
+    } catch (error) {
+      if (error?.name === 'ConstraintError' || /constraint/i.test(String(error?.message || error))) {
+        const existing = await getByKey(row.idempotencyKey);
+        return existing || row;
+      }
+      throw error;
+    }
   },
 
   async listPending({ limit = 10, now: nowMs = now() } = {}) {

@@ -9,9 +9,11 @@ const API_BASE_URL = 'https://lingganboom.fun';
 const FLYWHEEL_STORAGE_KEY = 'flywheelConfig';
 
 let cachedConfig = null;
+let cachedAt = 0;
+const CACHE_TTL_MS = 30000;
 
 async function readFlywheelStorage() {
-  if (cachedConfig) return cachedConfig;
+  if (cachedConfig && (Date.now() - cachedAt) < CACHE_TTL_MS) return cachedConfig;
   if (!globalThis.chrome?.storage?.local) {
     return { serverUrl: normalizeServerUrl(API_BASE_URL), enabled: true, apiToken: '' };
   }
@@ -24,6 +26,7 @@ async function readFlywheelStorage() {
     apiToken: String(config.apiToken || '').trim(),
     updatedAt: config.updatedAt || 0,
   };
+  cachedAt = Date.now();
   return cachedConfig;
 }
 
@@ -43,12 +46,23 @@ async function writeFlywheelStorage(config = {}) {
     updatedAt: Date.now(),
   };
   cachedConfig = next;
+  cachedAt = Date.now();
   if (globalThis.chrome?.storage?.local) {
     await chrome.storage.local.set({
       [FLYWHEEL_STORAGE_KEY]: next,
     });
   }
   return next;
+}
+
+// 监听 storage 变化，外部修改配置时立即清空缓存
+if (globalThis.chrome?.storage?.onChanged) {
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === 'local' && changes[FLYWHEEL_STORAGE_KEY]) {
+      cachedConfig = null;
+      cachedAt = 0;
+    }
+  });
 }
 
 async function resolveFlywheelBaseUrl(serverUrl = '') {
@@ -202,10 +216,14 @@ export async function syncToFlywheel(sources, tag = 'evaluate', operator = 'anon
     }
   }
 
-  if (batchErrors.length > 0 && successfulBatchCount === 0) {
+  if (batchErrors.length > 0) {
     return {
       success: false,
+      imported,
+      skipped,
+      details,
       error: batchErrors.join('; '),
+      partial: successfulBatchCount > 0,
     };
   }
 

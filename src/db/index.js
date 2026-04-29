@@ -96,4 +96,31 @@ db.version(11).stores({
   accounts: 'accountId, name, status, platform, lastUsedAt, createdAt',
 });
 
+// v12: workbenchOutbox 添加 idempotencyKey 唯一索引，消除 enqueue 竞态条件
+db.version(12).stores({
+  notes: 'noteId, contentId, platformContentId, platform, url, title, type, authorId, authorEntityId, authorName, likes, collects, comments, releaseDate, publishedAt, collectedAt, ipLocation, lastUpdateTime, mediaDownloadStatus, dataSource, triggerSource, shareShortUrl, createdAt, syncStatus',
+  comments: '++id, commentEntityId, commentId, platform, contentId, noteId, noteUrl, text, author, authorId, profileUrl, location, ipLocation, likes, parentCommentId, rootCommentId, level, replyToCommentId, replyToUserName, publishedAt, collectedAt, sortMode, collectionRunId, createdAt, syncStatus',
+  authors: 'userId, authorEntityId, platformAuthorId, platform, handle, secUserId, redId, name, profileUrl, fans, follows, interactions, ipLocation, gender, accountStatus, followedByMe, collectedAt, createdAt, syncStatus',
+  collectionRuns: 'collectionRunId, externalTaskId, externalTaskType, executorInstanceId, protocolVersion, platform, taskType, pageType, triggerSource, status, resultUploadStatus, lastHeartbeatAt, startedAt, finishedAt, createdAt',
+  mediaAssets: 'assetId, contentId, collectionRunId, assetType, role, quality, downloadStatus, lastResolvedAt, createdAt',
+  workbenchOutbox: 'id, taskId, pluginRunId, &idempotencyKey, kind, status, nextAttemptAt, createdAt, [status+nextAttemptAt+createdAt]',
+  accounts: 'accountId, name, status, platform, lastUsedAt, createdAt',
+}).upgrade(async (tx) => {
+  const rows = await tx.table('workbenchOutbox').toArray();
+  const seen = new Map();
+  const duplicates = [];
+  for (const row of rows) {
+    const key = row.idempotencyKey;
+    if (!key) continue;
+    if (seen.has(key)) {
+      duplicates.push(row.id);
+    } else {
+      seen.set(key, row.id);
+    }
+  }
+  if (duplicates.length > 0) {
+    await tx.table('workbenchOutbox').bulkDelete(duplicates);
+  }
+});
+
 export default db;

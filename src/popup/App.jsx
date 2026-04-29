@@ -96,6 +96,7 @@ export default function App() {
   const [batchModalType, setBatchModalType] = useState('notes');
   const [batchModalPlatform, setBatchModalPlatform] = useState(PLATFORM.XHS);
   const [batchModalMode, setBatchModalMode] = useState('single');
+  const [commentLimitOptions, setCommentLimitOptions] = useState(null);
   const batchModalResolveRef = useRef(null);
 
   const [addAccountModalOpen, setAddAccountModalOpen] = useState(false);
@@ -110,6 +111,10 @@ export default function App() {
     onConfirm: null,
   });
   const noticeTimerRef = useRef(null);
+  const showNoticeRef = useRef(showNotice);
+  const hideNoticeRef = useRef(hideNotice);
+  showNoticeRef.current = showNotice;
+  hideNoticeRef.current = hideNotice;
   const busyActionsRef = useRef({});
 
   useEffect(() => {
@@ -253,9 +258,9 @@ export default function App() {
         setBatchPaused(paused);
         setBatchStopping(false);
         if (message.taskState === 'error' && message.error?.message) {
-          showNotice(message.error.message, 'warning');
+          showNoticeRef.current(message.error.message, 'warning');
         } else {
-          hideNotice();
+          hideNoticeRef.current?.();
         }
       }
       if (message.action === MSG.COLLECT_DONE) {
@@ -944,18 +949,18 @@ export default function App() {
       setBatchModalType('comments');
       setBatchModalPlatform(platform);
       setBatchModalMode('single');
+      setCommentLimitOptions(options);
       setBatchModalOpen(true);
-      window._commentLimitOptions = options;
     });
   }, [platform]);
 
   const handleBatchModalConfirm = useCallback((settings) => {
     setBatchModalOpen(false);
+    setCommentLimitOptions(null);
     if (batchModalResolveRef.current) {
       batchModalResolveRef.current(settings);
       batchModalResolveRef.current = null;
     }
-    window._commentLimitOptions = null;
   }, []);
 
   const handleBatchModalCancel = useCallback(() => {
@@ -964,7 +969,7 @@ export default function App() {
       batchModalResolveRef.current(null);
       batchModalResolveRef.current = null;
     }
-    window._commentLimitOptions = null;
+    setCommentLimitOptions(null);
   }, []);
 
   const handleAddAccount = useCallback(async (accountData) => {
@@ -1210,7 +1215,7 @@ export default function App() {
         type={batchModalType}
         platform={batchModalPlatform}
         mode={batchModalMode}
-        commentLimitOptions={window._commentLimitOptions}
+        commentLimitOptions={commentLimitOptions}
         onConfirm={handleBatchModalConfirm}
         onCancel={handleBatchModalCancel}
       />

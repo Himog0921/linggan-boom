@@ -13,16 +13,16 @@ export function createManagedTaskController(runTask, {
       return state.isRunning;
     },
     pause() {
-      if (!state.isRunning) return;
+      if (!state.isRunning || state.isStopping) return;
       state.isPaused = true;
     },
     resume() {
-      if (!state.isRunning) return;
+      if (!state.isRunning || state.isStopping) return;
+      if (!state.isPaused) return;
       state.isPaused = false;
-      if (state.pauseResolve) {
-        state.pauseResolve();
-        state.pauseResolve = null;
-      }
+      const resolve = state.pauseResolve;
+      state.pauseResolve = null;
+      if (resolve) resolve();
     },
     stop() {
       if (!state.isRunning) return;
@@ -34,6 +34,7 @@ export function createManagedTaskController(runTask, {
     },
     async waitIfPaused() {
       if (!state.isPaused) return;
+      if (state.isStopping) return;
       await new Promise((resolve) => {
         state.pauseResolve = resolve;
       });

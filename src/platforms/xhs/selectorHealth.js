@@ -8,11 +8,12 @@ import { PAGE_TYPE } from '../../shared/constants.js';
 
 const PROFILE_FEED_SELECTOR = '#userPostedFeeds';
 const FEEDS_CONTAINER_SELECTOR = '.feeds-container';
-const SELECTOR_VERIFIED_AT = '2026-04-20T00:00:00+08:00';
+const SELECTOR_VERIFIED_AT = '2026-04-28T00:00:00+08:00';
 const NOTE_DETAIL_SIGNAL_SELECTORS = POPUP_SELECTORS;
 const COMMENTS_CONTAINER_SELECTORS = [
   '.comments-container',
-  '[class*="comments"]',
+  '[class*="comment-list"]',
+  '[class*="comment_container"]',
   '.parent-comment',
   '.comment-item',
 ];

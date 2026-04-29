@@ -11,7 +11,10 @@ export const authorStore = {
   },
 
   async bulkUpsert(authors) {
-    await db.authors.bulkPut((authors || []).map(normalizeAuthorRecord));
+    if (!authors || authors.length === 0) return;
+    await db.transaction('rw', db.authors, async () => {
+      await db.authors.bulkPut(authors.map(normalizeAuthorRecord));
+    });
   },
 
   async getAll() {

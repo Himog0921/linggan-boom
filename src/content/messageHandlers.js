@@ -230,8 +230,17 @@ export function createContentMessageHandlers({
       if (msg.asyncDispatch) {
         Promise.resolve()
           .then(() => runNoteCollection(remoteRun))
+          .then(() => {
+            reportProgress(1, 1, '完成', { taskState: 'done', collectionRunId: remoteRun?.collectionRunId });
+          })
           .catch((error) => {
             console.error('[灵感爆爆爆] 远程单篇笔记采集失败:', error);
+            reportTaskError(error, { collectionRunId: remoteRun?.collectionRunId, phase: 'collection' });
+            if (remoteRun?.collectionRunId && collectionRunStore?.updateStatus) {
+              collectionRunStore.updateStatus(remoteRun.collectionRunId, 'failed', {
+                errorMessage: String(error?.message || error),
+              }).catch(() => {});
+            }
           });
         return {
           success: true,
@@ -787,6 +796,7 @@ export function createContentMessageHandlers({
     },
 
     getDocumentCookie: async () => {
+      await ensurePluginAuthorized();
       return { success: true, cookieString: document.cookie || '' };
     },
   };

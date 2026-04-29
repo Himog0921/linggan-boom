@@ -672,19 +672,38 @@ async function tryDownloadCandidate(url, filename, options = {}) {
 
 // ========== 消息路由 ==========
 
+const SENSITIVE_ACTIONS = new Set([
+  MSG.REMOVE_ACCOUNT,
+  MSG.CLEAR_PLUGIN_AUTHORIZATION,
+  MSG.DELETE_NOTE,
+  MSG.DELETE_COMMENT,
+  MSG.DELETE_AUTHOR,
+  MSG.ADD_ACCOUNT,
+]);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = bgHandlers[message.action];
-  if (handler) {
-    Promise.resolve(handler(message, sender)).then((result) => {
-      sendResponse(normalizeWorkbenchMessageResponse(message.action, result));
-    }).catch(err => {
+  if (!handler) return false;
+
+  if (SENSITIVE_ACTIONS.has(message.action)) {
+    if (!sender.id || sender.id !== chrome.runtime.id) {
       sendResponse(normalizeWorkbenchMessageResponse(message.action, {
         success: false,
-        error: err.message,
+        error: 'unauthorized_sender',
       }));
-    });
-    return true;
+      return false;
+    }
   }
+
+  Promise.resolve(handler(message, sender)).then((result) => {
+    sendResponse(normalizeWorkbenchMessageResponse(message.action, result));
+  }).catch(err => {
+    sendResponse(normalizeWorkbenchMessageResponse(message.action, {
+      success: false,
+      error: err.message,
+    }));
+  });
+  return true;
 });
 
 function sendToTab(tabId, payload, options = {}) {
@@ -880,15 +899,17 @@ async function handleRiskControl300017(activeTask) {
 
 const bgHandlers = {
   // 屏蔽媒体资源（批量采集加速）
-  [MSG.BLOCK_MEDIA]: async () => {
+  [MSG.BLOCK_MEDIA]: async (msg, sender) => {
+    const tabId = sender.tab?.id;
+    if (!tabId) return { error: 'No tabId' };
     await chrome.declarativeNetRequest.updateDynamicRules({
       addRules: [{
         id: 1,
         priority: 1,
         action: { type: 'block' },
         condition: {
-          urlFilter: '*',
           resourceTypes: ['image', 'media'],
+          tabIds: [tabId],
         },
       }],
       removeRuleIds: [1],
@@ -904,30 +925,25 @@ const bgHandlers = {
     return { success: true };
   },
 
-  // 通过 Chrome Debugger 模拟 Esc 键（关闭笔记弹窗）
+  // 通过 scripting 注入脚本模拟 Esc 键（关闭笔记弹窗）
   [MSG.DISPATCH_ESC]: async (msg, sender) => {
     const tabId = sender.tab?.id || msg.tabId;
     if (!tabId) return { error: 'No tabId' };
 
-    const target = { tabId };
     try {
-      await chrome.debugger.attach(target, '1.3');
-      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
-        type: 'rawKeyDown',
-        key: 'Escape',
-        code: 'Escape',
-        windowsVirtualKeyCode: 27,
-        nativeVirtualKeyCode: 27,
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        func: () => {
+          window.dispatchEvent(new KeyboardEvent('keydown', {
+            key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true,
+          }));
+          window.dispatchEvent(new KeyboardEvent('keyup', {
+            key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true,
+          }));
+        },
       });
-      await chrome.debugger.sendCommand(target, 'Input.dispatchKeyEvent', {
-        type: 'keyUp',
-        key: 'Escape',
-        code: 'Escape',
-        windowsVirtualKeyCode: 27,
-        nativeVirtualKeyCode: 27,
-      });
-    } finally {
-      await chrome.debugger.detach(target).catch(() => {});
+    } catch (error) {
+      return { error: String(error?.message || error) };
     }
     return { success: true };
   },
@@ -2015,8 +2031,6 @@ chrome.runtime.onInstalled?.addListener(() => {
 
 chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
 chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });
-void runWorkbenchTaskPollTick();
-void runExecutionStationHeartbeatTick();
 
 // 每日配额清零（每小时检查一次日期变化）
 chrome.alarms?.create('daily-quota-reset', { periodInMinutes: 60 });

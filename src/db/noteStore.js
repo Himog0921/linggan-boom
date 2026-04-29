@@ -7,7 +7,10 @@ export const noteStore = {
   },
 
   async bulkUpsert(notes) {
-    await db.notes.bulkPut((notes || []).map(normalizeNoteRecord));
+    if (!notes || notes.length === 0) return;
+    await db.transaction('rw', db.notes, async () => {
+      await db.notes.bulkPut(notes.map(normalizeNoteRecord));
+    });
   },
 
   async getAll() {

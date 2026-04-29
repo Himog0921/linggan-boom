@@ -7,7 +7,10 @@ export const mediaAssetStore = {
   },
 
   async bulkUpsert(assets) {
-    await db.mediaAssets.bulkPut((assets || []).map(normalizeMediaAssetRecord));
+    if (!assets || assets.length === 0) return;
+    await db.transaction('rw', db.mediaAssets, async () => {
+      await db.mediaAssets.bulkPut(assets.map(normalizeMediaAssetRecord));
+    });
   },
 
   async getAll() {

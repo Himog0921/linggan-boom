@@ -7,7 +7,7 @@ import {
 import { detectDouyinSearchBatchContext } from './pageDetector.js';
 
 const PLATFORM = 'douyin';
-const SELECTOR_VERIFIED_AT = '2026-04-20T00:00:00+08:00';
+const SELECTOR_VERIFIED_AT = '2026-04-28T00:00:00+08:00';
 
 const DETAIL_ACTIONS = new Set([
   'dy_collectVideo',

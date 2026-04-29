@@ -6,6 +6,15 @@ import {
 } from '../protocol/schema.js';
 import { createTaskLeaseIdleSnapshot } from './taskLeaseClient.js';
 
+function deepClone(obj) {
+  if (obj === null || typeof obj !== 'object') return obj;
+  try {
+    return structuredClone(obj);
+  } catch {
+    return JSON.parse(JSON.stringify(obj));
+  }
+}
+
 function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
   const normalizedRunId = String(pluginRunId || '').trim();
   return {
@@ -444,8 +453,23 @@ export function createTaskPoller(deps = {}) {
     lastIdleReason: null,
   };
 
+  let tickPromise = null;
+
   function getNow() {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
+  }
+
+  async function notifyContentScriptToStop(activeTask = {}) {
+    const tabId = activeTask?.tabId;
+    if (!tabId) return;
+    try {
+      await chrome.tabs.sendMessage(tabId, {
+        action: 'workbenchTaskControl',
+        command: 'stop',
+      });
+    } catch {
+      // 标签页已关闭或导航到其他页面，忽略错误
+    }
   }
 
   async function patchTask(taskId, patch) {
@@ -473,10 +497,10 @@ export function createTaskPoller(deps = {}) {
     if (!nextPatch || typeof nextPatch !== 'object') {
       return state.activeTask ? { ...state.activeTask } : null;
     }
-    state.activeTask = {
+    state.activeTask = deepClone({
       ...state.activeTask,
       ...nextPatch,
-    };
+    });
     return { ...state.activeTask };
   }
 
@@ -646,6 +670,7 @@ export function createTaskPoller(deps = {}) {
       pluginRunId: dispatchCollectionRunId,
       executorInstanceId,
       accountId,
+      tabId: task?.tabId || null,
       workbenchStatus: dispatchCollectionRunId ? 'running' : 'dispatched',
       resultFingerprint: '',
       controlCursor: '',
@@ -845,10 +870,12 @@ export function createTaskPoller(deps = {}) {
           message: recoveryStatus.message,
         });
         if (recoveryStatus.status === 'failed') {
+          await notifyContentScriptToStop(activeTask);
           state.activeTask = null;
           await clearActiveLease();
           return { success: false, failed: true };
         }
+        await notifyContentScriptToStop(activeTask);
         return { success: true, paused: true };
       }
       await patchTask(activeTask.taskId, {
@@ -863,6 +890,7 @@ export function createTaskPoller(deps = {}) {
         userMessage: result?.userMessage || '任务执行失败',
         errorCode: result?.errorCode || result?.reasonCode || '',
       });
+      await notifyContentScriptToStop(activeTask);
       state.activeTask = null;
       await clearActiveLease();
       return { success: false, failed: true };
@@ -980,36 +1008,39 @@ export function createTaskPoller(deps = {}) {
   }
 
   async function tick() {
-    if (state.ticking) {
+    if (tickPromise) {
       return { success: true, skipped: true, reason: 'tick_in_progress' };
     }
-    state.ticking = true;
-    try {
-      if (state.activeTask) {
-        return await pollActiveTask();
-      }
+    tickPromise = (async () => {
+      state.ticking = true;
+      try {
+        if (state.activeTask) {
+          return await pollActiveTask();
+        }
 
-      const recoveredTask = await recoverTrackedTask();
-      if (recoveredTask) {
-        return await pollActiveTask();
-      }
+        const recoveredTask = await recoverTrackedTask();
+        if (recoveredTask) {
+          return await pollActiveTask();
+        }
 
-      if (typeof deps.claimTaskLease !== 'function') {
-        state.lastIdleReason = null;
-        return buildIdleTickResult({}, null);
-      }
+        if (typeof deps.claimTaskLease !== 'function') {
+          state.lastIdleReason = null;
+          return buildIdleTickResult({}, null);
+        }
 
-      const claimed = await deps.claimTaskLease();
-      if (claimed?.task) {
-        return await claimTask(claimed.task, claimed.lease || null);
-      }
+        const claimed = await deps.claimTaskLease();
+        if (claimed?.task) {
+          return await claimTask(claimed.task, claimed.lease || null);
+        }
 
-      const idleSnapshot = createTaskLeaseIdleSnapshot(claimed);
-      state.lastIdleReason = idleSnapshot;
-      return buildIdleTickResult(claimed, idleSnapshot);
-    } finally {
-      state.ticking = false;
-    }
+        const idleSnapshot = createTaskLeaseIdleSnapshot(claimed);
+        state.lastIdleReason = idleSnapshot;
+        return buildIdleTickResult(claimed, idleSnapshot);
+      } finally {
+        state.ticking = false;
+      }
+    })();
+    return tickPromise;
   }
 
   function getState() {
