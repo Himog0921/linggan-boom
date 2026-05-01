@@ -1,0 +1,239 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+const originalChrome = globalThis.chrome;
+globalThis.chrome = {
+  runtime: {
+    onMessage: { addListener: () => {}, removeListener: () => {} },
+    onStartup: { addListener: () => {} },
+    onInstalled: { addListener: () => {} },
+    lastError: null,
+    getManifest: () => ({ version: '0.0.0-test' }),
+  },
+  tabs: {
+    query: async () => [],
+    sendMessage: () => {},
+    update: async () => {},
+  },
+  downloads: {
+    download: async () => 1,
+    remove: async () => {},
+    onChanged: { addListener: () => {}, removeListener: () => {} },
+  },
+  declarativeNetRequest: {
+    updateDynamicRules: () => Promise.resolve(),
+  },
+  action: {
+    setBadgeText: async () => {},
+    setBadgeBackgroundColor: async () => {},
+  },
+  alarms: {
+    create: () => {},
+    onAlarm: { addListener: () => {} },
+  },
+  debugger: {
+    attach: async () => {},
+    sendCommand: async () => {},
+    detach: async () => {},
+  },
+  cookies: {
+    getAll: async () => [],
+  },
+  storage: {
+    local: {
+      get: async () => ({}),
+      set: async () => {},
+    },
+  },
+};
+
+const {
+  buildBatchCommentsDispatchMessage,
+  buildBatchNotesDispatchMessage,
+  inferPageTypeFromTask,
+  normalizeWorkbenchTaskTarget,
+} = await import('../src/background/index.js');
+
+globalThis.chrome = originalChrome;
+
+test('xhs detail url maps batchNotes tasks to detail page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.batchNotes',
+      target: 'https://www.xiaohongshu.com/explore/note_123',
+    }),
+    'detail',
+  );
+});
+
+test('douyin detail url maps batchNotes tasks to detail page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'douyin.batchNotes',
+      target: 'https://www.douyin.com/video/7260000000000000001',
+    }),
+    'detail',
+  );
+});
+
+test('keyword targets still map batchNotes tasks to search page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.batchNotes',
+      target: '数学启蒙',
+    }),
+    'search',
+  );
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'douyin.batchNotes',
+      target: '数学启蒙',
+    }),
+    'search',
+  );
+});
+
+test('declared targetPageType from payload wins when monitor detail probe uses profile-style share url', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.batchNotes',
+      target: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/699db5ba000000000e00ff23',
+      payload: {
+        targetPageType: 'detail',
+      },
+    }),
+    'detail',
+  );
+});
+
+test('xhs detail probe uses profile dispatch page type when target is an unsigned profile relay url', () => {
+  assert.deepEqual(
+    normalizeWorkbenchTaskTarget({
+      platform: 'xhs',
+      taskType: 'xhs.batchNotes',
+      taskStrategy: 'detail_probe',
+      target: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef',
+      payload: {
+        targetPageType: 'detail',
+      },
+    }),
+    {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef',
+    },
+  );
+});
+
+test('xhs detail probe keeps detail dispatch page type when target is a signed profile relay url', () => {
+  assert.deepEqual(
+    normalizeWorkbenchTaskTarget({
+      platform: 'xhs',
+      taskType: 'xhs.batchNotes',
+      taskStrategy: 'detail_probe',
+      target: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef?xsec_token=abc123&xsec_source=pc_user',
+      payload: {
+        targetPageType: 'detail',
+      },
+    }),
+    {
+      pageType: 'detail',
+      url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef?xsec_token=abc123&xsec_source=pc_user',
+    },
+  );
+});
+
+test('background preserves target note metadata when forwarding xhs profile relay batch notes', () => {
+  assert.deepEqual(
+    buildBatchNotesDispatchMessage({
+      mode: 'profile',
+      count: 1,
+      targetNoteId: '69baad5e00000000230055ef',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_1',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+        targetNoteId: '69baad5e00000000230055ef',
+      },
+      surfaceOnly: false,
+    }),
+    {
+      action: 'startBatchNotes',
+      mode: 'profile',
+      count: 1,
+      targetNoteId: '69baad5e00000000230055ef',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_1',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+        targetNoteId: '69baad5e00000000230055ef',
+      },
+      surfaceOnly: false,
+    },
+  );
+});
+
+test('background turns xhs detail-mode batch notes into direct single-note collection', () => {
+  assert.deepEqual(
+    buildBatchNotesDispatchMessage({
+      mode: 'detail',
+      targetNoteId: '69baad5e00000000230055ef',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_2',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+      },
+    }),
+    {
+      action: 'collectSingleNote',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_2',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+      },
+      expectedNoteId: '69baad5e00000000230055ef',
+      asyncDispatch: true,
+    },
+  );
+});
+
+test('background keeps batch comment fields intact when forwarding to content', () => {
+  assert.deepEqual(
+    buildBatchCommentsDispatchMessage({
+      mode: 'profile',
+      count: 3,
+      topByLikes: true,
+      commentLimit: 50,
+      commentDepthMode: 'twoLevel',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_3',
+        externalTaskType: 'xhs.batchComments',
+      },
+    }),
+    {
+      action: 'startBatchComments',
+      mode: 'profile',
+      count: 3,
+      topByLikes: true,
+      commentLimit: 50,
+      commentDepthMode: 'twoLevel',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_3',
+        externalTaskType: 'xhs.batchComments',
+      },
+    },
+  );
+});

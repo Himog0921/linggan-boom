@@ -1,0 +1,10 @@
+node_modules/
+dist/
+releases/
+backups/
+*.zip
+.DS_Store
+.claude/
+progress.txt
+new.pen
+.gstack/

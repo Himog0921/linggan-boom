@@ -1,0 +1,137 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import { MSG } from '../src/shared/constants.js';
+import { createBatchMessageHandlers } from '../src/content/douyinBatchMessageHandlers.js';
+
+function createHandlers({
+  BatchNoteController,
+  reportProgress = () => {},
+  syncTaskUI = () => {},
+} = {}) {
+  let batchNoteController = null;
+
+  const handlers = createBatchMessageHandlers({
+    isDouyinPage: () => false,
+    createManagedTaskController: () => ({ start() {}, stop() {} }),
+    batchCollectDouyinProfileVideos: async () => ({ ok: true, success: 0, total: 0 }),
+    batchCollectDouyinProfileComments: async () => ({
+      ok: true,
+      successVideos: 0,
+      totalVideos: 0,
+      totalComments: 0,
+    }),
+    BatchNoteController,
+    BatchCommentController: class {},
+    reportProgress,
+    reportDone: () => {},
+    syncTaskUI,
+    startBatchTask: () => {},
+    toggleStopButton: () => {},
+    hideTaskControlBar: () => {},
+    setActiveTaskType: () => {},
+    pauseActiveTask: () => {},
+    resumeActiveTask: () => {},
+    getBatchNoteCtrl: () => batchNoteController,
+    setBatchNoteCtrl: (value) => {
+      batchNoteController = value;
+    },
+    getBatchCommentCtrl: () => null,
+    setBatchCommentCtrl: () => {},
+    getDouyinAdapter: () => null,
+  });
+
+  return {
+    handlers,
+    getBatchNoteController: () => batchNoteController,
+  };
+}
+
+test('xhs remote batch start waits for collectionRunId before acknowledging success', async () => {
+  let releaseStartup = null;
+
+  class RemoteBatchNoteController {
+    constructor() {
+      this.collectionRunId = '';
+    }
+
+    async start() {
+      await new Promise((resolve) => {
+        releaseStartup = resolve;
+      });
+      this.collectionRunId = 'run_xhs_remote_1';
+      await new Promise(() => {});
+    }
+  }
+
+  const { handlers } = createHandlers({
+    BatchNoteController: RemoteBatchNoteController,
+  });
+
+  let settled = false;
+  const resultPromise = handlers[MSG.START_BATCH_NOTES]({
+    count: 5,
+    mode: 'profile',
+    externalTaskMeta: {
+      externalTaskId: 'wb_xhs_batch_1',
+    },
+  }).then((result) => {
+    settled = true;
+    return result;
+  });
+
+  await Promise.resolve();
+  assert.equal(settled, false);
+
+  releaseStartup();
+  const result = await resultPromise;
+
+  assert.equal(result.success, true);
+  assert.equal(result.accepted, true);
+  assert.equal(result.pending, true);
+  assert.equal(result.collectionRunId, 'run_xhs_remote_1');
+});
+
+test('xhs remote batch start throws startup errors instead of faking dispatch success', async () => {
+  const progressCalls = [];
+  const syncCalls = [];
+
+  class FailingBatchNoteController {
+    constructor() {
+      this.collectionRunId = '';
+    }
+
+    async start() {
+      throw new Error('IndexedDB API missing. Please visit https://tinyurl.com/y2uuvskb');
+    }
+  }
+
+  const { handlers, getBatchNoteController } = createHandlers({
+    BatchNoteController: FailingBatchNoteController,
+    reportProgress: (...args) => {
+      progressCalls.push(args);
+    },
+    syncTaskUI: (payload) => {
+      syncCalls.push(payload);
+    },
+  });
+
+  await assert.rejects(
+    () =>
+      handlers[MSG.START_BATCH_NOTES]({
+        count: 3,
+        mode: 'profile',
+        externalTaskMeta: {
+          externalTaskId: 'wb_xhs_batch_fail_1',
+        },
+      }),
+    /IndexedDB API missing/,
+  );
+
+  assert.equal(progressCalls.length, 1);
+  assert.equal(progressCalls[0][2], 'IndexedDB API missing. Please visit https://tinyurl.com/y2uuvskb');
+  assert.equal(syncCalls.length, 1);
+  assert.equal(syncCalls[0].taskState, 'error');
+  assert.equal(syncCalls[0].message, '批量采集失败：IndexedDB API missing. Please visit https://tinyurl.com/y2uuvskb');
+  assert.equal(getBatchNoteController(), null);
+});

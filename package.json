@@ -1,0 +1,38 @@
+{
+  "name": "linggan-boom",
+  "version": "1.0.0",
+  "description": "灵感爆爆爆 - 小红书数据采集工具箱",
+  "private": true,
+  "scripts": {
+    "build": "webpack --mode production",
+    "dev": "webpack --mode development --watch",
+    "release:patch": "./scripts/version.sh patch",
+    "release:minor": "./scripts/version.sh minor",
+    "release:major": "./scripts/version.sh major",
+    "probe:batch-flow": "cat scripts/probe-batch-flow.js",
+    "probe:comment-media": "cat scripts/probe-comment-media.js",
+    "probe:video-streams": "cat scripts/probe-video-streams.js",
+    "probe:douyin-collect": "cat scripts/probe-douyin-collect.js",
+    "probe:douyin-video-fields": "cat scripts/probe-douyin-video-fields.js",
+    "probe:douyin-author-fields": "cat scripts/probe-douyin-author-fields.js",
+    "probe:douyin-root-cause": "cat scripts/probe-douyin-root-cause.js",
+    "watch:review": "node scripts/watch-review.js"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.29.0",
+    "@babel/preset-react": "^7.28.5",
+    "babel-loader": "^10.1.1",
+    "copy-webpack-plugin": "^12.0.2",
+    "css-loader": "^7.1.4",
+    "css-minimizer-webpack-plugin": "^6.0.0",
+    "mini-css-extract-plugin": "^2.8.0",
+    "webpack": "^5.90.0",
+    "webpack-cli": "^5.1.4"
+  },
+  "dependencies": {
+    "dexie": "^4.0.1",
+    "jszip": "^3.10.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5"
+  }
+}
