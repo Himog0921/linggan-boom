@@ -5,6 +5,7 @@ import {
   getFlywheelConfig,
   fetchCollectionTaskControlRequests,
   ingestCollectionTaskDelta,
+  mergeFlywheelAuthorization,
 } from '../src/sync/flywheelSync.js';
 import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
 import { REMOTE_TASK_CONTROL_ACTION, WORKBENCH_TASK_EVENT_TYPE } from '../src/workbench/protocol/schema.js';
@@ -57,6 +58,23 @@ test('ingest client posts task delta to singular ingest endpoint', async () => {
   } finally {
     globalThis.fetch = originalFetch;
   }
+});
+
+test('workbench API config prefers the active plugin authorization token over stale stored api token', async () => {
+  const config = mergeFlywheelAuthorization(
+    {
+      serverUrl: 'https://workbench.example',
+      enabled: true,
+      apiToken: 'stale-token',
+    },
+    {
+      authorizationToken: 'active-token',
+    },
+  );
+
+  assert.equal(config.serverUrl, 'https://workbench.example');
+  assert.equal(config.enabled, true);
+  assert.equal(config.apiToken, 'active-token');
 });
 
 test('control request client uses control-requests endpoint and treats 404 as no controls', async () => {

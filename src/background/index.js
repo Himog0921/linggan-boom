@@ -10,6 +10,7 @@ import {
   ingestCollectionTaskDelta,
   prepareNotesWithStableCovers,
   prepareRecordWithStableCover,
+  mergeFlywheelAuthorization,
 } from '../sync/flywheelSync.js';
 import { validateCapabilityCheck, validateTaskControl, validateTaskEnvelope } from '../workbench/protocol/validator.js';
 import {
@@ -839,7 +840,7 @@ async function clearBadge(tabId) {
 }
 
 async function handleRiskControl300017(activeTask) {
-  const config = await getFlywheelConfig();
+  const config = await getAuthorizedFlywheelConfig();
   const accountId = resolveRiskControlAccountId(activeTask);
 
   if (accountId) {
@@ -1125,13 +1126,10 @@ const bgHandlers = {
       };
     }
 
-    const config = await getFlywheelConfig();
+    const authorization = authorizationStatus.authorization || {};
+    const config = mergeFlywheelAuthorization(await getFlywheelConfig(), authorization);
     const serverUrl = config?.serverUrl || 'https://lingganboom.fun';
-    const authorizationToken = String(
-      config?.apiToken
-      || authorizationStatus.authorization?.authorizationToken
-      || '',
-    ).trim();
+    const authorizationToken = String(config?.apiToken || '').trim();
 
     const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
     const preparedNotes = await prepareNotesWithStableCovers({
@@ -1748,13 +1746,21 @@ async function getPluginAuthorizationSnapshot() {
   };
 }
 
+async function getAuthorizedFlywheelConfig() {
+  const [config, authorization] = await Promise.all([
+    getFlywheelConfig(),
+    pluginAuthorizationClient.getStoredAuthorization(),
+  ]);
+  return mergeFlywheelAuthorization(config, authorization);
+}
+
 async function collectStationPlatformAccountsForIdentity(identity = null) {
   const role = normalizeStationRole(identity?.role);
   return collectStationPlatformAccounts(accountStore, { purpose: role });
 }
 
 async function sendExecutionStationHeartbeat(status = 'online') {
-  const config = await getFlywheelConfig();
+  const config = await getAuthorizedFlywheelConfig();
   if (!shouldPollWorkbenchTasks(config)) {
     return { success: false, retryable: false, reason: 'workbench_not_configured' };
   }
@@ -1771,7 +1777,7 @@ async function sendExecutionStationHeartbeat(status = 'online') {
 const taskDeltaReporter = createTaskDeltaReporter({
   store: workbenchOutboxStore,
   ingestCollectionTaskDelta,
-  getFlywheelConfig,
+  getFlywheelConfig: getAuthorizedFlywheelConfig,
   prepareRecordPayload: async (config, record) => {
     if (String(record?.recordType || '').trim() !== WORKBENCH_RECORD_TYPE.NOTE) {
       return record?.payload || {};
@@ -1808,12 +1814,12 @@ const taskPoller = createTaskPoller({
     await accountStore.updateUsage(normalizedAccountId);
   },
   fetchTrackableTasks: async () => {
-    const config = await getFlywheelConfig();
+    const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return [];
     return fetchTrackableCollectionTasks(config, { limit: 5 });
   },
   claimTaskLease: async () => {
-    const config = await getFlywheelConfig();
+    const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
     const identity = await executionStationClient.getStoredStationIdentity();
     const authorization = await pluginAuthorizationClient.getStoredAuthorization();
@@ -1841,7 +1847,7 @@ const taskPoller = createTaskPoller({
     });
   },
   renewTaskLease: async (taskId, lease = {}, options = {}) => {
-    const config = await getFlywheelConfig();
+    const config = await getAuthorizedFlywheelConfig();
     const identity = await executionStationClient.getStoredStationIdentity();
     const authorization = await pluginAuthorizationClient.getStoredAuthorization();
     if (!shouldPollWorkbenchTasks(config) || !identity?.stationId || !identity?.stationToken) {
@@ -1862,12 +1868,12 @@ const taskPoller = createTaskPoller({
   readTaskLease: () => taskLeaseStore.read(),
   clearTaskLease: () => taskLeaseStore.clear(),
   patchTask: async (taskId, patch) => {
-    const config = await getFlywheelConfig();
+    const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return null;
     return patchCollectionTask(config, taskId, patch);
   },
   fetchControlRequests: async (taskId, options) => {
-    const config = await getFlywheelConfig();
+    const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { success: true, controls: [], nextCursor: '' };
     return fetchCollectionTaskControlRequests(config, taskId, options);
   },

@@ -1,7 +1,11 @@
 # 当前待办总表
 
-> 更新日期：2026-04-20
+> 更新日期：2026-05-04
 > 目的：把当前真正仍活跃的待办从验收报告、活跃计划、`progress.txt` 和技术债清单里收拢到同一处，避免状态漂移。
+
+## 0. 最近完成
+
+- [x] 监控工位接单后不续租、不回写修复完成：线上排查确认 2026-05-04 凌晨监控任务已经能被插件接走，部分任务还进入“已开始”，但后续没有任何记录写回，最后被工作台判定“租约过期/执行器失联”。根因有两处：任务轮询器首轮结束后没有释放内部运行标记，后续轮询、续租和结果上传都被跳过；部分工作台回写请求仍可能使用旧同步令牌，而不是当前插件授权令牌。现在轮询器每轮结束后会恢复可执行状态，调度间隔收敛到 Chrome 可稳定执行的 30 秒；取任务、状态更新、结果增量、封面上传和手动同步都会优先使用当前插件授权令牌，避免接单和回写身份不一致。验证：`node --test tests/workbench-control-sync.test.mjs tests/workbench-task-lease.test.mjs tests/workbench-task-poll-schedule.test.mjs tests/flywheel-cover-asset-upload.test.mjs tests/workbench-delta-outbox.test.mjs tests/workbench-task-poller.test.mjs` 通过 `37` 个用例。
 
 ## 1. 怎么看这份清单
 

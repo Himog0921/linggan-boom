@@ -100,6 +100,27 @@ async function fetchFlywheel(path, options = {}) {
   return response;
 }
 
+export function mergeFlywheelAuthorization(config = {}, authorization = {}) {
+  const authorizationToken = firstText(
+    authorization?.authorizationToken
+    || authorization?.apiToken
+    || authorization?.token,
+  );
+  const authorizationStatus = firstText(
+    authorization?.status
+    || authorization?.authorizationStatus,
+  ).toLowerCase();
+  const authorizationUsable = Boolean(authorizationToken)
+    && !['revoked', 'expired', 'suspended', 'disabled'].includes(authorizationStatus);
+
+  return {
+    ...config,
+    apiToken: authorizationUsable
+      ? authorizationToken
+      : firstText(config?.apiToken),
+  };
+}
+
 function firstText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }

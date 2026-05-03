@@ -1042,6 +1042,7 @@ export function createTaskPoller(deps = {}) {
         return buildIdleTickResult(claimed, idleSnapshot);
       } finally {
         state.ticking = false;
+        tickPromise = null;
       }
     })();
     return tickPromise;
