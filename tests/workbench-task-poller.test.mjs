@@ -997,6 +997,66 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
   assert.equal(poller.getState().activeLease, null);
 });
 
+test('task poller releases stale active task when lease renewal conflicts', async () => {
+  const events = [];
+  let clearLeaseCalls = 0;
+  let claimCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return {
+        task: {
+          id: 'stale_lease_task',
+          taskType: 'xhs.collectAuthor',
+          platform: 'xhs',
+          source: 'monitor',
+          taskStrategy: 'author_baseline',
+        },
+        lease: {
+          leaseToken: 'lease-stale',
+          expiresAt: '2026-04-19T01:11:00.000Z',
+        },
+      };
+    },
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'stale_lease_task',
+      collectionRunId: 'run-stale-lease',
+      resultLookup: { externalTaskId: 'stale_lease_task' },
+    }),
+    renewTaskLease: async () => {
+      const error = new Error('Task lease is held by another station');
+      error.status = 409;
+      error.retryable = false;
+      throw error;
+    },
+    getResultPackage: async () => {
+      throw new Error('result lookup should stop after lease conflict');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  await poller.tick();
+  const secondTick = await poller.tick();
+
+  assert.equal(secondTick.released, true);
+  assert.equal(secondTick.reason, 'lease_conflict');
+  assert.equal(claimCalls, 1);
+  assert.equal(clearLeaseCalls, 1);
+  assert.equal(poller.getState().activeTask, null);
+  assert.equal(poller.getState().activeLease, null);
+  assert.equal(events.at(-1).payload.reason, 'lease_conflict');
+});
+
 test('task poller releases dispatched tasks that never produce a startup run', async () => {
   const patches = [];
   const events = [];

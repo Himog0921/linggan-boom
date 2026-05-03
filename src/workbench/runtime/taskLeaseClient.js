@@ -74,6 +74,29 @@ async function readErrorText(response) {
   return response.text().catch(() => '');
 }
 
+function isRetryableStatus(status) {
+  return [408, 429, 500, 502, 503, 504].includes(Number(status));
+}
+
+function errorMessageFromResponseText(text = '', fallback = '') {
+  const body = normalizeString(text);
+  if (!body) return fallback;
+  try {
+    const parsed = JSON.parse(body);
+    const message = normalizeString(parsed?.error || parsed?.message);
+    return message || body;
+  } catch {
+    return body;
+  }
+}
+
+function createHttpError(message, { status = 0 } = {}) {
+  const error = new Error(message);
+  error.status = Number(status || 0);
+  error.retryable = isRetryableStatus(status);
+  return error;
+}
+
 async function postJson({
   serverUrl = '',
   path = '',
@@ -94,7 +117,9 @@ async function postJson({
   });
   if (!response.ok) {
     const text = await readErrorText(response);
-    throw new Error(text || `HTTP ${response.status}`);
+    throw createHttpError(errorMessageFromResponseText(text, `HTTP ${response.status}`), {
+      status: response.status,
+    });
   }
   return response.json().catch(() => ({}));
 }

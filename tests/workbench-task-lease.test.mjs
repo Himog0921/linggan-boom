@@ -91,6 +91,35 @@ test('task lease client claims and renews through workbench lease endpoints', as
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
 });
 
+test('task lease client exposes renewal conflict status', async () => {
+  const fetchFn = async () => ({
+    ok: false,
+    status: 409,
+    async text() {
+      return JSON.stringify({ error: 'Task lease is held by another station' });
+    },
+  });
+
+  await assert.rejects(
+    () => renewCollectionTaskLease({
+      serverUrl: 'http://localhost:3000',
+      taskId: 'task-lease-conflict',
+      stationId: 'station-1',
+      stationToken: 'station-token',
+      leaseToken: 'stale-lease-token',
+      authorizationId: 'auth_1',
+      authorizationToken: 'auth_token_1',
+      fetchFn,
+    }),
+    (error) => {
+      assert.equal(error.status, 409);
+      assert.equal(error.retryable, false);
+      assert.match(error.message, /another station/);
+      return true;
+    },
+  );
+});
+
 test('task lease client preserves claim reason and writes an idle snapshot', async () => {
   const fetchFn = async () => ({
     ok: true,

@@ -35,6 +35,12 @@ function isRecoverableConnectionError(error) {
   return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout/i.test(msg);
 }
 
+function isLeaseConflictError(error) {
+  const status = Number(error?.status || 0);
+  const msg = String(error?.message || error || '');
+  return status === 409 || /LEASE_CONFLICT|held by another station|lease is held/i.test(msg);
+}
+
 function isMonitorTask(task = {}) {
   const source = String(task?.source || '').trim();
   const strategy = String(task?.taskStrategy || task?.payload?.taskStrategy || '').trim();
@@ -814,6 +820,17 @@ export function createTaskPoller(deps = {}) {
           };
         }
       } catch (error) {
+        if (isLeaseConflictError(error)) {
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
+            leaseRenewalFailed: true,
+            reason: 'lease_conflict',
+            errorMessage: String(error?.message || error || 'lease_conflict'),
+          });
+          state.activeTask = null;
+          state.seenControlIds.clear();
+          await clearActiveLease();
+          return { success: true, released: true, reason: 'lease_conflict' };
+        }
         await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
           leaseRenewalFailed: true,
           errorMessage: String(error?.message || error || 'lease_renewal_failed'),
