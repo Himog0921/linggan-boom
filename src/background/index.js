@@ -37,6 +37,7 @@ import {
 import { createTaskPoller } from '../workbench/runtime/taskPoller.js';
 import { scheduleWorkbenchTaskPollAlarm } from '../workbench/runtime/taskPollSchedule.js';
 import { createTaskDeltaReporter } from '../workbench/runtime/taskDeltaReporter.js';
+import { taskExecutionCleanupKeys } from '../workbench/runtime/taskExecutionCleanup.js';
 import { normalizeProgressEvent } from '../workbench/runtime/progressEvent.js';
 import { navigateToTask, closeTab } from '../workbench/runtime/navigationOrchestrator.js';
 import { getPersistentExecutorInstanceId } from '../workbench/runtime/executorIdentity.js';
@@ -1987,13 +1988,15 @@ async function runWorkbenchTaskPollTick() {
 
   const currentActiveTask = taskPoller?.getState?.()?.activeTask;
   if (prevActiveTask && !currentActiveTask) {
-    const registryTaskId = String(prevActiveTask.externalTaskId || prevActiveTask.taskId || '').trim();
-    const navigationTaskId = String(prevActiveTask.taskId || registryTaskId).trim();
-    clearWorkbenchTaskContext(registryTaskId);
-    const navigatedTabId = navigatedTabs.get(navigationTaskId);
-    if (navigatedTabId) {
+    const { registryIds, navigationIds } = taskExecutionCleanupKeys(prevActiveTask);
+    for (const registryId of registryIds) {
+      clearWorkbenchTaskContext(registryId);
+    }
+    for (const navigationId of navigationIds) {
+      const navigatedTabId = navigatedTabs.get(navigationId);
+      if (!navigatedTabId) continue;
       await closeTab(navigatedTabId);
-      navigatedTabs.delete(navigationTaskId);
+      navigatedTabs.delete(navigationId);
     }
   }
 }
