@@ -27,6 +27,13 @@ export function createManagedTaskController(runTask, {
     stop() {
       if (!state.isRunning) return;
       state.isStopping = true;
+      if (state.pauseResolve) {
+        state.isPaused = false;
+        const resolve = state.pauseResolve;
+        state.pauseResolve = null;
+        resolve();
+        return;
+      }
       controller.resume();
     },
     shouldStop() {

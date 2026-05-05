@@ -8,6 +8,8 @@ import {
   runXhsSelectorPreflight,
 } from '../platforms/xhs/selectorHealth.js';
 
+const XHS_CONTEXT_REFRESH_MESSAGE = '插件刚更新，请刷新当前页面后再点一次，刷新后即可继续。';
+
 export function createXhsPageController({
   MSG,
   assertPluginAuthorized,
@@ -178,7 +180,7 @@ export function createXhsPageController({
     const params = btn.dataset.params ? JSON.parse(btn.dataset.params) : {};
 
     if (isContextValid() === false) {
-      showToast('插件刚更新，请刷新当前页面后重试', 'warning');
+      showToast(XHS_CONTEXT_REFRESH_MESSAGE, 'warning');
       return;
     }
 
@@ -353,7 +355,7 @@ export function createXhsPageController({
       console.error('[灵感爆爆爆]', err);
       const errMsg = String(err?.message || '');
       if (/Extension context invalidated|context invalidated/i.test(errMsg) || isContextValid() === false) {
-        showToast('插件刚更新，请刷新当前页面后重试', 'warning');
+        showToast(XHS_CONTEXT_REFRESH_MESSAGE, 'warning');
         return;
       }
       showToast(`操作失败：${err.message}`, 'error');

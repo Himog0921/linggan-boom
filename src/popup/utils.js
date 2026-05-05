@@ -153,7 +153,7 @@ export function isContextError(msg) {
 export function toFriendlyError(err) {
   const msg = getErrorMessage(err);
   if (isContextError(msg)) {
-    return '插件刚更新或页面连接已断开，请刷新当前页面后重试。';
+    return '插件刚更新或页面连接已断开，请刷新当前页面后再点一次，刷新后即可继续。';
   }
   if (/未找到笔记数据|笔记详情页/.test(msg)) {
     return '当前不是完整笔记详情页，请先打开笔记详情后再采集。';

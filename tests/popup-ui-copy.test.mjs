@@ -161,6 +161,7 @@ test('popup workbench config separates plugin authorization from station pairing
   assert.match(componentSource, /输入授权码/);
   assert.match(componentSource, /激活授权/);
   assert.match(componentSource, /先完成插件授权，再使用内容工作台设置里生成的配对码绑定执行工位/);
+  assert.match(componentSource, /只接监控中心下发的监控任务/);
   assert.match(componentSource, /输入配对码/);
   assert.match(componentSource, /全部同步到工作台/);
 

@@ -951,7 +951,7 @@ function isContextError(msg) {
 function toFriendlyError(err) {
   const msg = getErrorMessage(err);
   if (isContextError(msg)) {
-    return '插件刚更新或页面连接已断开，请刷新当前页面后重试。';
+    return '插件刚更新或页面连接已断开，请刷新当前页面后再点一次，刷新后即可继续。';
   }
   if (/未找到笔记数据|笔记详情页/.test(msg)) {
     return '当前不是完整笔记详情页，请先打开笔记详情后再采集。';
@@ -1000,10 +1000,13 @@ function updateExecutionStationStatusUI(status = {}) {
     const roleLabel = role === 'manual' ? '手动采集工位' : '监控工位';
     const accounts = Array.isArray(status.platformAccounts) ? status.platformAccounts : [];
     const healthyCount = accounts.filter((account) => account.healthStatus === 'healthy').length;
+    const roleTaskHint = role === 'manual'
+      ? `已发现 ${healthyCount} 个可用账号。当前是手动采集工位，只接采集控制台下发的手动任务；监控任务请绑定监控工位。`
+      : `已发现 ${healthyCount} 个可用账号。当前是监控工位，只接监控中心下发的监控任务；手动任务请绑定手动采集工位。`;
     statusEl.textContent = `${name} · ${roleLabel}`;
     statusEl.className = 'flywheel-status connected';
     hintEl.textContent = healthyCount > 0
-      ? `已发现 ${healthyCount} 个可用账号，这个浏览器现在会只接${role === 'manual' ? '手动采集' : '监控'}任务。`
+      ? roleTaskHint
       : `已绑定${roleLabel}；请先在 Cookie & 账号里保存可用账号，才能领取任务。`;
   } else {
     statusEl.textContent = '未绑定';

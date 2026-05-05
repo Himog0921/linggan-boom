@@ -12,6 +12,8 @@ import { noteStore } from '../../db/noteStore.js';
 import { createCollectorEvidence, joinRawDomText } from '../../shared/collectorMetadata.js';
 import { withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
 
+const XHS_CONTEXT_REFRESH_MESSAGE = '插件刚更新，请刷新当前页面后再点一次，刷新后即可继续。';
+
 function normalizeDiscoverySnapshot(snapshot) {
   if (typeof snapshot === 'number') {
     return {
@@ -301,7 +303,7 @@ export function parseXhsPublishedAt(raw, { now = Date.now() } = {}) {
  */
 export async function collectNote(wd = window, options = {}) {
   if (!isContextValid()) {
-    throw new Error('插件刚更新，请刷新当前页面后重试');
+    throw new Error(XHS_CONTEXT_REFRESH_MESSAGE);
   }
 
   // 1. 注入脚本获取 noteDetailMap（最多重试 3 次，等待 __INITIAL_STATE__ 填充）
@@ -319,7 +321,7 @@ export async function collectNote(wd = window, options = {}) {
       console.warn(`[灵感爆爆爆] getByInject 第 ${attempt + 1} 次失败:`, e.message);
       const msg = String(e?.message || '');
       if (/Extension context invalidated|context invalidated/i.test(msg) || !isContextValid()) {
-        lastErr = new Error('插件刚更新，请刷新当前页面后重试');
+        lastErr = new Error(XHS_CONTEXT_REFRESH_MESSAGE);
         break;
       }
     }

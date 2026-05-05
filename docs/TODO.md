@@ -5,6 +5,8 @@
 
 ## 0. 最近完成
 
+- [x] 工作台任务页自动回收增强完成：插件自己为工作台任务打开的采集页，现在会把“任务 id → 标签页 id”的归属关系写入浏览器会话存储。这样即使 Chrome MV3 后台服务临时休眠、下一轮闹钟再恢复，任务成功、失败、停止或旧租约释放后仍能找到并关闭插件打开的采集页，避免小红书/抖音页面长时间占用内存。已有用户自己打开并被复用的页面不进入这张回收表，不会被误关。验证：`node --test tests/workbench-task-execution-cleanup.test.mjs tests/navigation-orchestrator.test.mjs` 通过 `9` 个用例；`npm run build` 通过，保留既有 webpack bundle 体积 warning。
+
 - [x] 监控工位接单后不续租、不回写修复完成：线上排查确认 2026-05-04 凌晨监控任务已经能被插件接走，部分任务还进入“已开始”，但后续没有任何记录写回，最后被工作台判定“租约过期/执行器失联”。根因有三处：任务轮询器首轮结束后没有释放内部运行标记，后续轮询、续租和结果上传都被跳过；部分工作台回写请求仍可能使用旧同步令牌，而不是当前插件授权令牌；当服务端返回旧租约已被释放或被其他工位持有时，插件仍会守着这个失效任务，导致后续新任务也被拖住。现在轮询器每轮结束后会恢复可执行状态，调度间隔收敛到 Chrome 可稳定执行的 30 秒；取任务、状态更新、结果增量、封面上传和手动同步都会优先使用当前插件授权令牌；租约续约返回冲突时会立即清掉本地旧任务和旧租约，下一轮重新接新任务；插件自己打开的执行页会在成功、失败、停止或旧租约释放后按任务 id / 执行 id 统一回收，避免长时间占用浏览器内存。验证：`node --test tests/workbench-control-sync.test.mjs tests/workbench-task-lease.test.mjs tests/workbench-task-poll-schedule.test.mjs tests/workbench-task-execution-cleanup.test.mjs tests/flywheel-cover-asset-upload.test.mjs tests/workbench-delta-outbox.test.mjs tests/workbench-task-poller.test.mjs` 通过 `41` 个用例；`npm run build` 通过，保留既有 webpack 体积 warning。
 
 ## 1. 怎么看这份清单

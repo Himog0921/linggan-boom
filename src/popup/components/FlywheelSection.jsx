@@ -50,6 +50,9 @@ export default function FlywheelSection({
 
   const accounts = Array.isArray(stationStatus.platformAccounts) ? stationStatus.platformAccounts : [];
   const healthyCount = accounts.filter((a) => a.healthStatus === 'healthy').length;
+  const stationTaskHint = stationRole === 'manual'
+    ? `已发现 ${healthyCount} 个可用账号。当前是手动采集工位，只接采集控制台下发的手动任务；监控任务请绑定监控工位。`
+    : `已发现 ${healthyCount} 个可用账号。当前是监控工位，只接监控中心下发的监控任务；手动任务请绑定手动采集工位。`;
   const presets = [
     { key: 'production', label: '线上正式站', url: presetUrls.production || 'https://lingganboom.fun' },
     { key: 'local', label: '本地 3000', url: presetUrls.local || 'http://localhost:3000' },
@@ -162,7 +165,7 @@ export default function FlywheelSection({
             ? '先完成插件授权，再使用内容工作台设置里生成的配对码绑定执行工位。'
             : stationStatus.registered
             ? (healthyCount > 0
-              ? `已发现 ${healthyCount} 个可用账号，这个浏览器现在会只接${stationRole === 'manual' ? '手动采集' : '监控'}任务。`
+              ? stationTaskHint
               : `已绑定${stationRoleLabel}；请先在 Cookie & 账号里保存可用账号，才能领取任务。`)
             : '把内容工作台给的配对码填进来：来自采集控制台的是手动工位，来自监控中心的是监控工位。'}
         </p>

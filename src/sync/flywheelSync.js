@@ -413,6 +413,16 @@ export async function syncToFlywheel(sources, tag = 'evaluate', operator = 'anon
   }
 
   if (batchErrors.length > 0) {
+    if (successfulBatchCount > 0) {
+      return {
+        success: true,
+        imported,
+        skipped,
+        details,
+        error: batchErrors.join('; '),
+        partial: true,
+      };
+    }
     return {
       success: false,
       imported,

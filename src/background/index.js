@@ -37,7 +37,12 @@ import {
 import { createTaskPoller } from '../workbench/runtime/taskPoller.js';
 import { scheduleWorkbenchTaskPollAlarm } from '../workbench/runtime/taskPollSchedule.js';
 import { createTaskDeltaReporter } from '../workbench/runtime/taskDeltaReporter.js';
-import { taskExecutionCleanupKeys } from '../workbench/runtime/taskExecutionCleanup.js';
+import {
+  normalizeNavigatedTaskTabsSnapshot,
+  rememberNavigatedTaskTab,
+  removeNavigatedTaskTabs,
+  taskExecutionCleanupKeys,
+} from '../workbench/runtime/taskExecutionCleanup.js';
 import { normalizeProgressEvent } from '../workbench/runtime/progressEvent.js';
 import { navigateToTask, closeTab } from '../workbench/runtime/navigationOrchestrator.js';
 import { getPersistentExecutorInstanceId } from '../workbench/runtime/executorIdentity.js';
@@ -184,11 +189,70 @@ const resultPackager = createResultPackager({
 });
 const workbenchTaskRegistry = new Map();
 const navigatedTabs = new Map();
+const NAVIGATED_TASK_TABS_STORAGE_KEY = 'workbenchNavigatedTaskTabs';
 const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
 const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
 const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
 
 let consecutiveEmptyPolls = 0;
+
+function navigatedTaskTabStorageArea() {
+  return chrome.storage?.session || chrome.storage?.local || null;
+}
+
+function navigatedTabsSnapshotFromMemory() {
+  return normalizeNavigatedTaskTabsSnapshot(Object.fromEntries(navigatedTabs.entries()));
+}
+
+async function readNavigatedTaskTabsSnapshot() {
+  const area = navigatedTaskTabStorageArea();
+  if (!area?.get) return navigatedTabsSnapshotFromMemory();
+  try {
+    const stored = await area.get(NAVIGATED_TASK_TABS_STORAGE_KEY);
+    return normalizeNavigatedTaskTabsSnapshot(stored?.[NAVIGATED_TASK_TABS_STORAGE_KEY]);
+  } catch {
+    return navigatedTabsSnapshotFromMemory();
+  }
+}
+
+async function writeNavigatedTaskTabsSnapshot(snapshot = {}) {
+  const normalized = normalizeNavigatedTaskTabsSnapshot(snapshot);
+  navigatedTabs.clear();
+  for (const [taskId, tabId] of Object.entries(normalized)) {
+    navigatedTabs.set(taskId, tabId);
+  }
+
+  const area = navigatedTaskTabStorageArea();
+  if (!area?.set) return;
+  await area.set({
+    [NAVIGATED_TASK_TABS_STORAGE_KEY]: normalized,
+  }).catch(() => {});
+}
+
+async function rememberNavigatedTaskExecutionTab(taskId = '', tabId = 0) {
+  const snapshot = {
+    ...(await readNavigatedTaskTabsSnapshot()),
+    ...navigatedTabsSnapshotFromMemory(),
+  };
+  await writeNavigatedTaskTabsSnapshot(
+    rememberNavigatedTaskTab(snapshot, taskId, tabId),
+  );
+}
+
+async function closeRememberedTaskExecutionTabs(taskIds = []) {
+  const snapshot = {
+    ...(await readNavigatedTaskTabsSnapshot()),
+    ...navigatedTabsSnapshotFromMemory(),
+  };
+  for (const taskId of taskIds) {
+    const tabId = Number(snapshot[String(taskId || '').trim()] || 0);
+    if (!tabId) continue;
+    await closeTab(tabId);
+  }
+  await writeNavigatedTaskTabsSnapshot(
+    removeNavigatedTaskTabs(snapshot, taskIds),
+  );
+}
 
 function isUrlLike(value = '') {
   return /^https?:\/\//i.test(String(value || '').trim());
@@ -1926,7 +1990,7 @@ const taskPoller = createTaskPoller({
       taskType,
       platform: String(task.platform || '').trim(),
     });
-    navigatedTabs.set(taskId, navResult.tabId);
+    await rememberNavigatedTaskExecutionTab(taskId, navResult.tabId);
 
     const result = await bgHandlers[MSG.WORKBENCH_CAPABILITY_CHECK]({
       tabId: navResult.tabId,
@@ -1934,8 +1998,7 @@ const taskPoller = createTaskPoller({
     }, {});
 
     if (!result?.accepted) {
-      await closeTab(navResult.tabId);
-      navigatedTabs.delete(taskId);
+      await closeRememberedTaskExecutionTabs([taskId]);
       clearWorkbenchTaskContext(taskId);
     }
 
@@ -1992,12 +2055,7 @@ async function runWorkbenchTaskPollTick() {
     for (const registryId of registryIds) {
       clearWorkbenchTaskContext(registryId);
     }
-    for (const navigationId of navigationIds) {
-      const navigatedTabId = navigatedTabs.get(navigationId);
-      if (!navigatedTabId) continue;
-      await closeTab(navigatedTabId);
-      navigatedTabs.delete(navigationId);
-    }
+    await closeRememberedTaskExecutionTabs(navigationIds);
   }
 }
 

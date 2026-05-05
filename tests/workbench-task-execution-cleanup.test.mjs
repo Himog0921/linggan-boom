@@ -1,7 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { taskExecutionCleanupKeys } from '../src/workbench/runtime/taskExecutionCleanup.js';
+import {
+  normalizeNavigatedTaskTabsSnapshot,
+  rememberNavigatedTaskTab,
+  removeNavigatedTaskTabs,
+  taskExecutionCleanupKeys,
+} from '../src/workbench/runtime/taskExecutionCleanup.js';
 
 test('task execution cleanup covers task id, external id, and plugin run id', () => {
   assert.deepEqual(taskExecutionCleanupKeys({
@@ -22,5 +27,25 @@ test('task execution cleanup dedupes ids for direct workbench tasks', () => {
   }), {
     registryIds: ['task_1'],
     navigationIds: ['task_1'],
+  });
+});
+
+test('task execution cleanup persists only valid plugin-opened task tabs', () => {
+  const remembered = rememberNavigatedTaskTab(
+    normalizeNavigatedTaskTabsSnapshot({
+      task_1: 501,
+      empty: 0,
+      bad: 'not-a-tab',
+    }),
+    'task_2',
+    502,
+  );
+
+  assert.deepEqual(remembered, {
+    task_1: 501,
+    task_2: 502,
+  });
+  assert.deepEqual(removeNavigatedTaskTabs(remembered, ['task_1', 'missing']), {
+    task_2: 502,
   });
 });
