@@ -77,7 +77,7 @@ function normalizeNoteData(noteData) {
   return note || null;
 }
 
-export function isCollectedNoteUsable(note = {}, expectedNoteId = '') {
+export function isCollectedNoteUsable(note = {}, expectedNoteId = '', { requireStats = false } = {}) {
   const normalizedExpectedId = String(expectedNoteId || '').trim();
   const normalizedActualId = String(note?.noteId || note?.id || '').trim();
   if (normalizedExpectedId && normalizedActualId && normalizedExpectedId !== normalizedActualId) {
@@ -91,14 +91,32 @@ export function isCollectedNoteUsable(note = {}, expectedNoteId = '') {
       || note?.video?.consumer
   );
   const hasAuthor = Boolean(String(note?.user?.nickname || '').trim() || String(note?.user?.userId || '').trim());
-  const hasStats = Boolean(
-    note?.interactInfo?.likedCount
-    || note?.interactInfo?.commentCount
-    || note?.interactInfo?.shareCount
-    || note?.interactInfo?.collectedCount
+
+  if (!requireStats) {
+    const hasStats = Boolean(
+      note?.interactInfo?.likedCount
+      || note?.interactInfo?.commentCount
+      || note?.interactInfo?.shareCount
+      || note?.interactInfo?.collectedCount
+    );
+    return hasText || hasMedia || hasAuthor || hasStats;
+  }
+
+  // detail_probe 场景：要求关键互动字段全部到位，避免 AJAX 填充未完成时过早采集
+  const interactInfo = note?.interactInfo;
+  const hasFullStats = Boolean(
+    interactInfo
+    && (interactInfo.likedCount != null || interactInfo.likeCount != null)
+    && (interactInfo.collectedCount != null || interactInfo.collectCount != null)
+    && (interactInfo.commentCount != null || interactInfo.comments != null)
+  );
+  const hasValidMedia = Boolean(
+    (Array.isArray(note?.imageList) && note.imageList.length > 0 && (note.imageList[0]?.url || note.imageList[0]?.urlDefault))
+    || note?.video?.media?.stream
+    || note?.video?.consumer
   );
 
-  return hasText || hasMedia || hasAuthor || hasStats;
+  return (hasText || hasValidMedia || hasAuthor) && hasFullStats;
 }
 
 export function resolveExpectedNoteFromMap(noteMap = {}, expectedNoteId = '', currentUrl = '') {
@@ -358,7 +376,7 @@ export async function collectNote(wd = window, options = {}) {
     throw new Error('笔记数据解析失败，数据结构异常');
   }
 
-  if (!isCollectedNoteUsable(note, expectedNoteId)) {
+  if (!isCollectedNoteUsable(note, expectedNoteId, { requireStats: true })) {
     throw new Error(`笔记数据未稳定就绪: expected=${expectedNoteId || 'unknown'} actual=${note.noteId || note.id || ''}`);
   }
 

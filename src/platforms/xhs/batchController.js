@@ -836,14 +836,41 @@ export class BatchNoteController extends BaseBatchController {
     return resolveExpectedNoteFromMap(noteMap, noteId, window.location.href);
   }
 
-  async _waitForNoteDataStable(noteId, timeout = 4000) {
+  _isNoteDataComplete(snapshot) {
+    if (!snapshot.exactMatch || !snapshot.usable) return false;
+    const { note } = snapshot;
+    if (!note) return false;
+
+    // 检查关键互动数据是否全部到位（避免 AJAX 分批填充时过早采集）
+    const interactInfo = note.interactInfo;
+    const hasFullStats = Boolean(
+      interactInfo
+      && (interactInfo.likedCount != null || interactInfo.likeCount != null)
+      && (interactInfo.collectedCount != null || interactInfo.collectCount != null)
+      && (interactInfo.commentCount != null || interactInfo.comments != null)
+    );
+
+    // 检查媒体数据是否完整（图片必须有有效 URL）
+    const hasValidMedia = Boolean(
+      (Array.isArray(note.imageList) && note.imageList.length > 0
+        && (note.imageList[0]?.url || note.imageList[0]?.urlDefault))
+      || note.video?.media?.stream
+      || note.video?.consumer
+    );
+
+    return hasFullStats && hasValidMedia;
+  }
+
+  async _waitForNoteDataStable(noteId, timeout = 6000) {
     const startedAt = Date.now();
     let stableRounds = 0;
 
     while (Date.now() - startedAt < timeout) {
       if (await this._pauseForRiskControl()) return false;
       const snapshot = this._readExpectedNoteSnapshot(noteId);
-      if (snapshot.exactMatch && snapshot.usable) {
+      // detail_probe 场景要求数据完整，不能只用 isCollectedNoteUsable 的宽松判定
+      const isComplete = this._isNoteDataComplete(snapshot);
+      if (isComplete) {
         stableRounds += 1;
         if (stableRounds >= 2) return true;
       } else {
