@@ -13,7 +13,7 @@ export function taskExecutionCleanupKeys(activeTask = {}) {
 
   return {
     registryIds: uniqueIds([taskId, externalTaskId, pluginRunId]),
-    navigationIds: uniqueIds([taskId, externalTaskId]),
+    navigationIds: uniqueIds([taskId, externalTaskId, pluginRunId]),
   };
 }
 

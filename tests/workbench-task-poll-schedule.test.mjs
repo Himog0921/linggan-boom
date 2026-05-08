@@ -3,6 +3,9 @@ import assert from 'node:assert/strict';
 
 import {
   FAST_TASK_POLL_INTERVAL_MS,
+  IDLE_POLL_JITTER_MIN_MS,
+  MIN_CHROME_ALARM_INTERVAL_MS,
+  POST_TASK_COOLDOWN_MAX_MS,
   SLOW_TASK_POLL_INTERVAL_MS,
   scheduleWorkbenchTaskPollAlarm,
 } from '../src/workbench/runtime/taskPollSchedule.js';
@@ -50,6 +53,7 @@ test('task poll scheduler keeps the existing fallback cadence when claim provide
     alarmName: 'workbench-task-poll',
     result: { idle: true },
     consecutiveEmptyPolls: 0,
+    randomFn: () => 0,
   });
 
   const slowConfig = scheduleWorkbenchTaskPollAlarm({
@@ -61,9 +65,61 @@ test('task poll scheduler keeps the existing fallback cadence when claim provide
     alarmName: 'workbench-task-poll',
     result: { idle: true },
     consecutiveEmptyPolls: 3,
+    randomFn: () => 0,
   });
 
-  assert.equal(emptyCalls[0][1].periodInMinutes, FAST_TASK_POLL_INTERVAL_MS / 60_000);
-  assert.equal(slowConfig.intervalMs, SLOW_TASK_POLL_INTERVAL_MS);
-  assert.equal(slowCalls[0][1].periodInMinutes, SLOW_TASK_POLL_INTERVAL_MS / 60_000);
+  assert.equal(emptyCalls[0][1].periodInMinutes, (FAST_TASK_POLL_INTERVAL_MS + IDLE_POLL_JITTER_MIN_MS) / 60_000);
+  assert.equal(slowConfig.intervalMs, SLOW_TASK_POLL_INTERVAL_MS + IDLE_POLL_JITTER_MIN_MS);
+  assert.equal(slowCalls[0][1].periodInMinutes, (SLOW_TASK_POLL_INTERVAL_MS + IDLE_POLL_JITTER_MIN_MS) / 60_000);
+});
+
+test('task poll scheduler respects server balancing waits without adding jitter', async () => {
+  const calls = [];
+  const config = scheduleWorkbenchTaskPollAlarm({
+    alarmsApi: {
+      create(name, options) {
+        calls.push([name, options]);
+      },
+    },
+    alarmName: 'workbench-task-poll',
+    result: {
+      idle: true,
+      idleReasonCode: 'STATION_BALANCING_WAIT',
+      nextPollAfterMs: 8_000,
+    },
+    consecutiveEmptyPolls: 0,
+    randomFn: () => 1,
+  });
+
+  assert.equal(config.requestedIntervalMs, 8_000);
+  assert.equal(config.intervalMs, MIN_CHROME_ALARM_INTERVAL_MS);
+  assert.deepEqual(calls, [[
+    'workbench-task-poll',
+    { periodInMinutes: MIN_CHROME_ALARM_INTERVAL_MS / 60_000 },
+  ]]);
+});
+
+test('task poll scheduler applies a short cooldown after task completion', async () => {
+  const calls = [];
+  const config = scheduleWorkbenchTaskPollAlarm({
+    alarmsApi: {
+      create(name, options) {
+        calls.push([name, options]);
+      },
+    },
+    alarmName: 'workbench-task-poll',
+    result: {
+      success: true,
+      final: true,
+      status: 'completed',
+    },
+    consecutiveEmptyPolls: 0,
+    randomFn: () => 1,
+  });
+
+  assert.equal(config.intervalMs, POST_TASK_COOLDOWN_MAX_MS);
+  assert.deepEqual(calls, [[
+    'workbench-task-poll',
+    { periodInMinutes: POST_TASK_COOLDOWN_MAX_MS / 60_000 },
+  ]]);
 });

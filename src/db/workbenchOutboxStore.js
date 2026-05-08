@@ -1,4 +1,7 @@
+import Dexie from 'dexie';
 import db from './index.js';
+
+const IN_FLIGHT_TIMEOUT_MS = 5 * 60 * 1000;
 
 function now() {
   return Date.now();
@@ -19,6 +22,28 @@ function retryDelayMs(attemptCount = 0) {
   if (attempt === 3) return 5000;
   if (attempt === 4) return 15000;
   return 60000;
+}
+
+async function recoverStaleInFlightRows({ now: nowMs = now(), limit = 50 } = {}) {
+  const maxLimit = Math.max(1, Number(limit || 50));
+  const staleRows = await db.workbenchOutbox
+    .where('[status+nextAttemptAt+createdAt]')
+    .between(['in_flight', Dexie.minKey, Dexie.minKey], ['in_flight', nowMs, Dexie.maxKey])
+    .limit(maxLimit)
+    .toArray();
+
+  await Promise.all(staleRows.map(async (row) => {
+    const attemptCount = Number(row.attemptCount || 0) + 1;
+    await db.workbenchOutbox.update(row.id, {
+      status: 'failed',
+      attemptCount,
+      errorMessage: 'in_flight_timeout',
+      nextAttemptAt: nowMs,
+      updatedAt: nowMs,
+    });
+  }));
+
+  return staleRows.length;
 }
 
 function normalizeOutboxRow(item = {}) {
@@ -69,6 +94,7 @@ export const workbenchOutboxStore = {
 
   async listPending({ limit = 10, now: nowMs = now() } = {}) {
     const maxLimit = Math.max(1, Number(limit || 10));
+    await recoverStaleInFlightRows({ now: nowMs, limit: maxLimit });
     const pending = await db.workbenchOutbox
       .where('[status+nextAttemptAt+createdAt]')
       .between(['pending', Dexie.minKey, Dexie.minKey], ['pending', nowMs, Dexie.maxKey])
@@ -85,12 +111,22 @@ export const workbenchOutboxStore = {
       .slice(0, maxLimit);
   },
 
-  async markInFlight(ids = []) {
+  async recoverStaleInFlight(options = {}) {
+    return recoverStaleInFlightRows(options);
+  },
+
+  async markInFlight(ids = [], { timeoutMs = IN_FLIGHT_TIMEOUT_MS } = {}) {
     const nowMs = now();
+    const nextAttemptAt = nowMs + Math.max(1000, Number(timeoutMs || IN_FLIGHT_TIMEOUT_MS));
     await Promise.all((Array.isArray(ids) ? ids : [ids]).map(async (id) => {
       const key = normalizeText(id);
       if (!key) return;
-      await db.workbenchOutbox.update(key, { status: 'in_flight', updatedAt: nowMs });
+      await db.workbenchOutbox.update(key, {
+        status: 'in_flight',
+        errorMessage: '',
+        nextAttemptAt,
+        updatedAt: nowMs,
+      });
     }));
   },
 
@@ -150,4 +186,3 @@ export const workbenchOutboxStore = {
       .reduce((max, row) => Math.max(max, Number(row.sequence || 0)), 0);
   },
 };
-

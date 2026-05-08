@@ -8,6 +8,7 @@ import {
   patchCollectionTask,
   fetchCollectionTaskControlRequests,
   ingestCollectionTaskDelta,
+  ensureFlywheelDataSession,
   prepareNotesWithStableCovers,
   prepareRecordWithStableCover,
   mergeFlywheelAuthorization,
@@ -1197,15 +1198,27 @@ const bgHandlers = {
     const authorizationToken = String(config?.apiToken || '').trim();
 
     const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
-    const preparedNotes = await prepareNotesWithStableCovers({
-      ...config,
-      apiToken: authorizationToken,
-    }, notes);
+    let dataConfig;
+    try {
+      dataConfig = await ensureFlywheelDataSession({
+        ...config,
+        apiToken: authorizationToken,
+      });
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error?.message || error || '请先登录使用者账号，再同步插件采集数据。'),
+        errorCode: 'plugin_data_workspace_required',
+      };
+    }
+    const preparedNotes = await prepareNotesWithStableCovers(dataConfig, notes);
     const resp = await fetch(`${url}/api/collect/batch`, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         'Content-Type': 'application/json',
         ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
+        ...(dataConfig?.dataToken ? { 'X-Plugin-Data-Token': dataConfig.dataToken } : {}),
       },
       body: JSON.stringify({ notes: preparedNotes, comments, authors }),
       signal: AbortSignal.timeout(30000),
@@ -1298,6 +1311,11 @@ const bgHandlers = {
       await saveFlywheelConfig({
         enabled: true,
         apiToken: String(authorization.authorizationToken || '').trim(),
+        dataToken: '',
+        dataTokenExpiresAt: '',
+        dataWorkspaceId: '',
+        dataUserEmail: '',
+        dataUserName: '',
       });
       await executionStationClient.clearStationIdentity();
       await taskLeaseStore.clear();
@@ -1316,7 +1334,14 @@ const bgHandlers = {
 
   [MSG.CLEAR_PLUGIN_AUTHORIZATION]: async () => {
     await pluginAuthorizationClient.clearAuthorization();
-    await saveFlywheelConfig({ apiToken: '' });
+    await saveFlywheelConfig({
+      apiToken: '',
+      dataToken: '',
+      dataTokenExpiresAt: '',
+      dataWorkspaceId: '',
+      dataUserEmail: '',
+      dataUserName: '',
+    });
     await executionStationClient.clearStationIdentity();
     await taskLeaseStore.clear();
     return { success: true };
@@ -2029,8 +2054,9 @@ const taskPoller = createTaskPoller({
 
 async function runWorkbenchTaskPollTick() {
   const prevActiveTask = taskPoller?.getState?.()?.activeTask;
+  let result = null;
   try {
-    const result = await taskPoller.tick();
+    result = await taskPoller.tick();
     await taskDeltaReporter.flush();
 
     if (result?.idle) {
@@ -2050,8 +2076,9 @@ async function runWorkbenchTaskPollTick() {
   }
 
   const currentActiveTask = taskPoller?.getState?.()?.activeTask;
-  if (prevActiveTask && !currentActiveTask) {
-    const { registryIds, navigationIds } = taskExecutionCleanupKeys(prevActiveTask);
+  const cleanupTask = result?.cleanupTask || (prevActiveTask && !currentActiveTask ? prevActiveTask : null);
+  if (cleanupTask) {
+    const { registryIds, navigationIds } = taskExecutionCleanupKeys(cleanupTask);
     for (const registryId of registryIds) {
       clearWorkbenchTaskContext(registryId);
     }

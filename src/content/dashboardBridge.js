@@ -1,14 +1,40 @@
 import { normalizeCompatResponse } from '../shared/responseEnvelope.js';
 
+function generateNonce() {
+  const arr = new Uint8Array(16);
+  crypto.getRandomValues(arr);
+  return Array.from(arr, (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function storeDashboardNonce(nonce) {
+  try {
+    const area = chrome.storage.session || chrome.storage.local;
+    await area.set({ dashboardNonce: nonce, dashboardNonceAt: Date.now() });
+  } catch (e) {
+    console.error('[DashboardBridge] Failed to store nonce:', e);
+  }
+}
+
+async function clearDashboardNonce() {
+  try {
+    const area = chrome.storage.session || chrome.storage.local;
+    await area.remove(['dashboardNonce', 'dashboardNonceAt']);
+  } catch (e) {
+    // ignore
+  }
+}
+
 export function createDashboardBridge({
   MSG,
   noteStore,
   commentStore,
   authorStore,
   downloadNoteMediaFromRecord,
+  _testNonce = null,
 } = {}) {
   let dashboardIframe = null;
   let dashboardOverlay = null;
+  let currentNonce = _testNonce;
 
   function toggleDashboard() {
     if (dashboardIframe && document.body.contains(dashboardIframe)) {
@@ -16,8 +42,13 @@ export function createDashboardBridge({
       dashboardOverlay?.remove();
       dashboardIframe = null;
       dashboardOverlay = null;
+      currentNonce = null;
+      clearDashboardNonce();
       return;
     }
+
+    currentNonce = generateNonce();
+    storeDashboardNonce(currentNonce);
 
     dashboardOverlay = document.createElement('div');
     Object.assign(dashboardOverlay.style, {
@@ -98,8 +129,12 @@ export function createDashboardBridge({
 
   async function handleDashboardMessageEvent(event) {
     if (event.data?.source !== 'lgboom-dashboard') return false;
+    if (!currentNonce || event.data?.nonce !== currentNonce) {
+      console.warn('[DashboardBridge] Rejected message: invalid or missing nonce');
+      return false;
+    }
 
-    const { action, ...data } = event.data;
+    const { action, nonce: _nonce, ...data } = event.data;
     const port = event.ports?.[0];
     if (!port) return true;
 

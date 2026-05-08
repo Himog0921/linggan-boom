@@ -1,9 +1,25 @@
 const NAVIGATION_TIMEOUT_MS = 30000;
 
+function decodePossiblyEncodedKeyword(target = '') {
+  let value = String(target || '').trim();
+  for (let i = 0; i < 2; i += 1) {
+    if (!/%[0-9a-f]{2}/i.test(value)) break;
+    try {
+      const decoded = decodeURIComponent(value);
+      if (!decoded || decoded === value) break;
+      value = decoded;
+    } catch {
+      break;
+    }
+  }
+  return value;
+}
+
 function buildXhsSearchUrl(target, options = {}) {
+  const keyword = decodePossiblyEncodedKeyword(target);
   const sortMode = String(options.sortMode || '').trim();
   const sortParam = sortMode === 'hot' ? '&sort=hot' : sortMode === 'time' ? '&sort=time' : '';
-  return `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(target)}${sortParam}`;
+  return `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}${sortParam}`;
 }
 
 function isHttpUrl(value = '') {

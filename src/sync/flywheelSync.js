@@ -11,6 +11,7 @@ const FLYWHEEL_STORAGE_KEY = 'flywheelConfig';
 let cachedConfig = null;
 let cachedAt = 0;
 const CACHE_TTL_MS = 30000;
+const DATA_SESSION_REFRESH_SKEW_MS = 5 * 60 * 1000;
 
 async function readFlywheelStorage() {
   if (cachedConfig && (Date.now() - cachedAt) < CACHE_TTL_MS) return cachedConfig;
@@ -24,6 +25,11 @@ async function readFlywheelStorage() {
     serverUrl: normalizeServerUrl(config.serverUrl || API_BASE_URL),
     enabled: hasEnabledFlag ? config.enabled !== false : true,
     apiToken: String(config.apiToken || '').trim(),
+    dataToken: String(config.dataToken || '').trim(),
+    dataTokenExpiresAt: String(config.dataTokenExpiresAt || '').trim(),
+    dataWorkspaceId: String(config.dataWorkspaceId || '').trim(),
+    dataUserEmail: String(config.dataUserEmail || '').trim(),
+    dataUserName: String(config.dataUserName || '').trim(),
     updatedAt: config.updatedAt || 0,
   };
   cachedAt = Date.now();
@@ -35,6 +41,11 @@ async function writeFlywheelStorage(config = {}) {
   const hasServerUrl = Object.prototype.hasOwnProperty.call(config, 'serverUrl');
   const hasEnabledFlag = Object.prototype.hasOwnProperty.call(config, 'enabled');
   const hasApiToken = Object.prototype.hasOwnProperty.call(config, 'apiToken');
+  const hasDataToken = Object.prototype.hasOwnProperty.call(config, 'dataToken');
+  const hasDataTokenExpiresAt = Object.prototype.hasOwnProperty.call(config, 'dataTokenExpiresAt');
+  const hasDataWorkspaceId = Object.prototype.hasOwnProperty.call(config, 'dataWorkspaceId');
+  const hasDataUserEmail = Object.prototype.hasOwnProperty.call(config, 'dataUserEmail');
+  const hasDataUserName = Object.prototype.hasOwnProperty.call(config, 'dataUserName');
   const next = {
     serverUrl: normalizeServerUrl(
       hasServerUrl
@@ -43,6 +54,11 @@ async function writeFlywheelStorage(config = {}) {
     ),
     enabled: hasEnabledFlag ? config.enabled !== false : previous.enabled !== false,
     apiToken: hasApiToken ? String(config.apiToken || '').trim() : String(previous.apiToken || '').trim(),
+    dataToken: hasDataToken ? String(config.dataToken || '').trim() : String(previous.dataToken || '').trim(),
+    dataTokenExpiresAt: hasDataTokenExpiresAt ? String(config.dataTokenExpiresAt || '').trim() : String(previous.dataTokenExpiresAt || '').trim(),
+    dataWorkspaceId: hasDataWorkspaceId ? String(config.dataWorkspaceId || '').trim() : String(previous.dataWorkspaceId || '').trim(),
+    dataUserEmail: hasDataUserEmail ? String(config.dataUserEmail || '').trim() : String(previous.dataUserEmail || '').trim(),
+    dataUserName: hasDataUserName ? String(config.dataUserName || '').trim() : String(previous.dataUserName || '').trim(),
     updatedAt: Date.now(),
   };
   cachedConfig = next;
@@ -75,6 +91,7 @@ async function fetchFlywheel(path, options = {}) {
   const {
     serverUrl = '',
     apiToken,
+    dataToken,
     timeoutMs = 10000,
     method = 'GET',
     headers = {},
@@ -85,19 +102,78 @@ async function fetchFlywheel(path, options = {}) {
   const resolvedToken = typeof apiToken === 'string'
     ? String(apiToken || '').trim()
     : String(config?.apiToken || '').trim();
+  const resolvedDataToken = typeof dataToken === 'string'
+    ? String(dataToken || '').trim()
+    : String(config?.dataToken || '').trim();
   const requestHeaders = {
     ...headers,
   };
   if (resolvedToken) {
     requestHeaders.Authorization = `Bearer ${resolvedToken}`;
   }
+  if (resolvedDataToken) {
+    requestHeaders['X-Plugin-Data-Token'] = resolvedDataToken;
+  }
   const response = await fetch(`${baseUrl}${path}`, {
     method,
     headers: requestHeaders,
+    credentials: 'include',
     body,
     signal: AbortSignal.timeout(timeoutMs),
   });
   return response;
+}
+
+function hasFreshFlywheelDataSession(config = {}) {
+  const dataToken = firstText(config.dataToken);
+  const expiresAt = Date.parse(firstText(config.dataTokenExpiresAt));
+  return Boolean(dataToken)
+    && Number.isFinite(expiresAt)
+    && expiresAt - Date.now() > DATA_SESSION_REFRESH_SKEW_MS;
+}
+
+export async function ensureFlywheelDataSession(config = {}) {
+  const stored = await readFlywheelStorage();
+  const baseConfig = {
+    ...stored,
+    ...config,
+  };
+  const authorizationToken = firstText(baseConfig.apiToken);
+  if (!authorizationToken) return baseConfig;
+
+  const baseUrl = await resolveFlywheelBaseUrl(baseConfig.serverUrl || '');
+  const response = await fetch(`${baseUrl}/api/plugin-data-workspace`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: {
+      Authorization: `Bearer ${authorizationToken}`,
+    },
+    signal: AbortSignal.timeout(15000),
+  }).catch((error) => {
+    if (hasFreshFlywheelDataSession(baseConfig)) return null;
+    throw error;
+  });
+  if (!response) return baseConfig;
+  if (!response.ok) {
+    if (hasFreshFlywheelDataSession(baseConfig)) return baseConfig;
+    await throwForWorkbenchHttpError(response, 'plugin_data_workspace_required');
+  }
+
+  const data = await response.json().catch(() => ({}));
+  const dataToken = firstText(data.dataToken);
+  if (!dataToken) {
+    throw createHttpError('plugin_data_workspace_required: missing_data_token', { retryable: true });
+  }
+  const next = {
+    ...baseConfig,
+    dataToken,
+    dataTokenExpiresAt: firstText(data.expiresAt),
+    dataWorkspaceId: firstText(data.workspaceId),
+    dataUserEmail: firstText(data.user?.email),
+    dataUserName: firstText(data.user?.name),
+  };
+  await writeFlywheelStorage(next);
+  return next;
 }
 
 export function mergeFlywheelAuthorization(config = {}, authorization = {}) {
@@ -229,6 +305,7 @@ export async function uploadCoverMediaAsset(config = {}, record = {}) {
   const response = await fetchFlywheel('/api/media-assets/cover', {
     serverUrl: config?.serverUrl || '',
     apiToken: config?.apiToken,
+    dataToken: config?.dataToken,
     method: 'POST',
     body: formData,
     timeoutMs: 30000,
@@ -313,13 +390,16 @@ async function readErrorBody(response) {
 async function throwForWorkbenchHttpError(response, fallbackMessage = 'workbench_request_failed') {
   const bodyText = await readErrorBody(response);
   let retryable = isRetryableStatus(response.status);
+  let message = bodyText || `${fallbackMessage}: HTTP ${response.status}`;
   try {
     const body = JSON.parse(bodyText || '{}');
     if (typeof body.retryable === 'boolean') retryable = body.retryable;
+    if (firstText(body.error)) message = firstText(body.error);
+    if (firstText(body.message)) message = firstText(body.message);
   } catch {
     // keep status-based classification
   }
-  throw createHttpError(bodyText || `${fallbackMessage}: HTTP ${response.status}`, {
+  throw createHttpError(message, {
     status: response.status,
     bodyText,
     retryable,
@@ -353,8 +433,10 @@ function normalizeSource(s) {
 
 async function sendBatch(batchSources, tag, operator) {
   const config = await readFlywheelStorage();
-  const preparedSources = await prepareNotesWithStableCovers(config, batchSources);
+  const dataConfig = await ensureFlywheelDataSession(config);
+  const preparedSources = await prepareNotesWithStableCovers(dataConfig, batchSources);
   const response = await fetchFlywheel('/api/collect/batch', {
+    ...dataConfig,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',

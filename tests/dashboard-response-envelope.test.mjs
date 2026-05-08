@@ -6,6 +6,7 @@ import { unwrapParentResponseData } from '../src/dashboard/utils.js';
 
 test('dashboard bridge wraps raw collection payloads in a success/data envelope', async () => {
   const payloads = [];
+  const TEST_NONCE = 'test-nonce-1';
   const bridge = createDashboardBridge({
     MSG: {
       GET_ALL_NOTES: 'getAllNotes',
@@ -30,12 +31,14 @@ test('dashboard bridge wraps raw collection payloads in a success/data envelope'
       getAll: async () => [],
     },
     downloadNoteMediaFromRecord: async () => ({}),
+    _testNonce: TEST_NONCE,
   });
 
   await bridge.handleDashboardMessageEvent({
     data: {
       source: 'lgboom-dashboard',
       action: 'getAllNotes',
+      nonce: TEST_NONCE,
     },
     ports: [{
       postMessage(value) {
@@ -52,10 +55,18 @@ test('dashboard bridge wraps raw collection payloads in a success/data envelope'
 
 test('dashboard bridge preserves sync metadata while also exposing data envelope', async () => {
   const payloads = [];
+  const TEST_NONCE = 'test-nonce-2';
   globalThis.chrome = {
     runtime: {
       async sendMessage() {
         return { success: true, imported: 3, skipped: 1 };
+      },
+    },
+    storage: {
+      session: {
+        async set() {},
+        async get() { return {}; },
+        async remove() {},
       },
     },
   };
@@ -78,12 +89,14 @@ test('dashboard bridge preserves sync metadata while also exposing data envelope
     commentStore: {},
     authorStore: {},
     downloadNoteMediaFromRecord: async () => ({}),
+    _testNonce: TEST_NONCE,
   });
 
   await bridge.handleDashboardMessageEvent({
     data: {
       source: 'lgboom-dashboard',
       action: 'syncToWorkbench',
+      nonce: TEST_NONCE,
       notes: [{ noteId: 'n1' }],
       comments: [],
       authors: [],

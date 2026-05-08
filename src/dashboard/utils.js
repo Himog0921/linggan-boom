@@ -454,7 +454,16 @@ export function getExportColumns(tab, allData) {
   }
 }
 
-export function sendToParent(action, data = {}, options = {}) {
+export async function sendToParent(action, data = {}, options = {}) {
+  let nonce = '';
+  try {
+    const area = chrome.storage.session || chrome.storage.local;
+    const result = await area.get(['dashboardNonce']);
+    nonce = result.dashboardNonce || '';
+  } catch (e) {
+    console.error('[Dashboard] Failed to read nonce:', e);
+  }
+
   return new Promise((resolve) => {
     const timeoutMs = Number(options.timeoutMs ?? 3000);
     let settled = false;
@@ -464,7 +473,7 @@ export function sendToParent(action, data = {}, options = {}) {
       settled = true;
       resolve(e.data);
     };
-    window.parent.postMessage({ source: 'lgboom-dashboard', action, ...data }, '*', [channel.port2]);
+    window.parent.postMessage({ source: 'lgboom-dashboard', action, nonce, ...data }, '*', [channel.port2]);
     if (timeoutMs > 0) {
       setTimeout(() => {
         if (settled) return;

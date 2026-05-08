@@ -10,6 +10,7 @@ import {
 import { saveFlywheelConfig, syncToFlywheel } from '../src/sync/flywheelSync.js';
 
 const popupSourcePath = new URL('../src/popup/popup.js', import.meta.url);
+const backgroundSourcePath = new URL('../src/background/index.js', import.meta.url);
 
 test('popup flywheel mappers preserve quality fields and collectionRunId', () => {
   const note = mapNoteToFlywheel({
@@ -150,6 +151,14 @@ test('syncToFlywheel reads apiToken from flywheel config instead of hardcoded to
   };
   globalThis.fetch = async (url, options) => {
     calls.push([url, options]);
+    if (calls.length === 1) {
+      return new Response(JSON.stringify({
+        dataToken: 'data_token_123',
+        expiresAt: '2026-05-07T00:00:00.000Z',
+        user: { email: 'user@example.com', name: '使用者' },
+        workspaceId: 'user-workspace',
+      }), { status: 200 });
+    }
     return new Response(JSON.stringify({
       imported: 1,
       skipped: 0,
@@ -171,12 +180,24 @@ test('syncToFlywheel reads apiToken from flywheel config instead of hardcoded to
       title: '标题',
     }]);
 
-    assert.equal(calls.length, 1);
+    assert.equal(calls.length, 2);
     assert.equal(calls[0][1].headers.Authorization, 'Bearer token_123');
+    assert.equal(calls[0][1].credentials, 'include');
+    assert.equal(calls[1][1].headers.Authorization, 'Bearer token_123');
+    assert.equal(calls[1][1].headers['X-Plugin-Data-Token'], 'data_token_123');
+    assert.equal(calls[1][1].credentials, 'include');
   } finally {
     globalThis.fetch = originalFetch;
     globalThis.chrome = originalChrome;
   }
+});
+
+test('background workbench sync sends browser login credentials with authorized uploads', async () => {
+  const source = await fs.readFile(backgroundSourcePath, 'utf8');
+
+  assert.match(source, /ensureFlywheelDataSession/);
+  assert.match(source, /\/api\/collect\/batch[\s\S]*credentials:\s*'include'/);
+  assert.match(source, /X-Plugin-Data-Token/);
 });
 
 test('popup uses shared flywheel mappers from utils instead of local duplicates', async () => {

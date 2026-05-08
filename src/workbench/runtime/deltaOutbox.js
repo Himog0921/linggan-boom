@@ -76,7 +76,9 @@ export function createDeltaOutbox({
     }
     state.flushing = true;
     try {
-      const rows = await store.listPending({ limit: batchLimit, now: Date.now() });
+      const nowMs = Date.now();
+      await store.recoverStaleInFlight?.({ limit: batchLimit, now: nowMs });
+      const rows = await store.listPending({ limit: batchLimit, now: nowMs });
       if (!rows.length) return { success: true, idle: true };
 
       let success = true;

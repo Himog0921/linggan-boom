@@ -24,13 +24,33 @@ function createMemoryOutboxStore() {
       rows.set(row.idempotencyKey, row);
       return row;
     },
-    async listPending() {
-      return [...rows.values()].filter((row) => row.status === 'pending' || row.status === 'failed');
+    async recoverStaleInFlight({ now: nowMs = Date.now() } = {}) {
+      let recovered = 0;
+      for (const row of rows.values()) {
+        if (row.status !== 'in_flight' || Number(row.nextAttemptAt || 0) > nowMs) continue;
+        row.status = 'failed';
+        row.errorMessage = 'in_flight_timeout';
+        row.attemptCount += 1;
+        row.nextAttemptAt = nowMs;
+        row.updatedAt = nowMs;
+        recovered += 1;
+      }
+      return recovered;
+    },
+    async listPending({ now: nowMs = Date.now() } = {}) {
+      return [...rows.values()].filter((row) => (
+        row.status === 'pending'
+        || (row.status === 'failed' && Number(row.nextAttemptAt || 0) <= nowMs)
+      ));
     },
     async markInFlight(ids) {
       for (const id of ids) {
         const row = rows.get(id);
-        if (row) row.status = 'in_flight';
+        if (row) {
+          row.status = 'in_flight';
+          row.nextAttemptAt = Date.now() + 5 * 60 * 1000;
+          row.updatedAt = Date.now();
+        }
       }
     },
     async markAcked(keys) {
@@ -225,4 +245,43 @@ test('delta outbox schedules retry on network failure then accepts duplicate ack
   assert.equal(second.success, true);
   assert.equal(calls, 2);
   assert.equal(rowAfterFailure.status, 'acked');
+});
+
+test('delta outbox recovers stale in-flight rows before flushing', async () => {
+  const store = createMemoryOutboxStore();
+  let calls = 0;
+  const outbox = createDeltaOutbox({
+    store,
+    ingestDelta: async (taskId, envelope) => {
+      calls += 1;
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    executorInstanceId: 'plugin_1',
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_1',
+    pluginRunId: 'run_1',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS,
+    source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+    sequence: 5,
+    payload: { message: 'stale in-flight should retry' },
+  });
+
+  const row = [...store.rows.values()][0];
+  row.status = 'in_flight';
+  row.nextAttemptAt = Date.now() - 1;
+
+  const result = await outbox.flush();
+
+  assert.equal(result.success, true);
+  assert.equal(calls, 1);
+  assert.equal(row.status, 'acked');
+  assert.equal(row.attemptCount, 1);
 });

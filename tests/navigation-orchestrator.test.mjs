@@ -40,6 +40,17 @@ test('batchNotes still builds search urls for keyword targets', () => {
   );
 });
 
+test('xhs search urls do not double encode already encoded keyword targets', () => {
+  assert.equal(
+    buildTaskNavigationUrl('xhs.batchNotes', '%E6%9D%8E%E8%80%81%E5%A4%B4'),
+    'https://www.xiaohongshu.com/search_result?keyword=%E6%9D%8E%E8%80%81%E5%A4%B4',
+  );
+  assert.equal(
+    buildTaskNavigationUrl('xhs.batchNotes', '%25E6%259D%258E%25E8%2580%2581%25E5%25A4%25B4'),
+    'https://www.xiaohongshu.com/search_result?keyword=%E6%9D%8E%E8%80%81%E5%A4%B4',
+  );
+});
+
 test('other task types keep their existing navigation behavior', () => {
   assert.equal(
     buildTaskNavigationUrl('xhs.collectAuthor', '6926d8f4000000003702c666'),

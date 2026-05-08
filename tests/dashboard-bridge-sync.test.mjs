@@ -5,11 +5,19 @@ import { createDashboardBridge } from '../src/content/dashboardBridge.js';
 
 test('dashboard bridge forwards notes, comments, and authors to background sync handler', async () => {
   const sentMessages = [];
+  const TEST_NONCE = 'test-nonce-sync';
   globalThis.chrome = {
     runtime: {
       async sendMessage(payload) {
         sentMessages.push(payload);
         return { success: true, imported: 3, skipped: 0 };
+      },
+    },
+    storage: {
+      session: {
+        async set() {},
+        async get() { return {}; },
+        async remove() {},
       },
     },
   };
@@ -32,12 +40,14 @@ test('dashboard bridge forwards notes, comments, and authors to background sync 
     commentStore: {},
     authorStore: {},
     downloadNoteMediaFromRecord: async () => ({}),
+    _testNonce: TEST_NONCE,
   });
 
   const result = await bridge.handleDashboardMessageEvent({
     data: {
       source: 'lgboom-dashboard',
       action: 'syncToWorkbench',
+      nonce: TEST_NONCE,
       notes: [{ noteId: 'n1' }],
       comments: [{ commentId: 'c1' }],
       authors: [{ userId: 'u1' }],

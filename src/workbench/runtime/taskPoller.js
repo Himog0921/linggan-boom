@@ -29,6 +29,7 @@ function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
 
 const TRACKED_TASK_STALE_MS = 10 * 60 * 1000;
 const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
+const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -426,6 +427,17 @@ function hydrateTrackedTask(task = {}, now = Date.now()) {
   };
 }
 
+function cleanupTaskSnapshot(task = {}) {
+  const taskId = String(task?.taskId || task?.id || '').trim();
+  const externalTaskId = String(task?.externalTaskId || task?.id || taskId).trim();
+  const pluginRunId = String(task?.pluginRunId || task?.collectionRunId || '').trim();
+  return {
+    taskId,
+    externalTaskId,
+    pluginRunId,
+  };
+}
+
 function buildIdleTickResult(claimed = {}, idleSnapshot = null) {
   const normalizedSnapshot = idleSnapshot || createTaskLeaseIdleSnapshot(claimed) || null;
   const reason = normalizedSnapshot?.reason || (
@@ -578,7 +590,12 @@ export function createTaskPoller(deps = {}) {
         if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
       }
       if (lease) await clearActiveLease();
-      return { success: false, skipped: false, reason: String(error?.message || error || 'capability_check_failed') };
+      return {
+        success: false,
+        skipped: false,
+        reason: String(error?.message || error || 'capability_check_failed'),
+        cleanupTask: cleanupTaskSnapshot(task),
+      };
     }
 
     if (!capability?.accepted) {
@@ -605,6 +622,7 @@ export function createTaskPoller(deps = {}) {
         success: true,
         skipped: true,
         reason: capability?.error || capability?.reasonMessage || 'capability_rejected',
+        cleanupTask: cleanupTaskSnapshot(task),
       };
     }
 
@@ -640,7 +658,12 @@ export function createTaskPoller(deps = {}) {
         if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
       }
       if (lease) await clearActiveLease();
-      return { success: false, skipped: false, reason: String(error?.message || error || 'dispatch_failed') };
+      return {
+        success: false,
+        skipped: false,
+        reason: String(error?.message || error || 'dispatch_failed'),
+        cleanupTask: cleanupTaskSnapshot(task),
+      };
     }
 
     if (!dispatch?.accepted) {
@@ -650,7 +673,12 @@ export function createTaskPoller(deps = {}) {
         errorMessage: String(dispatch?.error || 'dispatch_failed'),
       });
       if (lease) await clearActiveLease();
-      return { success: false, skipped: false, reason: 'dispatch_failed' };
+      return {
+        success: false,
+        skipped: false,
+        reason: 'dispatch_failed',
+        cleanupTask: cleanupTaskSnapshot(task),
+      };
     }
 
     if (typeof deps.afterDispatchSuccess === 'function') {
@@ -829,7 +857,12 @@ export function createTaskPoller(deps = {}) {
           state.activeTask = null;
           state.seenControlIds.clear();
           await clearActiveLease();
-          return { success: true, released: true, reason: 'lease_conflict' };
+          return {
+            success: true,
+            released: true,
+            reason: 'lease_conflict',
+            cleanupTask: cleanupTaskSnapshot(activeTask),
+          };
         }
         await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
           leaseRenewalFailed: true,
@@ -851,27 +884,37 @@ export function createTaskPoller(deps = {}) {
 
     if (!result?.success) {
       if (hasResultLookupError(result)) {
+        const now = getNow();
         if (
           activeTask.workbenchStatus === 'dispatched' &&
-          getNow() - Number(activeTask.dispatchedAtMs || 0) >= DISPATCH_STARTUP_TIMEOUT_MS
+          now - Number(activeTask.dispatchedAtMs || 0) >= DISPATCH_STARTUP_TIMEOUT_MS
         ) {
           const startupErrorMessage = '任务已派出，但页面没有真正启动，已自动释放重试。';
+          const notBeforeAt = new Date(now + DISPATCH_STARTUP_RETRY_DELAY_MS).toISOString();
           await patchTask(activeTask.taskId, {
             status: 'pending',
             progress: 0,
             pluginRunId: activeTask.pluginRunId || null,
             errorMessage: startupErrorMessage,
+            notBeforeAt,
           });
           await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
             status: 'pending',
             errorMessage: startupErrorMessage,
             userMessage: startupErrorMessage,
             reason: 'dispatch_startup_timeout',
+            retryAfterMs: DISPATCH_STARTUP_RETRY_DELAY_MS,
+            notBeforeAt,
           });
           state.activeTask = null;
           state.seenControlIds.clear();
           await clearActiveLease();
-          return { success: true, released: true, reason: 'dispatch_startup_timeout' };
+          return {
+            success: true,
+            released: true,
+            reason: 'dispatch_startup_timeout',
+            cleanupTask: cleanupTaskSnapshot(activeTask),
+          };
         }
         return { success: true, waiting: true };
       }
@@ -894,7 +937,11 @@ export function createTaskPoller(deps = {}) {
           await notifyContentScriptToStop(activeTask);
           state.activeTask = null;
           await clearActiveLease();
-          return { success: false, failed: true };
+          return {
+            success: false,
+            failed: true,
+            cleanupTask: cleanupTaskSnapshot(activeTask),
+          };
         }
         await notifyContentScriptToStop(activeTask);
         return { success: true, paused: true };
@@ -914,7 +961,11 @@ export function createTaskPoller(deps = {}) {
       await notifyContentScriptToStop(activeTask);
       state.activeTask = null;
       await clearActiveLease();
-      return { success: false, failed: true };
+      return {
+        success: false,
+        failed: true,
+        cleanupTask: cleanupTaskSnapshot(activeTask),
+      };
     }
 
     const run = result?.result || {};
@@ -971,9 +1022,16 @@ export function createTaskPoller(deps = {}) {
     }
 
     if (mapped.final) {
+      const cleanupTask = cleanupTaskSnapshot(activeTask);
       state.activeTask = null;
       state.seenControlIds.clear();
       await clearActiveLease();
+      return {
+        success: true,
+        final: true,
+        status: mapped.status,
+        cleanupTask,
+      };
     }
 
     return { success: true, final: mapped.final, status: mapped.status };

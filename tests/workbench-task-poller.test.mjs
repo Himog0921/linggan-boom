@@ -142,6 +142,11 @@ test('task poller claims a pending task and patches completion state', async () 
       errorMessage: null,
     },
   ]);
+  assert.deepEqual(secondTick.cleanupTask, {
+    taskId: 'task_1',
+    externalTaskId: 'task_1',
+    pluginRunId: 'run_1',
+  });
   assert.equal(poller.getState().activeTask, null);
   assert.equal(recordBatches.length, 1);
   assert.equal(recordBatches[0][0].taskId, 'task_1');
@@ -1097,10 +1102,16 @@ test('task poller releases dispatched tasks that never produce a startup run', a
   const firstTick = await poller.tick();
   assert.equal(firstTick.accepted, true);
   nowMs += 46_000;
+  const retryAt = new Date(nowMs + 2 * 60 * 1000).toISOString();
 
   const secondTick = await poller.tick();
 
   assert.equal(secondTick.released, true);
+  assert.deepEqual(secondTick.cleanupTask, {
+    taskId: 'task_startup_timeout',
+    externalTaskId: 'task_startup_timeout',
+    pluginRunId: '',
+  });
   assert.deepEqual(patches[1], [
     'task_startup_timeout',
     {
@@ -1108,11 +1119,13 @@ test('task poller releases dispatched tasks that never produce a startup run', a
       progress: 0,
       pluginRunId: null,
       errorMessage: '任务已派出，但页面没有真正启动，已自动释放重试。',
+      notBeforeAt: retryAt,
     },
   ]);
   assert.equal(events.at(-1).eventType, 'task.heartbeat');
   assert.equal(events.at(-1).payload.reason, 'dispatch_startup_timeout');
   assert.equal(events.at(-1).payload.userMessage, '任务已派出，但页面没有真正启动，已自动释放重试。');
+  assert.equal(events.at(-1).payload.notBeforeAt, retryAt);
   assert.equal(poller.getState().activeTask, null);
 });
 

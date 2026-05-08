@@ -17,6 +17,8 @@ test('prepareRecordWithStableCover uploads cover bytes and replaces preview urls
     if (url === 'https://workbench.example/api/media-assets/cover') {
       const formData = options.body;
       assert.equal(options.headers.Authorization, 'Bearer token_123');
+      assert.equal(options.headers['X-Plugin-Data-Token'], 'data_token_123');
+      assert.equal(options.credentials, 'include');
       assert.equal(formData.get('sourceUrl'), 'https://sns-img.example.com/cover.webp');
       assert.equal(formData.get('platform'), 'xhs');
       assert.equal(formData.get('platformContentId'), 'note_1');
@@ -36,6 +38,7 @@ test('prepareRecordWithStableCover uploads cover bytes and replaces preview urls
     const record = await prepareRecordWithStableCover({
       serverUrl: 'https://workbench.example',
       apiToken: 'token_123',
+      dataToken: 'data_token_123',
     }, {
       platform: 'xhs',
       noteId: 'note_1',
