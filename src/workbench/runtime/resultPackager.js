@@ -1,5 +1,47 @@
 import { buildResultSummary } from './resultSummaryBuilder.js';
 
+function firstText(...values) {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function buildRunDiagnostic(runRecord = {}) {
+  const stored = normalizeObject(runRecord.diagnostic);
+  const errorMessage = firstText(
+    runRecord.errorMessage,
+    runRecord.error,
+    stored.technicalMessage,
+    stored.userMessage,
+  );
+  const userMessage = firstText(
+    runRecord.userMessage,
+    stored.userMessage,
+    errorMessage,
+  );
+
+  if (!errorMessage && !userMessage && Object.keys(stored).length === 0) {
+    return null;
+  }
+
+  return {
+    ...stored,
+    stage: firstText(stored.stage, runRecord.stage, 'collecting'),
+    failureCategory: firstText(stored.failureCategory, runRecord.failureCategory, 'terminal_failed'),
+    reasonCode: firstText(stored.reasonCode, runRecord.reasonCode, runRecord.errorCode, 'collection_failed'),
+    userMessage,
+    technicalMessage: firstText(stored.technicalMessage, errorMessage),
+    recommendedAction: firstText(stored.recommendedAction, runRecord.recommendedAction),
+    evidence: normalizeObject(stored.evidence),
+  };
+}
+
 async function getRecordsByCollectionRunId(store, collectionRunId) {
   if (!store) return [];
   if (typeof store.getByCollectionRunId === 'function') {
@@ -42,6 +84,16 @@ export function createResultPackager({
       await collectionRunStore?.markResultUploadStatus?.(runId, 'packaged', {
         packagedAt: Date.now(),
       });
+      const diagnostic = buildRunDiagnostic(runRecord);
+      const errorMessage = firstText(
+        runRecord.errorMessage,
+        runRecord.error,
+        diagnostic?.technicalMessage,
+      );
+      const userMessage = firstText(
+        runRecord.userMessage,
+        diagnostic?.userMessage,
+      );
 
       return {
         collectionRunId: runId,
@@ -52,6 +104,9 @@ export function createResultPackager({
         status: String(runRecord.status || '').trim(),
         startedAt: Number(runRecord.startedAt || 0) || 0,
         finishedAt: Number(runRecord.finishedAt || 0) || 0,
+        errorMessage,
+        userMessage,
+        diagnostic,
         resultSummary: buildResultSummary({
           notes,
           comments,

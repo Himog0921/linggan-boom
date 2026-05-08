@@ -6,7 +6,7 @@ import {
   MONITOR_STATION_CAPABILITIES,
 } from '../src/workbench/runtime/executionStationRuntime.js';
 
-test('monitor station runtime reports generic monitor accounts and surface capabilities', () => {
+test('execution station runtime reports generic execution accounts and surface capabilities', () => {
   const reports = buildPlatformAccountReports([
     {
       accountId: 'account-1',
@@ -30,7 +30,7 @@ test('monitor station runtime reports generic monitor accounts and surface capab
   })), [
     {
       platform: 'xhs',
-      purpose: 'monitor',
+      purpose: 'execution',
       healthStatus: 'healthy',
       dailyTaskCount: 3,
       dailyOpenedCount: 3,

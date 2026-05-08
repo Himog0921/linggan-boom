@@ -71,6 +71,52 @@ export function createContentMessageHandlers({
 
   const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
 
+  const inferSingleNoteFailureReasonCode = (message = '') => {
+    if (/未稳定就绪|未找到笔记数据|数据结构异常|加载/i.test(message)) {
+      return 'page_data_not_ready';
+    }
+    if (/目标|expected|actual|不一致|mismatch/i.test(message)) {
+      return 'target_mismatch';
+    }
+    if (/登录|授权|风控|安全验证|访问受限|300017/i.test(message)) {
+      return 'account_or_platform_blocked';
+    }
+    return 'single_note_collection_failed';
+  };
+
+  const buildSingleNoteFailureDiagnostic = ({
+    error,
+    expectedNoteId = '',
+    monitorMeta = null,
+  } = {}) => {
+    const technicalMessage = String(error?.message || error || '单篇笔记采集失败').trim();
+    const reasonCode = inferSingleNoteFailureReasonCode(technicalMessage);
+    const pageUrl = String(globalThis.window?.location?.href || '').trim();
+    const userMessage = reasonCode === 'page_data_not_ready'
+      ? '目标笔记页面没有加载出可采数据'
+      : reasonCode === 'target_mismatch'
+        ? '打开的页面和目标笔记不一致'
+        : reasonCode === 'account_or_platform_blocked'
+          ? '当前账号或平台访问状态不适合继续采集'
+          : '单篇笔记采集失败';
+    return {
+      stage: 'collecting',
+      failureCategory: reasonCode === 'account_or_platform_blocked' ? 'waiting_resource' : 'retry_wait',
+      reasonCode,
+      userMessage,
+      technicalMessage,
+      recommendedAction: reasonCode === 'account_or_platform_blocked'
+        ? '检查账号状态，恢复后再继续采集'
+        : '稍后自动重试，或改用作者页重新定位该笔记',
+      evidence: {
+        expectedNoteId: String(expectedNoteId || '').trim(),
+        pageUrl,
+        monitorId: String(monitorMeta?.monitorId || '').trim(),
+        taskStrategy: String(monitorMeta?.taskStrategy || '').trim(),
+      },
+    };
+  };
+
   const resolveXhsSurfaceContainerSelector = () => {
     const pathname = String(globalThis.window?.location?.pathname || '').trim();
     return /\/user\/profile\//i.test(pathname) ? '#userPostedFeeds' : '.feeds-container';
@@ -205,8 +251,16 @@ export function createContentMessageHandlers({
             collectionRunId: remoteRun?.collectionRunId || '',
           };
         } catch (error) {
+          const diagnostic = buildSingleNoteFailureDiagnostic({
+            error,
+            expectedNoteId,
+            monitorMeta,
+          });
           await finalizeRemoteRun(remoteRun, 'failed', {
-            error: String(error?.message || error),
+            error: diagnostic.technicalMessage,
+            errorMessage: diagnostic.technicalMessage,
+            userMessage: diagnostic.userMessage,
+            diagnostic,
             itemsPlanned: 1,
             itemsSucceeded: 0,
             itemsFailed: 1,

@@ -35,7 +35,7 @@ function mapAccountHealth(account = {}, now = Date.now()) {
 }
 
 export function buildPlatformAccountReports(accounts = [], {
-  purpose = 'monitor',
+  purpose = 'execution',
   now = Date.now(),
 } = {}) {
   const latestByPlatform = new Map();

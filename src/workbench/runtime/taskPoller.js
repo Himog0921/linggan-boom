@@ -162,6 +162,102 @@ function firstText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
+function firstNonEmptyText(...values) {
+  for (const value of values) {
+    const text = typeof value === 'string' ? value.trim() : String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizeRunDiagnostic(run = {}, errorMessage = '') {
+  const runRecord = normalizeObject(run.runRecord);
+  const stored = normalizeObject(run.diagnostic || runRecord.diagnostic);
+  const resolvedError = firstNonEmptyText(
+    errorMessage,
+    run.errorMessage,
+    run.error,
+    runRecord.errorMessage,
+    runRecord.error,
+    stored.technicalMessage,
+    stored.userMessage,
+  );
+  const userMessage = firstNonEmptyText(
+    run.userMessage,
+    runRecord.userMessage,
+    stored.userMessage,
+    resolvedError,
+  );
+
+  if (!resolvedError && !userMessage && Object.keys(stored).length === 0) {
+    return null;
+  }
+
+  return {
+    ...stored,
+    stage: firstNonEmptyText(stored.stage, run.stage, runRecord.stage, 'collecting'),
+    failureCategory: firstNonEmptyText(
+      stored.failureCategory,
+      run.failureCategory,
+      runRecord.failureCategory,
+      'terminal_failed',
+    ),
+    reasonCode: firstNonEmptyText(
+      stored.reasonCode,
+      run.reasonCode,
+      run.errorCode,
+      runRecord.reasonCode,
+      runRecord.errorCode,
+      'collection_failed',
+    ),
+    userMessage,
+    technicalMessage: firstNonEmptyText(stored.technicalMessage, resolvedError),
+    recommendedAction: firstNonEmptyText(stored.recommendedAction, run.recommendedAction, runRecord.recommendedAction),
+    evidence: normalizeObject(stored.evidence),
+  };
+}
+
+function resolveRunErrorMessage(run = {}) {
+  const runRecord = normalizeObject(run.runRecord);
+  return firstNonEmptyText(
+    run.errorMessage,
+    run.error,
+    runRecord.errorMessage,
+    runRecord.error,
+    run.diagnostic?.technicalMessage,
+    run.diagnostic?.userMessage,
+    runRecord.diagnostic?.technicalMessage,
+    runRecord.diagnostic?.userMessage,
+  );
+}
+
+function buildFailureEventPayload({ run = {}, status = 'failed', progress = 100, errorMessage = '', latestSummary = {} } = {}) {
+  const diagnostic = normalizeRunDiagnostic(run, errorMessage);
+  const userMessage = firstNonEmptyText(run.userMessage, run.runRecord?.userMessage, diagnostic?.userMessage, errorMessage, '任务执行失败');
+  return {
+    status,
+    progress,
+    errorMessage,
+    userMessage,
+    latestSummary,
+    ...(diagnostic
+      ? {
+          diagnostic,
+          stage: diagnostic.stage,
+          failureCategory: diagnostic.failureCategory,
+          reasonCode: diagnostic.reasonCode,
+          technicalMessage: diagnostic.technicalMessage,
+          recommendedAction: diagnostic.recommendedAction,
+          evidence: diagnostic.evidence,
+        }
+      : {}),
+  };
+}
+
 function pickMediaUrlFromArray(value) {
   if (!Array.isArray(value)) return '';
 
@@ -973,13 +1069,22 @@ export function createTaskPoller(deps = {}) {
     const pluginRunId = String(run.collectionRunId || activeTask.pluginRunId || '').trim();
     await consumePendingAccountUsage(activeTask, mapped.status, pluginRunId);
     const resultSummary = buildWorkbenchResultSummary(run);
-    const errorMessage = String(run.errorMessage || '').trim();
-    const userMessage = String(run.userMessage || '').trim();
+    const errorMessage = resolveRunErrorMessage(run);
+    const failurePayload = mapped.status === 'failed'
+      ? buildFailureEventPayload({
+          run,
+          status: mapped.status,
+          progress: mapped.progress ?? buildRunningProgress(run),
+          errorMessage,
+          latestSummary: run?.resultSummary || {},
+        })
+      : null;
     const fingerprint = JSON.stringify({
       status: mapped.status,
       pluginRunId,
       resultSummary,
       errorMessage,
+      failurePayload,
     });
 
     if (
@@ -1007,10 +1112,12 @@ export function createTaskPoller(deps = {}) {
         await deps.enqueueRecords(recordDeltas);
       }
       await enqueueTaskEvent(activeTask, mapWorkbenchStatusToEventType(mapped.status), {
-        status: mapped.status,
-        progress: mapped.progress ?? buildRunningProgress(run),
-        errorMessage: errorMessage || '',
-        latestSummary: run?.resultSummary || {},
+        ...(failurePayload || {
+          status: mapped.status,
+          progress: mapped.progress ?? buildRunningProgress(run),
+          errorMessage: errorMessage || '',
+          latestSummary: run?.resultSummary || {},
+        }),
       }, {
         snapshot: {
           status: mapped.status,

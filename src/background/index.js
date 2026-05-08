@@ -52,6 +52,7 @@ import {
   getPluginAuthorizationBlockedMessage,
   hasActivePluginAuthorization,
 } from '../workbench/runtime/pluginAuthorization.js';
+import { applyPackagedInstallBootstrap } from '../workbench/runtime/pluginInstallBootstrap.js';
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
 import { accountStore } from '../db/accountStore.js';
@@ -1303,6 +1304,7 @@ const bgHandlers = {
       return { success: false, error: 'authorization_code_required' };
     }
     try {
+      const previousAuthorization = await pluginAuthorizationClient.getStoredAuthorization();
       const authorization = await pluginAuthorizationClient.authorizeWithCode({
         authorizationCode,
         pluginVersion: getPluginVersion(),
@@ -1317,8 +1319,14 @@ const bgHandlers = {
         dataUserEmail: '',
         dataUserName: '',
       });
-      await executionStationClient.clearStationIdentity();
-      await taskLeaseStore.clear();
+      if (
+        previousAuthorization?.authorizationId
+        && authorization?.authorizationId
+        && previousAuthorization.authorizationId !== authorization.authorizationId
+      ) {
+        await executionStationClient.clearStationIdentity();
+        await taskLeaseStore.clear();
+      }
       return {
         success: true,
         authorized: true,
@@ -1818,7 +1826,8 @@ const taskLeaseStore = createTaskLeaseStorageStore({
 });
 
 function normalizeStationRole(value = '') {
-  return String(value || '').trim() === 'manual' ? 'manual' : 'monitor';
+  void value;
+  return 'execution';
 }
 
 function stationCapabilitiesForRole() {
@@ -1919,7 +1928,7 @@ const taskPoller = createTaskPoller({
         nextPollAfterMs: 30000,
         reason: {
           code: 'station_not_registered',
-          message: '请先把插件绑定为手动工位或监控工位，绑定后才会接单。',
+          message: '请先把插件绑定为执行设备，绑定后才会按任务优先级接单。',
         },
       };
     }
@@ -2096,6 +2105,23 @@ async function runExecutionStationHeartbeatTick() {
   await runWorkbenchTaskPollTick();
 }
 
+async function runPackagedInstallBootstrapTick() {
+  try {
+    return await applyPackagedInstallBootstrap({
+      authorizationClient: pluginAuthorizationClient,
+      stationClient: executionStationClient,
+      saveFlywheelConfig,
+      sendHeartbeat: sendExecutionStationHeartbeat,
+      stationCapabilities: stationCapabilitiesForRole(),
+      pluginVersion: getPluginVersion(),
+      browserLabel: globalThis.navigator?.userAgent || '',
+    });
+  } catch (error) {
+    console.warn('[灵感爆爆爆] packaged install bootstrap skipped', error);
+    return { applied: false, reason: 'bootstrap_failed' };
+  }
+}
+
 // ========== 采集完成时清除 badge ==========
 
 chrome.runtime.onMessage.addListener((message, sender) => {
@@ -2124,15 +2150,19 @@ if (chrome.alarms?.onAlarm) {
 chrome.runtime.onStartup?.addListener(() => {
   chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
   chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });
-  void runWorkbenchTaskPollTick();
-  void runExecutionStationHeartbeatTick();
+  void runPackagedInstallBootstrapTick().finally(() => {
+    void runWorkbenchTaskPollTick();
+    void runExecutionStationHeartbeatTick();
+  });
 });
 
 chrome.runtime.onInstalled?.addListener(() => {
   chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
   chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });
-  void taskDeltaReporter.flush();
-  void runExecutionStationHeartbeatTick();
+  void runPackagedInstallBootstrapTick().finally(() => {
+    void taskDeltaReporter.flush();
+    void runExecutionStationHeartbeatTick();
+  });
 });
 
 chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
@@ -2140,5 +2170,7 @@ chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 })
 
 // 每日配额清零（每小时检查一次日期变化）
 chrome.alarms?.create('daily-quota-reset', { periodInMinutes: 60 });
+
+void runPackagedInstallBootstrapTick();
 
 console.log('[灵感爆爆爆] Background Service Worker 已启动');

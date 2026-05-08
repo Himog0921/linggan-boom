@@ -90,6 +90,48 @@ test('createResultPackager packages one run with records and summary', async () 
   assert.equal(typeof calls[0][2].packagedAt, 'number');
 });
 
+test('createResultPackager carries failed run diagnostics from the stored run record', async () => {
+  const packager = createResultPackager({
+    collectionRunStore: {
+      getById: async () => ({
+        collectionRunId: 'run_failed_detail_1',
+        externalTaskId: 'task_failed_detail_1',
+        platform: 'xhs',
+        taskType: 'singleNote',
+        status: 'failed',
+        error: '笔记数据未稳定就绪: expected=69fd330a actual=',
+        diagnostic: {
+          stage: 'collecting',
+          failureCategory: 'retry_wait',
+          reasonCode: 'page_data_not_ready',
+          userMessage: '目标笔记页面没有加载出可采数据',
+          technicalMessage: '笔记数据未稳定就绪: expected=69fd330a actual=',
+          recommendedAction: '稍后自动重试，或改用作者页重新定位该笔记',
+          evidence: {
+            expectedNoteId: '69fd330a',
+            currentNoteId: '',
+          },
+        },
+      }),
+      markResultUploadStatus: async () => null,
+    },
+    noteStore: { getByCollectionRunId: async () => [] },
+    commentStore: { getByCollectionRunId: async () => [] },
+    authorStore: { getByCollectionRunId: async () => [] },
+    mediaAssetStore: { getByCollectionRunId: async () => [] },
+  });
+
+  const result = await packager.packageByCollectionRunId('run_failed_detail_1');
+
+  assert.equal(result.status, 'failed');
+  assert.equal(result.errorMessage, '笔记数据未稳定就绪: expected=69fd330a actual=');
+  assert.equal(result.userMessage, '目标笔记页面没有加载出可采数据');
+  assert.equal(result.diagnostic.stage, 'collecting');
+  assert.equal(result.diagnostic.failureCategory, 'retry_wait');
+  assert.equal(result.diagnostic.reasonCode, 'page_data_not_ready');
+  assert.equal(result.diagnostic.evidence.expectedNoteId, '69fd330a');
+});
+
 test('createResultPackager can resolve latest run by externalTaskId', async () => {
   const calls = [];
   const packager = createResultPackager({

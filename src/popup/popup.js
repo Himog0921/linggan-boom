@@ -420,8 +420,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         identity: result.identity,
         heartbeat: result.heartbeat,
       });
-      const stationRole = result?.identity?.role === 'manual' ? '手动采集工位' : '监控工位';
-      showNotice(`${stationRole}已绑定，这个浏览器会按这条车道接任务。`, 'info');
+      showNotice('执行设备已绑定，这个浏览器会按任务优先级接单。', 'info');
     } catch (err) {
       statusEl.textContent = '绑定失败';
       statusEl.className = 'flywheel-status disconnected';
@@ -996,22 +995,18 @@ function updateExecutionStationStatusUI(status = {}) {
   if (status.registered) {
     const identity = status.identity || {};
     const name = identity.displayName || identity.stationId || '已绑定';
-    const role = identity.role === 'manual' ? 'manual' : 'monitor';
-    const roleLabel = role === 'manual' ? '手动采集工位' : '监控工位';
+    const roleLabel = '执行设备';
     const accounts = Array.isArray(status.platformAccounts) ? status.platformAccounts : [];
     const healthyCount = accounts.filter((account) => account.healthStatus === 'healthy').length;
-    const roleTaskHint = role === 'manual'
-      ? `已发现 ${healthyCount} 个可用账号。当前是手动采集工位，只接采集控制台下发的手动任务；监控任务请绑定监控工位。`
-      : `已发现 ${healthyCount} 个可用账号。当前是监控工位，只接监控中心下发的监控任务；手动任务请绑定手动采集工位。`;
     statusEl.textContent = `${name} · ${roleLabel}`;
     statusEl.className = 'flywheel-status connected';
     hintEl.textContent = healthyCount > 0
-      ? roleTaskHint
+      ? `已发现 ${healthyCount} 个可用账号。这个浏览器会按任务优先级接单，人工下单优先于监控任务。`
       : `已绑定${roleLabel}；请先在 Cookie & 账号里保存可用账号，才能领取任务。`;
   } else {
     statusEl.textContent = '未绑定';
     statusEl.className = 'flywheel-status unconfigured';
-    hintEl.textContent = '把内容工作台给的配对码填进来：来自采集控制台的是手动工位，来自监控中心的是监控工位。';
+    hintEl.textContent = '把内容工作台给的执行设备配对码填进来，绑定后会按任务优先级接单。';
   }
 }
 

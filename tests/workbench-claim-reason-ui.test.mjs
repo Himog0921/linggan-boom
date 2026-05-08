@@ -25,7 +25,7 @@ test('idle claim notice helper formats a visible status message', () => {
   );
 });
 
-test('idle claim notice explains station purpose mismatch without requiring code knowledge', () => {
+test('idle claim notice keeps legacy purpose mismatch wording generic', () => {
   assert.deepEqual(
     formatTaskLeaseIdleNotice({
       idleReasonCode: 'ACCOUNT_PURPOSE_MISMATCH',
@@ -33,7 +33,7 @@ test('idle claim notice explains station purpose mismatch without requiring code
       nextPollAfterMs: 15000,
     }),
     {
-      message: '最近一次没有接单：当前浏览器绑定的工位类型和任务类型不一致。监控工位只接监控任务，手动采集工位只接手动任务（ACCOUNT_PURPOSE_MISMATCH），约 15 秒后重试',
+      message: '最近一次不接单原因：账号用途与当前任务不匹配（ACCOUNT_PURPOSE_MISMATCH），约 15 秒后重试',
       type: 'warning',
       visible: true,
     },

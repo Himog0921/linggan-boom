@@ -735,7 +735,7 @@ export default function App() {
         }
         setAuthorizationCode('');
         await loadStationStatus();
-        showNotice('插件授权已激活。接下来可以绑定执行工位并使用采集能力。', 'success');
+        showNotice('插件授权已激活。接下来可以绑定执行设备并使用采集能力。', 'success');
       } catch (err) {
         showNotice(`授权失败：${toFriendlyError(err)}`, 'warning');
       }
@@ -745,7 +745,7 @@ export default function App() {
   const handleClearPluginAuthorization = useCallback(async () => {
     const confirmed = await showConfirmDialog({
       title: '清除插件授权',
-      message: '清除后，这个浏览器将失去插件使用资格，并解除当前执行工位绑定。',
+      message: '清除后，这个浏览器将失去插件使用资格，并解除当前执行设备绑定。',
       detail: '如果只是换工位，请保留授权，只重新绑定配对码。',
       confirmText: '确认清除',
       confirmTone: 'danger',
@@ -817,8 +817,7 @@ export default function App() {
         }
         setStationPairingCode('');
         await loadStationStatus();
-        const stationRole = result?.identity?.role === 'manual' ? '手动采集工位' : '监控工位';
-        showNotice(`${stationRole}已绑定，这个浏览器会按这条车道接任务。`, 'success');
+        showNotice('执行设备已绑定，这个浏览器会按任务优先级接单。', 'success');
       } catch (err) {
         await loadStationStatus();
         showNotice(`绑定失败：${toFriendlyError(err)}`, 'warning');

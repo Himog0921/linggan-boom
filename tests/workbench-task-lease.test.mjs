@@ -233,7 +233,7 @@ test('task poller stays idle when station is not paired yet', async () => {
       task: null,
       reason: {
         code: 'station_not_registered',
-        message: '请先绑定执行工位',
+        message: '请先绑定执行设备',
       },
       nextPollAfterMs: 30000,
     }),
@@ -251,10 +251,10 @@ test('task poller stays idle when station is not paired yet', async () => {
     idle: true,
     nextPollAfterMs: 30000,
     idleReasonCode: 'station_not_registered',
-    idleReasonMessage: '请先绑定执行工位',
+    idleReasonMessage: '请先绑定执行设备',
     reason: {
       code: 'station_not_registered',
-      message: '请先绑定执行工位',
+      message: '请先绑定执行设备',
     },
   });
   assert.equal(dispatchCalls, 0);

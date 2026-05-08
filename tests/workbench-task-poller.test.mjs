@@ -1002,6 +1002,107 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
   assert.equal(poller.getState().activeLease, null);
 });
 
+test('task poller preserves failed run diagnostics when the local run only stored error', async () => {
+  const patches = [];
+  const events = [];
+  let clearLeaseCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'detail_probe_task',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'detail_probe',
+        payload: {
+          targetNoteId: '69fd330a',
+        },
+      },
+      lease: {
+        leaseToken: 'lease-detail-1',
+        expiresAt: '2026-05-09T01:11:00.000Z',
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'detail_probe_task',
+      collectionRunId: 'run_failed_detail',
+      resultLookup: {
+        collectionRunId: 'run_failed_detail',
+        externalTaskId: 'detail_probe_task',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-05-09T01:12:00.000Z' }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_failed_detail',
+        status: 'failed',
+        resultSummary: {
+          itemsPlanned: 1,
+          itemsSucceeded: 0,
+          failedItems: 1,
+        },
+        records: {
+          notes: [],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+        runRecord: {
+          error: '笔记数据未稳定就绪: expected=69fd330a actual=',
+          diagnostic: {
+            stage: 'collecting',
+            failureCategory: 'retry_wait',
+            reasonCode: 'page_data_not_ready',
+            userMessage: '目标笔记页面没有加载出可采数据',
+            technicalMessage: '笔记数据未稳定就绪: expected=69fd330a actual=',
+            recommendedAction: '稍后自动重试，或改用作者页重新定位该笔记',
+            evidence: {
+              expectedNoteId: '69fd330a',
+              currentNoteId: '',
+            },
+          },
+        },
+      },
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  await poller.tick();
+  const secondTick = await poller.tick();
+
+  assert.equal(secondTick.status, 'failed');
+  assert.equal(patches[0][0], 'detail_probe_task');
+  assert.equal(patches[0][1].status, 'running');
+  assert.equal(patches[1][0], 'detail_probe_task');
+  assert.equal(patches[1][1].status, 'failed');
+  assert.equal(patches[1][1].errorMessage, '笔记数据未稳定就绪: expected=69fd330a actual=');
+  assert.equal(events[0].eventType, 'task.failed');
+  assert.equal(events[0].payload.userMessage, '目标笔记页面没有加载出可采数据');
+  assert.equal(events[0].payload.stage, 'collecting');
+  assert.equal(events[0].payload.failureCategory, 'retry_wait');
+  assert.equal(events[0].payload.reasonCode, 'page_data_not_ready');
+  assert.equal(events[0].payload.recommendedAction, '稍后自动重试，或改用作者页重新定位该笔记');
+  assert.deepEqual(events[0].payload.evidence, {
+    expectedNoteId: '69fd330a',
+    currentNoteId: '',
+  });
+  assert.equal(clearLeaseCalls, 1);
+});
+
 test('task poller releases stale active task when lease renewal conflicts', async () => {
   const events = [];
   let clearLeaseCalls = 0;

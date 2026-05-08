@@ -16,10 +16,6 @@ function toFiniteNumber(value, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
-function isAccountPurposeMismatch(code = '') {
-  return normalizeString(code).toUpperCase() === 'ACCOUNT_PURPOSE_MISMATCH';
-}
-
 function extractIdleClaimReason(claim = {}) {
   const rawReason = claim?.reason && typeof claim.reason === 'object' && !Array.isArray(claim.reason)
     ? { ...claim.reason }
@@ -55,16 +51,11 @@ export function formatTaskLeaseIdleNotice(snapshot = {}) {
   const code = normalizeString(snapshot?.idleReasonCode || snapshot?.reason?.code || '');
   const message = normalizeString(snapshot?.idleReasonMessage || snapshot?.reason?.message || '');
   const nextPollAfterMs = toFiniteNumber(snapshot?.nextPollAfterMs, 0);
-  const purposeMismatch = isAccountPurposeMismatch(code);
-  const detail = purposeMismatch
-    ? '当前浏览器绑定的工位类型和任务类型不一致。监控工位只接监控任务，手动采集工位只接手动任务'
-    : (message || code);
+  const detail = message || code;
   if (!detail) return null;
 
-  let text = `最近一次${purposeMismatch ? '没有接单' : '不接单原因'}：${detail}`;
-  if (purposeMismatch && code) {
-    text += `（${code}）`;
-  } else if (message && code && message !== code) {
+  let text = `最近一次不接单原因：${detail}`;
+  if (message && code && message !== code) {
     text += `（${code}）`;
   }
   if (nextPollAfterMs > 0) {

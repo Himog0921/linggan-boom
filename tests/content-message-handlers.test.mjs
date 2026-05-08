@@ -154,6 +154,88 @@ test('remote xhs single-note collection creates a run and writes back success su
   ]]);
 });
 
+test('remote xhs single-note collection writes structured diagnostics on failure', async () => {
+  const failedCalls = [];
+  const previousWindow = globalThis.window;
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/discovery/item/69fd330a?xsec_token=token',
+    },
+  };
+
+  try {
+    const handlers = createContentMessageHandlers({
+      MSG,
+      isDouyinPage: () => false,
+      collectNote: async () => {
+        throw new Error('笔记数据未稳定就绪: expected=69fd330a actual=');
+      },
+      collectComments: async () => null,
+      collectAuthor: async () => null,
+      collectDouyinVideo: async () => null,
+      collectDouyinComments: async () => null,
+      downloadDouyinCommentImages: async () => null,
+      collectDouyinAuthor: async () => null,
+      noteStore: {},
+      commentStore: {},
+      authorStore: {},
+      reportDone: () => {},
+      batchMessageHandlers: {},
+      extractNoteId: () => '',
+      downloadNoteMediaFromRecord: async () => null,
+      generateCsv: () => '',
+      downloadFile: () => {},
+      backfillLegacyAiReadyFields: async () => null,
+      getPageContext: async () => ({ platform: 'xhs', pageType: 'detail' }),
+      collectionRunStore: {
+        async createRun() {
+          return { collectionRunId: 'run_remote_note_failed' };
+        },
+        async markDone() {
+          throw new Error('markDone should not be called');
+        },
+        async markStopped() {
+          throw new Error('markStopped should not be called');
+        },
+        async markFailed(runId, error, patch) {
+          failedCalls.push([runId, error, patch]);
+        },
+      },
+      packageWorkbenchResult: async () => null,
+      discoverXhsSurfaceNotes: async () => [],
+      discoverDouyinSurfaceTargets: async () => [],
+    });
+
+    await assert.rejects(
+      () => handlers[MSG.COLLECT_SINGLE_NOTE]({
+        triggerSource: 'workbench_dispatch',
+        expectedNoteId: '69fd330a',
+        externalTaskMeta: {
+          externalTaskId: 'task_remote_note_failed',
+          externalTaskType: 'xhs.batchNotes',
+          executorInstanceId: 'executor_1',
+          protocolVersion: 'v1',
+          monitorMeta: {
+            monitorId: 'monitor_1',
+            taskStrategy: 'detail_probe',
+          },
+        },
+      }),
+    );
+
+    assert.equal(failedCalls.length, 1);
+    assert.equal(failedCalls[0][0], 'run_remote_note_failed');
+    assert.equal(failedCalls[0][1], '笔记数据未稳定就绪: expected=69fd330a actual=');
+    assert.equal(failedCalls[0][2].errorMessage, '笔记数据未稳定就绪: expected=69fd330a actual=');
+    assert.equal(failedCalls[0][2].userMessage, '目标笔记页面没有加载出可采数据');
+    assert.equal(failedCalls[0][2].diagnostic.reasonCode, 'page_data_not_ready');
+    assert.equal(failedCalls[0][2].diagnostic.evidence.expectedNoteId, '69fd330a');
+    assert.equal(failedCalls[0][2].diagnostic.evidence.monitorId, 'monitor_1');
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
 test('remote xhs author collection fails fast when current profile does not match the monitor target', async () => {
   const failedCalls = [];
   const previousWindow = globalThis.window;
