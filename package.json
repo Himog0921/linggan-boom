@@ -1,6 +1,6 @@
 {
   "name": "linggan-boom",
-  "version": "1.0.0",
+  "version": "2.0.1",
   "description": "灵感爆爆爆 - 小红书数据采集工具箱",
   "private": true,
   "scripts": {
