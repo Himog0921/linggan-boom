@@ -245,28 +245,55 @@ export function toHighQualityImageUrl(url) {
   return candidates[0] || url;
 }
 
+function collectVideoStreamUrls(item = {}) {
+  const urls = [];
+  const push = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(push);
+      return;
+    }
+    if (typeof value === 'object') {
+      push(value.masterUrl || value.url || value.backupUrl || value.backup_url);
+      return;
+    }
+    const url = String(value || '').trim();
+    if (url && !urls.includes(url)) urls.push(url);
+  };
+
+  push(item.masterUrl);
+  push(item.url);
+  push(item.backupUrl);
+  push(item.backup_url);
+  push(item.backupUrls);
+  push(item.backup_urls);
+  push(item.urlList);
+  push(item.url_list);
+  return urls;
+}
+
 export function pickBestVideoStream(stream = {}) {
   const pools = [
+    ...(Array.isArray(stream?.h266) ? stream.h266 : []),
     ...(Array.isArray(stream?.h265) ? stream.h265 : []),
     ...(Array.isArray(stream?.h264) ? stream.h264 : []),
     ...(Array.isArray(stream?.av1) ? stream.av1 : []),
   ];
   if (pools.length === 0) return { url: '', streams: [] };
 
-  const scored = pools.map((item) => {
+  const scored = pools.flatMap((item) => {
     const bitrate = Number(item.avgBitrate || item.bitrate || item.avg_bitrate || 0);
     const width = Number(item.width || item.vwidth || 0);
     const height = Number(item.height || item.vheight || 0);
     const score = bitrate * 10 + width * height;
-    const url = item.masterUrl || item.url || item.backupUrl || item.backup_url || '';
-    return {
+    return collectVideoStreamUrls(item).map((url, index) => ({
       url,
       bitrate,
       width,
       height,
       qualityType: item.qualityType || item.quality_type || '',
-      score,
-    };
+      score: score - index,
+    }));
   }).filter((item) => Boolean(item.url));
 
   scored.sort((a, b) => b.score - a.score);

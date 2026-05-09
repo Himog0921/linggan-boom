@@ -103,6 +103,21 @@ export function createNoteMediaDownloadService({
     return queue;
   }
 
+  function shouldPackageAsZip(note, queue = []) {
+    const platform = String(note?.platform || 'xhs').trim();
+    if (platform === 'douyin') return false;
+    return !queue.some((task) => task?.type === 'video');
+  }
+
+  function buildMediaDownloadHeaders(candidates = []) {
+    const referer = String(window.location?.href || '').trim();
+    if (!referer) return undefined;
+    const needsReferer = normalizeCandidates(candidates).some((url) => (
+      /xhscdn|xiaohongshu|xhslink|sns-video/i.test(String(url || ''))
+    ));
+    return needsReferer ? [{ name: 'Referer', value: referer }] : undefined;
+  }
+
   function buildNoteMediaAssets(note, queue, {
     status = '待下载',
     summary = null,
@@ -292,6 +307,7 @@ export function createNoteMediaDownloadService({
       hdCount: 0,
       sdCount: 0,
       details: [],
+      zipped: false,
     };
 
     const details = new Array(queue.length);
@@ -325,7 +341,7 @@ export function createNoteMediaDownloadService({
                 filename: task.filename,
                 saveAs: false,
                 conflictAction,
-                headers: undefined,
+                headers: buildMediaDownloadHeaders(remoteCandidates),
               });
             }
           } else {
@@ -532,6 +548,8 @@ export function createNoteMediaDownloadService({
       hdCount,
       sdCount,
       details,
+      zipped: Boolean(baseSummary?.zipped),
+      zipName: String(baseSummary?.zipName || '').trim(),
     };
   }
 
@@ -671,7 +689,7 @@ export function createNoteMediaDownloadService({
         });
       }
 
-      const isZipDownload = String(workingNote?.platform || 'xhs').trim() !== 'douyin';
+      const isZipDownload = shouldPackageAsZip(workingNote, queue);
       const baseSummary = isZipDownload
         ? await downloadQueueAsZip(workingNote, queue, options)
         : await downloadQueueViaBackground(queue, options);
@@ -683,8 +701,10 @@ export function createNoteMediaDownloadService({
       const shouldRetry = options.retryOnRefresh !== false
         && noteId
         && baseSummary.failed > 0
-        && workingNote?.platform === 'douyin'
-        && Boolean(workingNote?.platformContentId || workingNote?.noteId);
+        && !isZipDownload
+        && Boolean(workingNote?.platform === 'douyin'
+          ? (workingNote?.platformContentId || workingNote?.noteId)
+          : (workingNote?.url || workingNote?.noteId));
       if (shouldRetry) {
         const refreshedNote = await refreshNoteMediaSnapshot(workingNote);
         if (refreshedNote) {

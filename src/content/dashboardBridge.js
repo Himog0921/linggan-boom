@@ -36,19 +36,19 @@ export function createDashboardBridge({
   let dashboardOverlay = null;
   let currentNonce = _testNonce;
 
-  function toggleDashboard() {
+  async function toggleDashboard() {
     if (dashboardIframe && document.body.contains(dashboardIframe)) {
       dashboardIframe.remove();
       dashboardOverlay?.remove();
       dashboardIframe = null;
       dashboardOverlay = null;
       currentNonce = null;
-      clearDashboardNonce();
+      await clearDashboardNonce();
       return;
     }
 
     currentNonce = generateNonce();
-    storeDashboardNonce(currentNonce);
+    await storeDashboardNonce(currentNonce);
 
     dashboardOverlay = document.createElement('div');
     Object.assign(dashboardOverlay.style, {
@@ -57,10 +57,14 @@ export function createDashboardBridge({
       background: 'rgba(0,0,0,0.4)',
       zIndex: '2147483640',
     });
-    dashboardOverlay.addEventListener('click', toggleDashboard);
+    dashboardOverlay.addEventListener('click', () => {
+      void toggleDashboard();
+    });
 
     dashboardIframe = document.createElement('iframe');
-    dashboardIframe.src = chrome.runtime.getURL('dashboard.html');
+    const dashboardUrl = new URL(chrome.runtime.getURL('dashboard.html'));
+    dashboardUrl.searchParams.set('nonce', currentNonce);
+    dashboardIframe.src = dashboardUrl.toString();
     Object.assign(dashboardIframe.style, {
       position: 'fixed',
       top: '2%',

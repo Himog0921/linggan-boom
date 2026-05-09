@@ -207,9 +207,9 @@ if (isContextValid()) {
           sendResponse(undefined);
           return;
         }
-        return Promise.resolve(handler(message)).then((result) => {
+        return Promise.resolve(handler(message)).then(async (result) => {
           if (result?.toggleDashboard) {
-            runtime.dashboardBridge.toggleDashboard();
+            await runtime.dashboardBridge.toggleDashboard();
             sendResponse({ success: true });
             return;
           }

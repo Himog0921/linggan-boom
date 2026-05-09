@@ -226,7 +226,7 @@ test('downloadNoteMediaFromRecord retries douyin video download after refreshing
   }
 });
 
-test('downloadNoteMediaFromRecord packages xhs note media into a single zip download', async () => {
+test('downloadNoteMediaFromRecord packages xhs image note media into a single zip download', async () => {
   const browser = installBrowserMocks();
   const originalBulkUpsert = mediaAssetStore.bulkUpsert;
   mediaAssetStore.bulkUpsert = async () => {};
@@ -281,21 +281,106 @@ test('downloadNoteMediaFromRecord packages xhs note media into a single zip down
         ['https://sns.example/1.jpg'],
         ['https://sns.example/2.jpg'],
       ],
-      videoDownloadUrl: 'https://sns.example/video.mp4',
     });
 
-    assert.equal(summary.total, 3);
-    assert.equal(summary.success, 3);
+    assert.equal(summary.total, 2);
+    assert.equal(summary.success, 2);
     assert.equal(summary.failed, 0);
     assert.equal(summary.zipped, true);
-    assert.equal(bgCalls.length, 3);
+    assert.equal(bgCalls.length, 2);
     assert.equal(browser.downloads.length, 1);
     assert.match(browser.downloads[0].download, /测试标题.*\.zip|xhs_note_1_测试标题.*\.zip/);
     assert.equal(browser.objectUrls.length, 1);
 
     const zip = await JSZip.loadAsync(await browser.objectUrls[0].blob.arrayBuffer());
     const names = Object.keys(zip.files).sort();
-    assert.deepEqual(names, ['图_01.jpg', '图_02.jpg', '测试标题.mp4']);
+    assert.deepEqual(names, ['图_01.jpg', '图_02.jpg']);
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
+test('downloadNoteMediaFromRecord downloads xhs video directly and refreshes stale urls before retry', async () => {
+  installBrowserMocks();
+  globalThis.window.location = {
+    href: 'https://www.xiaohongshu.com/explore/xhs_note_1',
+    host: 'www.xiaohongshu.com',
+    protocol: 'https:',
+    origin: 'https://www.xiaohongshu.com',
+  };
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  const assetWrites = [];
+  mediaAssetStore.bulkUpsert = async (assets) => {
+    assetWrites.push(assets);
+  };
+
+  const noteUpdates = [];
+  const bgCalls = [];
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById(noteId, patch) {
+          noteUpdates.push({ noteId, patch });
+        },
+      },
+      sendToBackground: async (action, payload) => {
+        bgCalls.push({ action, payload });
+        assert.equal(action, 'downloadMediaFile');
+        if (String(payload.candidates?.[0] || '').includes('stale')) {
+          return { success: false, error: 'expired_url' };
+        }
+        return {
+          success: true,
+          quality: 'HD',
+          sourceUrl: payload.candidates?.[0] || '',
+          via: 'chrome.downloads',
+        };
+      },
+      collectNote: async () => ({
+        platform: 'xhs',
+        noteId: 'xhs_note_1',
+        contentId: 'xhs_note_1',
+        title: '视频标题',
+        type: 'video',
+        videoDownloadUrl: 'https://sns-video.example/fresh.mp4',
+        videoStreams: [{ url: 'https://sns-video.example/fresh.mp4', bitrate: 2 }],
+      }),
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => 'xhs_note_1',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'xhs_note_1',
+      contentId: 'xhs_note_1',
+      title: '视频标题',
+      type: 'video',
+      url: 'https://www.xiaohongshu.com/explore/xhs_note_1',
+      videoDownloadUrl: 'https://sns-video.example/stale.mp4',
+      videoStreams: [{ url: 'https://sns-video.example/stale.mp4', bitrate: 1 }],
+    });
+
+    assert.equal(summary.total, 1);
+    assert.equal(summary.success, 1);
+    assert.equal(summary.failed, 0);
+    assert.equal(summary.refreshed, true);
+    assert.equal(summary.zipped, false);
+    assert.equal(bgCalls.length, 2);
+    assert.equal(bgCalls[0].payload.candidates[0], 'https://sns-video.example/stale.mp4');
+    assert.equal(bgCalls[1].payload.candidates[0], 'https://sns-video.example/fresh.mp4');
+    assert.ok(bgCalls.every((call) => call.action === 'downloadMediaFile'));
+    assert.ok(noteUpdates.some((entry) => entry.patch?.videoDownloadUrl === 'https://sns-video.example/fresh.mp4'));
+    assert.ok(assetWrites.length >= 3);
   } finally {
     mediaAssetStore.bulkUpsert = originalBulkUpsert;
     uninstallBrowserMocks();

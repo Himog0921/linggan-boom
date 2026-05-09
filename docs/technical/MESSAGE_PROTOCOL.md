@@ -15,6 +15,7 @@
 | Background ↔ 内容工作台 | HTTP JSON 轮询 / PATCH / ingest | 待执行任务查询、控制请求拉取、状态快照回写、事件/记录增量写入 |
 
 > 说明：抖音链路除了 Content Script 自己的逻辑，还包含页面桥接、页面侧 fetch 和 API capture，不应再假设所有能力都只靠 Content 直接完成。
+> Dashboard 由 Content 以 iframe 打开时，会生成一次性 `nonce`，同时写入 `chrome.storage.session` 并放入 `dashboard.html?nonce=...`。Dashboard 读取数据时优先使用 URL 中的 `nonce` 发起 `postMessage`，避免首次加载时 storage 尚未同步而被外层拒收。
 
 ## 2. 命令消息
 
@@ -53,7 +54,7 @@
 |--------|----------------|---------|------|
 | `TOGGLE_DASHBOARD` | Popup → Content | `{}` | 打开 / 关闭 Dashboard |
 | `GET_STATS` | Popup / Dashboard → Content | `{}` | 读取统计数据 |
-| `GET_ALL_NOTES / GET_ALL_COMMENTS / GET_ALL_AUTHORS` | Dashboard → Content | `{}` | 读取本地数据 |
+| `GET_ALL_NOTES / GET_ALL_COMMENTS / GET_ALL_AUTHORS` | Dashboard → Content | `{ source: "lgboom-dashboard", nonce }` | 读取本地数据；`nonce` 必须和本次 iframe 打开的值一致 |
 | `DELETE_NOTE / DELETE_COMMENT / DELETE_AUTHOR` | Dashboard → Content | `{ noteId / id / userId }` | 删除单条 |
 | `CLEAR_ALL_NOTES / CLEAR_ALL_COMMENTS / CLEAR_ALL_AUTHORS` | Dashboard → Content | `{}` | 清空某类数据 |
 | `EXPORT_CSV / EXPORT_JSON` | Popup / Dashboard → Content | `{}` | 导出数据 |

@@ -455,33 +455,52 @@ export function getExportColumns(tab, allData) {
 }
 
 export async function sendToParent(action, data = {}, options = {}) {
-  let nonce = '';
-  try {
-    const area = chrome.storage.session || chrome.storage.local;
-    const result = await area.get(['dashboardNonce']);
-    nonce = result.dashboardNonce || '';
-  } catch (e) {
-    console.error('[Dashboard] Failed to read nonce:', e);
+  let nonce = readDashboardNonceFromUrl();
+  if (!nonce) {
+    try {
+      const area = chrome.storage.session || chrome.storage.local;
+      const result = await area.get(['dashboardNonce']);
+      nonce = result.dashboardNonce || '';
+    } catch (e) {
+      console.error('[Dashboard] Failed to read nonce:', e);
+    }
   }
 
   return new Promise((resolve) => {
     const timeoutMs = Number(options.timeoutMs ?? 3000);
     let settled = false;
     const channel = new MessageChannel();
-    channel.port1.onmessage = (e) => {
+    const settle = (value) => {
       if (settled) return;
       settled = true;
-      resolve(e.data);
+      try { channel.port1.close?.(); } catch {}
+      resolve(value);
+    };
+    channel.port1.onmessage = (e) => {
+      settle(e.data);
     };
     window.parent.postMessage({ source: 'lgboom-dashboard', action, nonce, ...data }, '*', [channel.port2]);
     if (timeoutMs > 0) {
       setTimeout(() => {
-        if (settled) return;
-        settled = true;
-        resolve(null);
+        settle(null);
       }, timeoutMs);
     }
   });
+}
+
+function readDashboardNonceFromUrl() {
+  try {
+    const href = window?.location?.href || '';
+    const search = window?.location?.search || '';
+    const hash = String(window?.location?.hash || '').replace(/^#/, '');
+    const params = href
+      ? new URL(href).searchParams
+      : new URLSearchParams(search);
+    const nonce = params.get('nonce') || new URLSearchParams(hash).get('nonce') || '';
+    return String(nonce || '').trim();
+  } catch {
+    return '';
+  }
 }
 
 export function unwrapParentResponseData(result, fallback) {

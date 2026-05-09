@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createDashboardBridge } from '../src/content/dashboardBridge.js';
-import { unwrapParentResponseData } from '../src/dashboard/utils.js';
+import { sendToParent, unwrapParentResponseData } from '../src/dashboard/utils.js';
 
 test('dashboard bridge wraps raw collection payloads in a success/data envelope', async () => {
   const payloads = [];
@@ -131,4 +131,116 @@ test('unwrapParentResponseData prefers data from a success envelope and falls ba
     [{ noteId: 'n2' }],
   );
   assert.deepEqual(unwrapParentResponseData({ success: false, error: 'x' }, []), []);
+});
+
+test('sendToParent uses nonce from dashboard URL when storage has not caught up', async () => {
+  const payloads = [];
+  globalThis.chrome = {
+    storage: {
+      session: {
+        async get() {
+          return {};
+        },
+      },
+      local: {
+        async get() {
+          return {};
+        },
+      },
+    },
+  };
+  globalThis.window = {
+    location: {
+      href: 'chrome-extension://lgboom/dashboard.html?nonce=url-nonce-1',
+      search: '?nonce=url-nonce-1',
+      hash: '',
+    },
+    parent: {
+      postMessage(payload, _targetOrigin, ports) {
+        payloads.push(payload);
+        ports[0].postMessage({ success: true, data: [{ noteId: 'n1' }] });
+      },
+    },
+  };
+
+  try {
+    const response = await sendToParent('getAllNotes', {}, { timeoutMs: 500 });
+
+    assert.equal(payloads[0].nonce, 'url-nonce-1');
+    assert.deepEqual(response, { success: true, data: [{ noteId: 'n1' }] });
+  } finally {
+    delete globalThis.chrome;
+    delete globalThis.window;
+  }
+});
+
+test('dashboard bridge places the nonce in iframe URL for first load', async () => {
+  const appended = [];
+  const storageWrites = [];
+  globalThis.chrome = {
+    runtime: {
+      getURL(path) {
+        return `chrome-extension://lgboom/${path}`;
+      },
+    },
+    storage: {
+      session: {
+        async set(value) {
+          storageWrites.push(value);
+        },
+        async remove() {},
+      },
+    },
+  };
+  globalThis.document = {
+    body: {
+      contains() {
+        return false;
+      },
+      appendChild(node) {
+        appended.push(node);
+      },
+    },
+    createElement(tagName) {
+      return {
+        tagName,
+        style: {},
+        addEventListener() {},
+        remove() {},
+      };
+    },
+  };
+
+  const bridge = createDashboardBridge({
+    MSG: {
+      GET_ALL_NOTES: 'getAllNotes',
+      GET_ALL_COMMENTS: 'getAllComments',
+      GET_ALL_AUTHORS: 'getAllAuthors',
+      DOWNLOAD_NOTE_MEDIA: 'downloadNoteMedia',
+      CLEAR_ALL_NOTES: 'clearAllNotes',
+      CLEAR_ALL_COMMENTS: 'clearAllComments',
+      CLEAR_ALL_AUTHORS: 'clearAllAuthors',
+      DELETE_NOTE: 'deleteNote',
+      DELETE_COMMENT: 'deleteComment',
+      DELETE_AUTHOR: 'deleteAuthor',
+      SYNC_TO_WORKBENCH: 'syncToWorkbench',
+    },
+    noteStore: {},
+    commentStore: {},
+    authorStore: {},
+    downloadNoteMediaFromRecord: async () => ({}),
+  });
+
+  try {
+    await bridge.toggleDashboard();
+
+    const iframe = appended.find((node) => node.tagName === 'iframe');
+    assert.ok(iframe);
+    assert.match(iframe.src, /dashboard\.html\?nonce=/);
+    assert.equal(storageWrites.length, 1);
+    assert.equal(new URL(iframe.src).searchParams.get('nonce'), storageWrites[0].dashboardNonce);
+  } finally {
+    delete globalThis.chrome;
+    delete globalThis.document;
+  }
 });
