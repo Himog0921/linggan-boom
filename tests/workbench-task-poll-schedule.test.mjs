@@ -99,6 +99,32 @@ test('task poll scheduler respects server balancing waits without adding jitter'
   ]]);
 });
 
+test('task poll scheduler respects plugin backpressure waits without adding jitter', async () => {
+  const calls = [];
+  const config = scheduleWorkbenchTaskPollAlarm({
+    alarmsApi: {
+      create(name, options) {
+        calls.push([name, options]);
+      },
+    },
+    alarmName: 'workbench-task-poll',
+    result: {
+      idle: true,
+      idleReasonCode: 'plugin_protocol_backpressure',
+      nextPollAfterMs: 60_000,
+    },
+    consecutiveEmptyPolls: 0,
+    randomFn: () => 1,
+  });
+
+  assert.equal(config.requestedIntervalMs, 60_000);
+  assert.equal(config.intervalMs, 60_000);
+  assert.deepEqual(calls, [[
+    'workbench-task-poll',
+    { periodInMinutes: 1 },
+  ]]);
+});
+
 test('task poll scheduler applies a short cooldown after task completion', async () => {
   const calls = [];
   const config = scheduleWorkbenchTaskPollAlarm({

@@ -197,6 +197,7 @@ const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
 const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
 
 let consecutiveEmptyPolls = 0;
+let nextExecutionStationHeartbeatAtMs = 0;
 
 function navigatedTaskTabStorageArea() {
   return chrome.storage?.session || chrome.storage?.local || null;
@@ -2096,12 +2097,24 @@ async function runWorkbenchTaskPollTick() {
 }
 
 async function runExecutionStationHeartbeatTick() {
+  const now = Date.now();
+  if (nextExecutionStationHeartbeatAtMs > now) {
+    return;
+  }
+  let heartbeat;
   try {
-    await sendExecutionStationHeartbeat('online');
+    heartbeat = await sendExecutionStationHeartbeat('online');
   } catch (error) {
     console.warn('[灵感爆爆爆] execution station heartbeat failed', error);
     return;
   }
+  if (!heartbeat?.success) {
+    if (heartbeat?.retryable && Number(heartbeat?.nextRetryAt || 0) > Date.now()) {
+      nextExecutionStationHeartbeatAtMs = Number(heartbeat.nextRetryAt);
+    }
+    return;
+  }
+  nextExecutionStationHeartbeatAtMs = 0;
   await runWorkbenchTaskPollTick();
 }
 

@@ -1,5 +1,5 @@
 const FAST_TASK_POLL_INTERVAL_MS = 30_000;
-const SLOW_TASK_POLL_INTERVAL_MS = 30_000;
+const SLOW_TASK_POLL_INTERVAL_MS = 120_000;
 const MIN_CHROME_ALARM_INTERVAL_MS = 30_000;
 const EMPTY_POLL_THRESHOLD = 3;
 const IDLE_POLL_JITTER_MIN_MS = 5_000;
@@ -25,7 +25,9 @@ function shouldRespectExactIdleWait(result = null) {
     code === 'ACCOUNT_RESTRICTED' ||
     code === 'ACCOUNT_DAILY_LIMIT' ||
     code === 'STATION_NOT_REGISTERED' ||
-    code === 'NO_AVAILABLE_ACCOUNT'
+    code === 'NO_AVAILABLE_ACCOUNT' ||
+    code === 'PLUGIN_PROTOCOL_BACKPRESSURE' ||
+    code === 'SERVER_BACKPRESSURE'
   );
 }
 

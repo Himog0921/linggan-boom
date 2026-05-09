@@ -74,6 +74,25 @@ async function readErrorText(response) {
   return response.text().catch(() => '');
 }
 
+function parseRetryAfterHeader(value = '') {
+  const normalized = normalizeString(value);
+  if (!normalized) return 0;
+  const seconds = Number(normalized);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+  const parsedDate = new Date(normalized).getTime();
+  if (Number.isFinite(parsedDate)) return Math.max(0, parsedDate - Date.now());
+  return 0;
+}
+
+function parseErrorBody(text = '') {
+  try {
+    const parsed = JSON.parse(normalizeString(text));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 function isRetryableStatus(status) {
   return [408, 429, 500, 502, 503, 504].includes(Number(status));
 }
@@ -90,10 +109,12 @@ function errorMessageFromResponseText(text = '', fallback = '') {
   }
 }
 
-function createHttpError(message, { status = 0 } = {}) {
+function createHttpError(message, { status = 0, reasonCode = '', nextPollAfterMs = 0 } = {}) {
   const error = new Error(message);
   error.status = Number(status || 0);
   error.retryable = isRetryableStatus(status);
+  error.reasonCode = normalizeString(reasonCode);
+  error.nextPollAfterMs = toFiniteNumber(nextPollAfterMs, 0);
   return error;
 }
 
@@ -117,8 +138,14 @@ async function postJson({
   });
   if (!response.ok) {
     const text = await readErrorText(response);
+    const parsed = parseErrorBody(text);
+    const headerRetryAfterMs = parseRetryAfterHeader(response.headers?.get?.('Retry-After'));
+    const bodyRetryAfterMs = toFiniteNumber(parsed?.retryAfterMs, 0)
+      || toFiniteNumber(parsed?.retryAfterSeconds, 0) * 1000;
     throw createHttpError(errorMessageFromResponseText(text, `HTTP ${response.status}`), {
       status: response.status,
+      reasonCode: parsed?.code || parsed?.reasonCode || '',
+      nextPollAfterMs: headerRetryAfterMs || bodyRetryAfterMs,
     });
   }
   return response.json().catch(() => ({}));

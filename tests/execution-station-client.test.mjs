@@ -76,3 +76,48 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
 });
+
+test('execution station heartbeat respects server retry-after backpressure', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchExecutionStation: {
+      stationKey: 'station-key-1',
+      stationId: 'station-1',
+      stationToken: 'token-1',
+      capabilities: ['xhs.authorSurfaceScan'],
+    },
+  });
+  const client = createExecutionStationClient({
+    storageArea,
+    now: () => 1_000,
+    resolveServerUrl: async () => 'http://localhost:3000',
+    resolveAuthorization: async () => ({ authorizationToken: 'auth_token_1' }),
+    fetchFn: async () => ({
+      ok: false,
+      status: 503,
+      headers: {
+        get(name) {
+          return String(name || '').toLowerCase() === 'retry-after' ? '120' : null;
+        },
+      },
+      async text() {
+        return JSON.stringify({
+          error: '执行设备通道正在保护数据库，请稍后重试。',
+          code: 'plugin_protocol_backpressure',
+          retryAfterSeconds: 120,
+        });
+      },
+    }),
+  });
+
+  const heartbeat = await client.sendHeartbeat({
+    status: 'online',
+    capabilities: ['xhs.authorSurfaceScan'],
+  });
+
+  assert.equal(heartbeat.success, false);
+  assert.equal(heartbeat.retryable, true);
+  assert.equal(heartbeat.status, 503);
+  assert.equal(heartbeat.reasonCode, 'plugin_protocol_backpressure');
+  assert.equal(heartbeat.nextRetryAfterMs, 120_000);
+  assert.equal(heartbeat.nextRetryAt, 121_000);
+});

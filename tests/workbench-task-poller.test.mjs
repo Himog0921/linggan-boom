@@ -284,6 +284,91 @@ test('task poller surfaces idle claim reason details from the lease endpoint', a
   });
 });
 
+test('task poller turns retryable claim backpressure into an idle wait', async () => {
+  const error = new Error('执行设备通道正在保护数据库，请稍后重试。');
+  error.status = 503;
+  error.retryable = true;
+  error.reasonCode = 'plugin_protocol_backpressure';
+  error.nextPollAfterMs = 60_000;
+  let dispatchCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => {
+      throw error;
+    },
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run during backpressure');
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.deepEqual(result, {
+    success: true,
+    idle: true,
+    nextPollAfterMs: 60_000,
+    idleReasonCode: 'plugin_protocol_backpressure',
+    idleReasonMessage: '执行设备通道正在保护数据库，请稍后重试。',
+    reason: {
+      code: 'plugin_protocol_backpressure',
+      message: '执行设备通道正在保护数据库，请稍后重试。',
+    },
+  });
+  assert.equal(dispatchCalls, 0);
+  assert.equal(poller.getState().lastIdleReason.nextPollAfterMs, 60_000);
+});
+
+test('task poller clears local active task when it has no valid lease for too long', async () => {
+  let now = 1_000;
+  const patches = [];
+  const events = [];
+  const leases = [];
+  const poller = createTaskPoller({
+    now: () => now,
+    claimTaskLease: claimTask([
+      {
+        id: 'task_no_lease_1',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/user/profile/demo',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_no_lease_1',
+      resultLookup: { externalTaskId: 'task_no_lease_1' },
+    }),
+    getResultPackage: async () => ({ success: false, error: 'run_not_found' }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      leases.push('cleared');
+    },
+  });
+
+  const first = await poller.tick();
+  assert.equal(first.accepted, true);
+
+  now += 6 * 60_000;
+  const second = await poller.tick();
+
+  assert.equal(second.released, true);
+  assert.equal(second.reason, 'local_lease_missing_timeout');
+  assert.equal(poller.getState().activeTask, null);
+  assert.equal(leases.length, 1);
+  assert.equal(patches.at(-1)[1].status, 'pending');
+  assert.equal(patches.at(-1)[1].errorMessage, '插件本地任务没有有效租约，已自动释放重试。');
+  assert.equal(events.at(-1).payload.reason, 'local_lease_missing_timeout');
+});
+
 test('task poller preserves author profile fields when reporting monitor results', async () => {
   const patches = [];
   const recordBatches = [];

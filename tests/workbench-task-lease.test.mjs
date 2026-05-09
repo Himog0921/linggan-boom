@@ -120,6 +120,43 @@ test('task lease client exposes renewal conflict status', async () => {
   );
 });
 
+test('task lease client exposes server backpressure retry delay', async () => {
+  const fetchFn = async () => ({
+    ok: false,
+    status: 503,
+    headers: {
+      get(name) {
+        return String(name || '').toLowerCase() === 'retry-after' ? '60' : null;
+      },
+    },
+    async text() {
+      return JSON.stringify({
+        error: '执行设备通道正在保护数据库，请稍后重试。',
+        code: 'plugin_protocol_backpressure',
+        retryAfterSeconds: 60,
+      });
+    },
+  });
+
+  await assert.rejects(
+    () => claimCollectionTaskLease({
+      serverUrl: 'http://localhost:3000',
+      stationId: 'station-1',
+      stationToken: 'station-token',
+      authorizationToken: 'auth_token_1',
+      fetchFn,
+    }),
+    (error) => {
+      assert.equal(error.status, 503);
+      assert.equal(error.retryable, true);
+      assert.equal(error.reasonCode, 'plugin_protocol_backpressure');
+      assert.equal(error.nextPollAfterMs, 60_000);
+      assert.match(error.message, /保护数据库/);
+      return true;
+    },
+  );
+});
+
 test('task lease client preserves claim reason and writes an idle snapshot', async () => {
   const fetchFn = async () => ({
     ok: true,

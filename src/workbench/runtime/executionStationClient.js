@@ -28,10 +28,44 @@ async function readErrorText(response) {
   return response.text().catch(() => '');
 }
 
-function createHttpError(message, { status = 0, retryable = false } = {}) {
+function toFiniteNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function parseRetryAfterHeader(value = '') {
+  const normalized = normalizeString(value);
+  if (!normalized) return 0;
+  const seconds = Number(normalized);
+  if (Number.isFinite(seconds) && seconds > 0) return Math.round(seconds * 1000);
+  const parsedDate = new Date(normalized).getTime();
+  if (Number.isFinite(parsedDate)) return Math.max(0, parsedDate - Date.now());
+  return 0;
+}
+
+function parseErrorBody(text = '') {
+  try {
+    const parsed = JSON.parse(normalizeString(text));
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function errorMessageFromResponseText(text = '', fallback = '') {
+  const body = normalizeString(text);
+  if (!body) return fallback;
+  const parsed = parseErrorBody(body);
+  const message = normalizeString(parsed?.error || parsed?.message);
+  return message || body;
+}
+
+function createHttpError(message, { status = 0, retryable = false, reasonCode = '', retryAfterMs = 0 } = {}) {
   const error = new Error(message);
   error.status = status;
   error.retryable = Boolean(retryable);
+  error.reasonCode = normalizeString(reasonCode);
+  error.retryAfterMs = toFiniteNumber(retryAfterMs, 0);
   return error;
 }
 
@@ -92,9 +126,15 @@ export function createExecutionStationClient({
     });
     if (!response.ok) {
       const text = await readErrorText(response);
-      throw createHttpError(text || `HTTP ${response.status}`, {
+      const parsed = parseErrorBody(text);
+      const headerRetryAfterMs = parseRetryAfterHeader(response.headers?.get?.('Retry-After'));
+      const bodyRetryAfterMs = toFiniteNumber(parsed?.retryAfterMs, 0)
+        || toFiniteNumber(parsed?.retryAfterSeconds, 0) * 1000;
+      throw createHttpError(errorMessageFromResponseText(text, `HTTP ${response.status}`), {
         status: response.status,
         retryable: isRetryableStatus(response.status),
+        reasonCode: parsed?.code || parsed?.reasonCode || '',
+        retryAfterMs: headerRetryAfterMs || bodyRetryAfterMs,
       });
     }
     return response.json().catch(() => ({}));
@@ -165,8 +205,10 @@ export function createExecutionStationClient({
         success: false,
         retryable: error?.retryable !== false,
         status: Number(error?.status || 0),
+        reasonCode: normalizeString(error?.reasonCode || ''),
         error: String(error?.message || error || 'heartbeat_failed'),
-        nextRetryAt: now() + 30_000,
+        nextRetryAfterMs: toFiniteNumber(error?.retryAfterMs, 0) || 30_000,
+        nextRetryAt: now() + (toFiniteNumber(error?.retryAfterMs, 0) || 30_000),
       };
     }
   }

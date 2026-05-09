@@ -30,6 +30,8 @@ function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
 const TRACKED_TASK_STALE_MS = 10 * 60 * 1000;
 const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
 const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
+const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
+const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -562,6 +564,19 @@ function buildIdleTickResult(claimed = {}, idleSnapshot = null) {
   return result;
 }
 
+function buildRetryableClaimIdleResult(error = {}) {
+  const code = String(error?.reasonCode || 'server_backpressure').trim() || 'server_backpressure';
+  const message = String(error?.message || '服务端暂时繁忙，请稍后重试。').trim();
+  const nextPollAfterMs = Number.isFinite(Number(error?.nextPollAfterMs))
+    ? Number(error.nextPollAfterMs)
+    : 60_000;
+  return buildIdleTickResult({
+    task: null,
+    nextPollAfterMs,
+    reason: { code, message },
+  });
+}
+
 export function createTaskPoller(deps = {}) {
   const state = {
     activeTask: null,
@@ -932,6 +947,38 @@ export function createTaskPoller(deps = {}) {
       return { success: true, idle: true };
     }
     const activeTask = state.activeTask;
+    if (
+      !state.activeLease &&
+      Number(activeTask.dispatchedAtMs || 0) > 0 &&
+      getNow() - Number(activeTask.dispatchedAtMs || 0) >= LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS
+    ) {
+      const message = '插件本地任务没有有效租约，已自动释放重试。';
+      const notBeforeAt = new Date(getNow() + LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS).toISOString();
+      await patchTask(activeTask.taskId, {
+        status: 'pending',
+        progress: 0,
+        pluginRunId: activeTask.pluginRunId || null,
+        errorMessage: message,
+        notBeforeAt,
+      });
+      await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
+        status: 'pending',
+        errorMessage: message,
+        userMessage: message,
+        reason: 'local_lease_missing_timeout',
+        retryAfterMs: LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS,
+        notBeforeAt,
+      });
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease();
+      return {
+        success: true,
+        released: true,
+        reason: 'local_lease_missing_timeout',
+        cleanupTask: cleanupTaskSnapshot(activeTask),
+      };
+    }
     if (state.activeLease && typeof deps.renewTaskLease === 'function') {
       try {
         const renewal = await deps.renewTaskLease(activeTask.taskId, state.activeLease, {
@@ -1214,7 +1261,17 @@ export function createTaskPoller(deps = {}) {
           return buildIdleTickResult({}, null);
         }
 
-        const claimed = await deps.claimTaskLease();
+        let claimed;
+        try {
+          claimed = await deps.claimTaskLease();
+        } catch (error) {
+          if (error?.retryable) {
+            const idleResult = buildRetryableClaimIdleResult(error);
+            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+            return idleResult;
+          }
+          throw error;
+        }
         if (claimed?.task) {
           return await claimTask(claimed.task, claimed.lease || null);
         }
