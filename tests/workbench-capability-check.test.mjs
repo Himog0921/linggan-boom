@@ -74,6 +74,40 @@ test('canDispatchTaskFromCapabilityReport rejects mismatched profile targets for
   assert.equal(result.reasonCode, 'page_target_mismatch');
 });
 
+test('canDispatchTaskFromCapabilityReport rejects mismatched detail targets', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/discovery/item/69f27f63000000003601c448?xsec_token=old',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.batchNotes'],
+    },
+  }, 'xhs.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=target',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'page_target_mismatch');
+});
+
+test('canDispatchTaskFromCapabilityReport accepts matching detail targets across xhs url forms', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/discovery/item/69fdb9db000000001b021e8d?xsec_token=current',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.batchNotes'],
+    },
+  }, 'xhs.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=target',
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.reasonCode, '');
+});
+
 test('mapTaskEnvelopeToCapabilityCheck converts task envelope into capability check payload', () => {
   const capabilityCheck = mapTaskEnvelopeToCapabilityCheck({
     type: 'task.envelope',

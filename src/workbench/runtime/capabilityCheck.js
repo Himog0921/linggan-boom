@@ -27,6 +27,15 @@ function extractProfileIdentity(url = '') {
   return String(match?.[1] || '').trim().toLowerCase();
 }
 
+function extractDetailIdentity(url = '') {
+  const normalizedUrl = normalizeUrl(url);
+  if (!normalizedUrl) return '';
+
+  const match = normalizedUrl.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
+    || normalizedUrl.match(/douyin\.com\/video\/([^/?#]+)/i);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
 export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', target = {}) {
   const supportedTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
     ? report.capabilities.canRunTaskTypes
@@ -58,6 +67,20 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
         accepted: false,
         reasonCode: REMOTE_ERROR_CODE.PAGE_TARGET_MISMATCH,
         reasonMessage: `当前页面不是任务目标博主：任务要 ${targetProfileId}，实际是 ${currentProfileId}`,
+      };
+    }
+  }
+
+  if (expectedPageType === 'detail') {
+    const targetContentId = extractDetailIdentity(target?.url);
+    const currentContentId = extractDetailIdentity(report?.url);
+    if (targetContentId && targetContentId !== currentContentId) {
+      return {
+        accepted: false,
+        reasonCode: REMOTE_ERROR_CODE.PAGE_TARGET_MISMATCH,
+        reasonMessage: currentContentId
+          ? `当前页面不是任务目标内容：任务要 ${targetContentId}，实际是 ${currentContentId}`
+          : `当前页面不是任务目标内容：任务要 ${targetContentId}`,
       };
     }
   }
