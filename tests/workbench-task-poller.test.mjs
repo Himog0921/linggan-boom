@@ -369,6 +369,73 @@ test('task poller clears local active task when it has no valid lease for too lo
   assert.equal(events.at(-1).payload.reason, 'local_lease_missing_timeout');
 });
 
+test('task poller keeps monitor tasks running when the local lease is missing', async () => {
+  let now = 1_000;
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    now: () => now,
+    claimTaskLease: claimTask([
+      {
+        id: 'monitor_no_lease_1',
+        taskType: 'xhs.collectAuthor',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'author_baseline',
+        target: 'https://www.xiaohongshu.com/user/profile/demo',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'monitor_no_lease_1',
+      collectionRunId: 'run_monitor_no_lease_1',
+      resultLookup: { externalTaskId: 'monitor_no_lease_1' },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_monitor_no_lease_1',
+        status: 'running',
+        resultSummary: {
+          itemsPlanned: 50,
+          itemsSucceeded: 1,
+          failedItems: 0,
+        },
+        records: {
+          notes: [],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+  });
+
+  const first = await poller.tick();
+  assert.equal(first.accepted, true);
+
+  now += 6 * 60_000;
+  const second = await poller.tick();
+
+  assert.equal(second.released, undefined);
+  assert.equal(poller.getState().activeTask.taskId, 'monitor_no_lease_1');
+  assert.equal(
+    patches.some(([, patch]) => patch.status === 'pending' && patch.errorMessage === '插件本地任务没有有效租约，已自动释放重试。'),
+    false
+  );
+  assert.equal(events.some((event) => event.payload?.reason === 'local_lease_missing_timeout'), false);
+});
+
 test('task poller preserves author profile fields when reporting monitor results', async () => {
   const patches = [];
   const recordBatches = [];

@@ -949,6 +949,7 @@ export function createTaskPoller(deps = {}) {
     const activeTask = state.activeTask;
     if (
       !state.activeLease &&
+      !isMonitorTask(activeTask) &&
       Number(activeTask.dispatchedAtMs || 0) > 0 &&
       getNow() - Number(activeTask.dispatchedAtMs || 0) >= LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS
     ) {
