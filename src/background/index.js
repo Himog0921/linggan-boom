@@ -29,6 +29,7 @@ import { createExecutionStationClient } from '../workbench/runtime/executionStat
 import {
   claimCollectionTaskLease,
   createTaskLeaseStorageStore,
+  reconcileExecutionStationLease,
   renewCollectionTaskLease,
 } from '../workbench/runtime/taskLeaseClient.js';
 import {
@@ -1962,6 +1963,28 @@ const taskPoller = createTaskPoller({
       authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       status: options?.status || 'running',
+      store: taskLeaseStore,
+    });
+  },
+  reconcileTaskLease: async ({ localLease = null } = {}) => {
+    const config = await getAuthorizedFlywheelConfig();
+    const identity = await executionStationClient.getStoredStationIdentity();
+    const authorization = await pluginAuthorizationClient.getStoredAuthorization();
+    if (!shouldPollWorkbenchTasks(config) || !identity?.stationId || !identity?.stationToken) {
+      return { success: false, skipped: true, reason: 'station_not_registered' };
+    }
+    const role = normalizeStationRole(identity?.role);
+    const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+    return reconcileExecutionStationLease({
+      serverUrl: config.serverUrl,
+      stationId: identity.stationId,
+      stationToken: identity.stationToken,
+      authorizationId: authorization.authorizationId,
+      authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
+      localLease,
+      capabilities: stationCapabilitiesForRole(role),
+      platformAccounts,
+      pluginVersion: getPluginVersion(),
       store: taskLeaseStore,
     });
   },

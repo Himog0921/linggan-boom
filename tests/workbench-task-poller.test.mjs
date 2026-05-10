@@ -1517,3 +1517,91 @@ test('task poller only consumes deferred replacement account usage after a run s
   assert.equal(poller.getState().activeTask?.pendingAccountUsageId, '');
   assert.equal(patches[1][1].status, 'running');
 });
+
+test('task poller reconciles a stale local lease before claiming fresh work', async () => {
+  let reconcileCalls = 0;
+  let clearLeaseCalls = 0;
+  let claimCalls = 0;
+  const poller = createTaskPoller({
+    now: () => 1_000_000,
+    readTaskLease: async () => ({ taskId: 'stale-task', leaseToken: 'stale-token' }),
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+    reconcileTaskLease: async ({ localLease }) => {
+      reconcileCalls += 1;
+      assert.equal(localLease.leaseToken, 'stale-token');
+      return { success: true, action: 'clear_local' };
+    },
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return { task: null, nextPollAfterMs: 120_000 };
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.idle, true);
+  assert.equal(reconcileCalls, 1);
+  assert.equal(clearLeaseCalls, 1);
+  assert.equal(claimCalls, 1);
+});
+
+test('task poller resumes a server lease returned by reconcile', async () => {
+  let claimCalls = 0;
+  const renewals = [];
+  const poller = createTaskPoller({
+    now: () => 1_000_000,
+    readTaskLease: async () => null,
+    reconcileTaskLease: async () => ({
+      success: true,
+      action: 'resume',
+      task: {
+        id: 'resume-task',
+        taskType: 'xhs.collectAuthor',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'author_patrol',
+        status: 'running',
+      },
+      lease: {
+        taskId: 'resume-task',
+        leaseToken: 'resume-token',
+        expiresAt: '2026-05-10T01:10:00.000Z',
+      },
+    }),
+    renewTaskLease: async (taskId, lease) => {
+      renewals.push([taskId, lease.leaseToken]);
+      return { success: true, expiresAt: '2026-05-10T01:15:00.000Z' };
+    },
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return { task: null };
+    },
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        status: 'running',
+        resultSummary: {
+          itemsPlanned: 3,
+          itemsSucceeded: 1,
+          failedItems: 0,
+        },
+        records: {
+          notes: [],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.status, 'running');
+  assert.deepEqual(renewals, [['resume-task', 'resume-token']]);
+  assert.equal(claimCalls, 0);
+  assert.equal(poller.getState().activeTask.taskId, 'resume-task');
+  assert.equal(poller.getState().activeLease.leaseToken, 'resume-token');
+});

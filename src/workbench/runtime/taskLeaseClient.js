@@ -276,3 +276,84 @@ export async function renewCollectionTaskLease({
 
   return data;
 }
+
+export async function reconcileExecutionStationLease({
+  serverUrl = '',
+  stationId = '',
+  stationToken = '',
+  authorizationId = '',
+  authorizationToken = '',
+  localLease = null,
+  capabilities = [],
+  platformAccounts = [],
+  pluginVersion = '',
+  fetchFn,
+  store = null,
+} = {}) {
+  const normalizedLocalLease = localLease && typeof localLease === 'object'
+    ? {
+        taskId: normalizeString(localLease.taskId),
+        leaseToken: normalizeString(localLease.leaseToken),
+        expiresAt: normalizeString(localLease.expiresAt),
+      }
+    : null;
+
+  const body = {
+    authorizationId: normalizeString(authorizationId),
+    stationId: normalizeString(stationId),
+    stationToken: normalizeString(stationToken),
+    localLease: normalizedLocalLease,
+    capabilities: toStringArray(capabilities),
+    platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
+    pluginVersion: normalizeString(pluginVersion),
+  };
+
+  let data;
+  let lastMissingError = null;
+  for (const path of ['/api/execution-stations/reconcile', '/api/station/reconcile']) {
+    try {
+      data = await postJson({
+        serverUrl,
+        path,
+        fetchFn,
+        authorizationToken,
+        body,
+      });
+      break;
+    } catch (error) {
+      if ([404, 405].includes(Number(error?.status || 0))) {
+        lastMissingError = error;
+        continue;
+      }
+      throw error;
+    }
+  }
+  if (!data) {
+    void lastMissingError;
+    return { success: false, skipped: true, reason: 'reconcile_unavailable' };
+  }
+
+  const action = normalizeString(data?.action || data?.status || '');
+  const serverLease = data?.lease || data?.serverLease || null;
+  const taskId = normalizeString(serverLease?.taskId || data?.task?.id || data?.taskId);
+  const leaseToken = normalizeString(serverLease?.leaseToken || data?.leaseToken);
+  const expiresAt = normalizeString(serverLease?.expiresAt || data?.expiresAt);
+
+  if (store?.write && taskId && leaseToken) {
+    await store.write({ taskId, leaseToken, expiresAt });
+  } else if (
+    store?.clear &&
+    ['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)
+  ) {
+    await store.clear();
+  }
+
+  return {
+    success: true,
+    ...data,
+    action,
+    lease: taskId && leaseToken
+      ? { taskId, leaseToken, expiresAt }
+      : null,
+  };
+}

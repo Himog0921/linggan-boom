@@ -32,6 +32,7 @@ const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
 const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
+const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -587,6 +588,7 @@ export function createTaskPoller(deps = {}) {
   };
 
   let tickPromise = null;
+  let lastReconcileAtMs = 0;
 
   function getNow() {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
@@ -1241,6 +1243,58 @@ export function createTaskPoller(deps = {}) {
     return null;
   }
 
+  async function reconcileBeforeClaim() {
+    if (typeof deps.reconcileTaskLease !== 'function') return null;
+
+    const localLease = typeof deps.readTaskLease === 'function'
+      ? await deps.readTaskLease()
+      : null;
+    const now = getNow();
+    if (!localLease?.leaseToken && now - lastReconcileAtMs < RECONCILE_IDLE_INTERVAL_MS) {
+      return null;
+    }
+    lastReconcileAtMs = now;
+
+    let result;
+    try {
+      result = await deps.reconcileTaskLease({ localLease });
+    } catch (error) {
+      if (error?.retryable) {
+        const idleResult = buildRetryableClaimIdleResult(error);
+        state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+        return { idleResult };
+      }
+      return null;
+    }
+
+    if (!result?.success || result?.skipped) return null;
+    const action = String(result.action || '').trim();
+    if (['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)) {
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease();
+      return null;
+    }
+
+    const lease = result.lease || result.serverLease || null;
+    if (lease?.taskId && lease?.leaseToken) {
+      state.activeLease = {
+        leaseToken: String(lease.leaseToken || '').trim(),
+        expiresAt: String(lease.expiresAt || '').trim(),
+      };
+    }
+
+    if (result.task?.id) {
+      const hydrated = hydrateTrackedTask(result.task, now);
+      if (hydrated) {
+        state.activeTask = hydrated;
+        return { recoveredTask: hydrated };
+      }
+    }
+
+    return null;
+  }
+
   async function tick() {
     if (tickPromise) {
       return { success: true, skipped: true, reason: 'tick_in_progress' };
@@ -1249,6 +1303,14 @@ export function createTaskPoller(deps = {}) {
       state.ticking = true;
       try {
         if (state.activeTask) {
+          return await pollActiveTask();
+        }
+
+        const reconciled = await reconcileBeforeClaim();
+        if (reconciled?.idleResult) {
+          return reconciled.idleResult;
+        }
+        if (reconciled?.recoveredTask) {
           return await pollActiveTask();
         }
 
