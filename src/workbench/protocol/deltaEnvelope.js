@@ -118,6 +118,10 @@ export function buildIngestEnvelope({
   events = [],
   records = [],
   snapshot = null,
+  attemptId = '',
+  leaseToken = '',
+  leaseEpoch,
+  pageFingerprint = null,
 } = {}) {
   const envelope = {
     protocolVersion: WORKBENCH_PROTOCOL_VERSION,
@@ -128,9 +132,17 @@ export function buildIngestEnvelope({
     events: Array.isArray(events) ? events : [],
     records: Array.isArray(records) ? records : [],
   };
+  const normalizedAttemptId = normalizeText(attemptId);
+  const normalizedLeaseToken = normalizeText(leaseToken);
+  const numericLeaseEpoch = Number(leaseEpoch);
+  if (normalizedAttemptId) envelope.attemptId = normalizedAttemptId;
+  if (normalizedLeaseToken) envelope.leaseToken = normalizedLeaseToken;
+  if (Number.isFinite(numericLeaseEpoch)) envelope.leaseEpoch = Math.floor(numericLeaseEpoch);
+  if (pageFingerprint && typeof pageFingerprint === 'object' && !Array.isArray(pageFingerprint)) {
+    envelope.pageFingerprint = pageFingerprint;
+  }
   if (snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)) {
     envelope.snapshot = snapshot;
   }
   return envelope;
 }
-

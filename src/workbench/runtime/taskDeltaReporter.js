@@ -12,12 +12,14 @@ export function createTaskDeltaReporter({
   shouldPollWorkbenchTasks = () => true,
   executorInstanceId = '',
   getExecutorInstanceId = null,
+  getTaskExecutionContext = null,
   autoFlush = true,
 } = {}) {
   const outbox = createDeltaOutbox({
     store,
     executorInstanceId,
     getExecutorInstanceId,
+    getTaskExecutionContext,
     autoFlush,
     prepareRecordPayload: async (record) => {
       const config = typeof getFlywheelConfig === 'function'

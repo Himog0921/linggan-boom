@@ -1875,6 +1875,8 @@ async function sendExecutionStationHeartbeat(status = 'online') {
   });
 }
 
+let getCurrentTaskExecutionContext = () => null;
+
 const taskDeltaReporter = createTaskDeltaReporter({
   store: workbenchOutboxStore,
   ingestCollectionTaskDelta,
@@ -1887,6 +1889,7 @@ const taskDeltaReporter = createTaskDeltaReporter({
   },
   shouldPollWorkbenchTasks,
   getExecutorInstanceId: getPersistentExecutorInstanceId,
+  getTaskExecutionContext: (taskId) => getCurrentTaskExecutionContext(taskId),
 });
 
 const taskPoller = createTaskPoller({
@@ -1960,6 +1963,9 @@ const taskPoller = createTaskPoller({
       stationId: identity.stationId,
       stationToken: identity.stationToken,
       leaseToken: lease.leaseToken,
+      attemptId: lease.attemptId,
+      leaseEpoch: lease.leaseEpoch,
+      attemptNumber: lease.attemptNumber,
       authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       status: options?.status || 'running',
@@ -2084,6 +2090,8 @@ const taskPoller = createTaskPoller({
     return bgHandlers[MSG.WORKBENCH_GET_RESULT_PACKAGE](normalizedLookup);
   },
 });
+
+getCurrentTaskExecutionContext = (taskId = '') => taskPoller?.getExecutionContext?.(taskId) || null;
 
 async function runWorkbenchTaskPollTick() {
   const prevActiveTask = taskPoller?.getState?.()?.activeTask;

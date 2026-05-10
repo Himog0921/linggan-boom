@@ -57,6 +57,7 @@ export function createDeltaOutbox({
   ingestDelta,
   executorInstanceId = '',
   getExecutorInstanceId = null,
+  getTaskExecutionContext = null,
   prepareRecordPayload = null,
   batchLimit = 10,
   autoFlush = true,
@@ -90,6 +91,10 @@ export function createDeltaOutbox({
         const resolvedExecutorInstanceId = typeof getExecutorInstanceId === 'function'
           ? normalizeText(await getExecutorInstanceId())
           : normalizeText(executorInstanceId);
+        const executionContext = typeof getTaskExecutionContext === 'function'
+          ? normalizeObject(await getTaskExecutionContext(first.taskId))
+          : {};
+        const leaseEpoch = Number(executionContext.leaseEpoch);
         const envelope = buildIngestEnvelope({
           taskId: first.taskId,
           pluginRunId: first.pluginRunId,
@@ -98,6 +103,10 @@ export function createDeltaOutbox({
           events: group.filter((row) => row.kind === 'event').map(rowToEvent),
           records: group.filter((row) => row.kind === 'record').map(rowToRecord),
           snapshot: group.find((row) => row.snapshot)?.snapshot || null,
+          attemptId: executionContext.attemptId,
+          leaseToken: executionContext.leaseToken,
+          leaseEpoch: Number.isFinite(leaseEpoch) ? leaseEpoch : undefined,
+          pageFingerprint: executionContext.pageFingerprint,
         });
         try {
           const response = await ingestDelta(first.taskId, envelope);

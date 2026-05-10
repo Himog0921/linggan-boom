@@ -245,6 +245,62 @@ test('task poller marks task running immediately when dispatch already returns a
   assert.equal(patches[1][1].pluginRunId, 'run_started_1');
 });
 
+test('task poller exposes lease credentials and page fingerprint for server ingest', async () => {
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_with_truth',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        leaseEpoch: 7,
+      },
+      lease: {
+        leaseToken: 'lease-token-7',
+        expiresAt: '2026-04-17T12:05:00.000Z',
+        attemptId: 'attempt-7',
+        attemptNumber: 3,
+        leaseEpoch: 7,
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_with_truth',
+      collectionRunId: 'run_truth',
+      capabilityReport: {
+        platform: 'xhs',
+        mode: 'detail',
+        pageType: 'noteDetail',
+        url: 'https://www.xiaohongshu.com/explore/note_truth',
+        readiness: { ready: true },
+      },
+      resultLookup: {
+        externalTaskId: 'task_with_truth',
+        collectionRunId: 'run_truth',
+      },
+    }),
+  });
+
+  await poller.tick();
+  const context = poller.getExecutionContext('task_with_truth');
+
+  assert.equal(context.leaseToken, 'lease-token-7');
+  assert.equal(context.attemptId, 'attempt-7');
+  assert.equal(context.leaseEpoch, 7);
+  assert.deepEqual(context.pageFingerprint, {
+    platform: 'xhs',
+    pageType: 'detail',
+    rawPageType: 'noteDetail',
+    url: 'https://www.xiaohongshu.com/explore/note_truth',
+    contentId: 'note_truth',
+    routeKey: 'detail:note_truth',
+    ready: true,
+    readinessReasonCode: '',
+  });
+});
+
 test('task poller surfaces idle claim reason details from the lease endpoint', async () => {
   const poller = createTaskPoller({
     claimTaskLease: async () => ({
@@ -1145,6 +1201,7 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
       progress: 100,
       pluginRunId: null,
       errorMessage: 'Could not establish connection. Receiving end does not exist.',
+      leaseToken: 'lease-monitor-1',
     },
   ]);
   assert.equal(events[0].eventType, 'task.failed');

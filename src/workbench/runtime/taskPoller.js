@@ -161,6 +161,85 @@ function toFiniteNumber(value, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
+function toOptionalInteger(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? Math.floor(num) : undefined;
+}
+
+function normalizeLeaseSnapshot(lease = {}) {
+  const snapshot = {
+    leaseToken: String(lease?.leaseToken || '').trim(),
+    expiresAt: String(lease?.expiresAt || '').trim(),
+  };
+  const attemptId = String(lease?.attemptId || '').trim();
+  const leaseEpoch = toOptionalInteger(lease?.leaseEpoch);
+  const attemptNumber = toOptionalInteger(lease?.attemptNumber);
+  if (attemptId) snapshot.attemptId = attemptId;
+  if (leaseEpoch !== undefined) snapshot.leaseEpoch = leaseEpoch;
+  if (attemptNumber !== undefined) snapshot.attemptNumber = attemptNumber;
+  return snapshot;
+}
+
+function extractProfileIdentity(url = '') {
+  const text = String(url || '').trim();
+  const match = text.match(/xiaohongshu\.com\/user\/profile\/([^/?#]+)/i)
+    || text.match(/douyin\.com\/user\/([^/?#]+)/i)
+    || text.match(/douyin\.com\/@([^/?#]+)/i);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
+function extractDetailIdentity(url = '') {
+  const text = String(url || '').trim();
+  const match = text.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
+    || text.match(/douyin\.com\/video\/([^/?#]+)/i);
+  return String(match?.[1] || '').trim().toLowerCase();
+}
+
+function normalizePageMode(report = {}) {
+  const mode = String(report?.mode || '').trim();
+  if (mode) return mode;
+  const pageType = String(report?.pageType || '').trim();
+  if (pageType === 'noteDetail' || pageType === 'videoDetail' || pageType === 'detail') return 'detail';
+  if (pageType === 'profile') return 'profile';
+  if (pageType === 'search') return 'search';
+  return pageType || '';
+}
+
+function buildPageFingerprint(report = {}) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return null;
+  const url = String(report.url || '').trim();
+  const pageType = normalizePageMode(report);
+  if (!url && !pageType && !report.platform) return null;
+  const profileId = extractProfileIdentity(url);
+  const contentId = extractDetailIdentity(url);
+  const fingerprint = {
+    platform: String(report.platform || '').trim(),
+    pageType,
+    rawPageType: String(report.pageType || '').trim(),
+    url,
+  };
+  if (profileId) fingerprint.profileId = profileId;
+  if (contentId) fingerprint.contentId = contentId;
+  if (profileId || contentId || pageType) {
+    fingerprint.routeKey = [pageType, profileId || contentId].filter(Boolean).join(':');
+  }
+  if (report.readiness && typeof report.readiness === 'object') {
+    fingerprint.ready = Boolean(report.readiness.ready);
+    fingerprint.readinessReasonCode = String(report.readiness.reasonCode || '').trim();
+  }
+  return fingerprint;
+}
+
+function attachExecutionContextToPatch(patch = {}, { lease = null, pageFingerprint = null } = {}) {
+  if (!patch || typeof patch !== 'object' || Array.isArray(patch)) return patch;
+  const next = { ...patch };
+  if (lease?.leaseToken && !next.leaseToken) next.leaseToken = lease.leaseToken;
+  if (lease?.attemptId && !next.attemptId) next.attemptId = lease.attemptId;
+  if (lease?.leaseEpoch !== undefined && next.leaseEpoch === undefined) next.leaseEpoch = lease.leaseEpoch;
+  if (pageFingerprint && !next.pageFingerprint) next.pageFingerprint = pageFingerprint;
+  return next;
+}
+
 function firstText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
@@ -518,6 +597,12 @@ function hydrateTrackedTask(task = {}, now = Date.now()) {
     resultFingerprint: '',
     controlCursor: String(task?.controlCursor || '').trim(),
     errorMessage: String(task?.errorMessage || '').trim(),
+    attemptId: String(task?.currentAttemptId || task?.attemptId || '').trim(),
+    leaseEpoch: toOptionalInteger(task?.leaseEpoch),
+    executionPhase: String(task?.executionPhase || '').trim(),
+    pageFingerprint: task?.pageFingerprint && typeof task.pageFingerprint === 'object' && !Array.isArray(task.pageFingerprint)
+      ? { ...task.pageFingerprint }
+      : null,
     dispatchedAtMs:
       parseTimestamp(task?.dispatchedAt)
       || parseTimestamp(task?.updatedAt)
@@ -609,7 +694,11 @@ export function createTaskPoller(deps = {}) {
 
   async function patchTask(taskId, patch) {
     if (!taskId || !patch || typeof deps.patchTask !== 'function') return null;
-    return deps.patchTask(taskId, patch);
+    const activeTask = state.activeTask?.taskId === taskId ? state.activeTask : null;
+    return deps.patchTask(taskId, attachExecutionContextToPatch(patch, {
+      lease: activeTask ? state.activeLease : null,
+      pageFingerprint: activeTask?.pageFingerprint || null,
+    }));
   }
 
   async function resolveExecutorInstanceId() {
@@ -805,6 +894,7 @@ export function createTaskPoller(deps = {}) {
     const dispatchCollectionRunId = resolveDispatchCollectionRunId(dispatch);
     const executorInstanceId = await resolveExecutorInstanceId();
     const accountId = String(preCheck?.accountId || '').trim();
+    const pageFingerprint = buildPageFingerprint(dispatch?.capabilityReport);
     if (!lease || dispatchCollectionRunId) {
       await patchTask(task.id, buildStartupPatch({
         pluginRunId: dispatchCollectionRunId,
@@ -826,14 +916,15 @@ export function createTaskPoller(deps = {}) {
       resultFingerprint: '',
       controlCursor: '',
       errorMessage: '',
+      attemptId: String(lease?.attemptId || task?.currentAttemptId || '').trim(),
+      leaseEpoch: toOptionalInteger(lease?.leaseEpoch ?? task?.leaseEpoch),
+      executionPhase: String(task?.executionPhase || 'assigned').trim() || 'assigned',
+      pageFingerprint,
       dispatchedAtMs: getNow(),
       pendingAccountUsageId: '',
     };
     state.activeLease = lease
-      ? {
-          leaseToken: String(lease.leaseToken || '').trim(),
-          expiresAt: String(lease.expiresAt || '').trim(),
-        }
+      ? normalizeLeaseSnapshot(lease)
       : null;
     if (!lease) {
       await enqueueTaskEvent(state.activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_CLAIMED, {
@@ -989,7 +1080,7 @@ export function createTaskPoller(deps = {}) {
         });
         if (renewal?.expiresAt) {
           state.activeLease = {
-            ...state.activeLease,
+            ...normalizeLeaseSnapshot(state.activeLease),
             expiresAt: String(renewal.expiresAt || '').trim(),
           };
         }
@@ -1232,10 +1323,7 @@ export function createTaskPoller(deps = {}) {
       if (typeof deps.readTaskLease === 'function') {
         const lease = await deps.readTaskLease();
         if (lease?.taskId === hydrated.taskId && lease?.leaseToken) {
-          state.activeLease = {
-            leaseToken: String(lease.leaseToken || '').trim(),
-            expiresAt: String(lease.expiresAt || '').trim(),
-          };
+          state.activeLease = normalizeLeaseSnapshot(lease);
         }
       }
       return hydrated;
@@ -1278,10 +1366,7 @@ export function createTaskPoller(deps = {}) {
 
     const lease = result.lease || result.serverLease || null;
     if (lease?.taskId && lease?.leaseToken) {
-      state.activeLease = {
-        leaseToken: String(lease.leaseToken || '').trim(),
-        expiresAt: String(lease.expiresAt || '').trim(),
-      };
+      state.activeLease = normalizeLeaseSnapshot(lease);
     }
 
     if (result.task?.id) {
@@ -1359,9 +1444,21 @@ export function createTaskPoller(deps = {}) {
     };
   }
 
+  function getExecutionContext(taskId = '') {
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId || state.activeTask?.taskId !== normalizedTaskId) return null;
+    return {
+      ...(state.activeLease ? normalizeLeaseSnapshot(state.activeLease) : {}),
+      attemptId: String(state.activeLease?.attemptId || state.activeTask?.attemptId || '').trim(),
+      leaseEpoch: toOptionalInteger(state.activeLease?.leaseEpoch ?? state.activeTask?.leaseEpoch),
+      pageFingerprint: state.activeTask?.pageFingerprint || null,
+    };
+  }
+
   return {
     tick,
     getState,
+    getExecutionContext,
     updateActiveTask,
   };
 }

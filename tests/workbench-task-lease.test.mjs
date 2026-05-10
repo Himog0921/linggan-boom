@@ -38,10 +38,18 @@ test('task lease client claims and renews through workbench lease endpoints', as
         status: 200,
         async json() {
           return {
-            task: { id: 'task-lease-1', taskStrategy: 'author_patrol' },
+            task: {
+              id: 'task-lease-1',
+              taskStrategy: 'author_patrol',
+              leaseEpoch: 3,
+            },
             lease: {
               leaseToken: 'lease-token-1',
               expiresAt: '2026-04-17T12:05:00.000Z',
+            },
+            attempt: {
+              attemptId: 'attempt-1',
+              attemptNumber: 2,
             },
           };
         },
@@ -68,12 +76,16 @@ test('task lease client claims and renews through workbench lease endpoints', as
     fetchFn,
     store,
   });
+  const claimedLease = await store.read();
   const renewal = await renewCollectionTaskLease({
     serverUrl: 'http://localhost:3000',
     taskId: 'task-lease-1',
     stationId: 'station-1',
     stationToken: 'station-token',
-    leaseToken: 'lease-token-1',
+    leaseToken: claimedLease.leaseToken,
+    attemptId: claimedLease.attemptId,
+    attemptNumber: claimedLease.attemptNumber,
+    leaseEpoch: claimedLease.leaseEpoch,
     authorizationId: 'auth_1',
     authorizationToken: 'auth_token_1',
     status: 'running',
@@ -83,6 +95,9 @@ test('task lease client claims and renews through workbench lease endpoints', as
 
   assert.equal(claim.task.id, 'task-lease-1');
   assert.equal((await store.read()).leaseToken, 'lease-token-1');
+  assert.equal((await store.read()).attemptId, 'attempt-1');
+  assert.equal((await store.read()).attemptNumber, 2);
+  assert.equal((await store.read()).leaseEpoch, 3);
   assert.equal(renewal.expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal((await store.read()).expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal(requests.length, 2);
@@ -90,6 +105,9 @@ test('task lease client claims and renews through workbench lease endpoints', as
   assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
+  assert.equal(JSON.parse(requests[1][1].body).attemptId, 'attempt-1');
+  assert.equal(JSON.parse(requests[1][1].body).attemptNumber, 2);
+  assert.equal(JSON.parse(requests[1][1].body).leaseEpoch, 3);
 });
 
 test('task lease client exposes renewal conflict status', async () => {

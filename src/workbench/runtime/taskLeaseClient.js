@@ -16,6 +16,58 @@ function toFiniteNumber(value, fallback = 0) {
   return Number.isFinite(num) ? num : fallback;
 }
 
+function toOptionalInteger(value) {
+  const num = Number(value);
+  return Number.isFinite(num) ? Math.floor(num) : undefined;
+}
+
+function normalizeLeaseSnapshot({
+  task = null,
+  lease = null,
+  attempt = null,
+  fallback = null,
+} = {}) {
+  const taskId = normalizeString(lease?.taskId || task?.id || fallback?.taskId);
+  const leaseToken = normalizeString(lease?.leaseToken || fallback?.leaseToken);
+  const expiresAt = normalizeString(lease?.expiresAt || fallback?.expiresAt);
+  const attemptId = normalizeString(
+    lease?.attemptId
+    || attempt?.attemptId
+    || task?.currentAttemptId
+    || fallback?.attemptId,
+  );
+  const attemptNumber = toOptionalInteger(
+    lease?.attemptNumber
+    ?? attempt?.attemptNumber
+    ?? task?.attemptCount
+    ?? fallback?.attemptNumber,
+  );
+  const leaseEpoch = toOptionalInteger(
+    lease?.leaseEpoch
+    ?? task?.leaseEpoch
+    ?? fallback?.leaseEpoch,
+  );
+  const snapshot = {
+    taskId,
+    leaseToken,
+    expiresAt,
+  };
+  if (attemptId) snapshot.attemptId = attemptId;
+  if (attemptNumber !== undefined) snapshot.attemptNumber = attemptNumber;
+  if (leaseEpoch !== undefined) snapshot.leaseEpoch = leaseEpoch;
+  return snapshot;
+}
+
+function addLeaseAttemptFields(body = {}, lease = {}) {
+  const attemptId = normalizeString(lease?.attemptId);
+  const leaseEpoch = toOptionalInteger(lease?.leaseEpoch);
+  const attemptNumber = toOptionalInteger(lease?.attemptNumber);
+  if (attemptId) body.attemptId = attemptId;
+  if (leaseEpoch !== undefined) body.leaseEpoch = leaseEpoch;
+  if (attemptNumber !== undefined) body.attemptNumber = attemptNumber;
+  return body;
+}
+
 function extractIdleClaimReason(claim = {}) {
   const rawReason = claim?.reason && typeof claim.reason === 'object' && !Array.isArray(claim.reason)
     ? { ...claim.reason }
@@ -222,11 +274,11 @@ export async function claimCollectionTaskLease({
   });
 
   if (data?.task && data?.lease && store?.write) {
-    await store.write({
-      taskId: normalizeString(data.task.id),
-      leaseToken: normalizeString(data.lease.leaseToken),
-      expiresAt: normalizeString(data.lease.expiresAt),
-    });
+    await store.write(normalizeLeaseSnapshot({
+      task: data.task,
+      lease: data.lease,
+      attempt: data.attempt,
+    }));
   } else if (store?.write) {
     const idleSnapshot = createTaskLeaseIdleSnapshot(data);
     if (idleSnapshot) {
@@ -248,30 +300,44 @@ export async function renewCollectionTaskLease({
   authorizationId = '',
   authorizationToken = '',
   status = 'running',
+  attemptId = '',
+  leaseEpoch,
+  attemptNumber,
   fetchFn,
   store = null,
 } = {}) {
   const normalizedTaskId = normalizeString(taskId);
+  const leaseAuth = normalizeLeaseSnapshot({
+    fallback: {
+      taskId: normalizedTaskId,
+      leaseToken,
+      attemptId,
+      leaseEpoch,
+      attemptNumber,
+    },
+  });
   const data = await postJson({
     serverUrl,
     path: `/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/lease`,
     fetchFn,
     authorizationToken,
-    body: {
+    body: addLeaseAttemptFields({
       authorizationId: normalizeString(authorizationId),
       stationId: normalizeString(stationId),
       stationToken: normalizeString(stationToken),
       leaseToken: normalizeString(leaseToken),
       status: normalizeString(status) || 'running',
-    },
+    }, leaseAuth),
   });
 
   if (store?.write && data?.expiresAt) {
-    await store.write({
-      taskId: normalizedTaskId,
-      leaseToken: normalizeString(leaseToken),
-      expiresAt: normalizeString(data.expiresAt),
-    });
+    await store.write(normalizeLeaseSnapshot({
+      lease: data,
+      fallback: {
+        ...leaseAuth,
+        expiresAt: data.expiresAt,
+      },
+    }));
   }
 
   return data;
@@ -292,9 +358,7 @@ export async function reconcileExecutionStationLease({
 } = {}) {
   const normalizedLocalLease = localLease && typeof localLease === 'object'
     ? {
-        taskId: normalizeString(localLease.taskId),
-        leaseToken: normalizeString(localLease.leaseToken),
-        expiresAt: normalizeString(localLease.expiresAt),
+        ...normalizeLeaseSnapshot({ fallback: localLease }),
       }
     : null;
 
@@ -335,12 +399,23 @@ export async function reconcileExecutionStationLease({
 
   const action = normalizeString(data?.action || data?.status || '');
   const serverLease = data?.lease || data?.serverLease || null;
-  const taskId = normalizeString(serverLease?.taskId || data?.task?.id || data?.taskId);
-  const leaseToken = normalizeString(serverLease?.leaseToken || data?.leaseToken);
-  const expiresAt = normalizeString(serverLease?.expiresAt || data?.expiresAt);
+  const normalizedServerLease = normalizeLeaseSnapshot({
+    task: data?.task,
+    lease: serverLease || data,
+    attempt: data?.attempt,
+    fallback: {
+      taskId: data?.taskId,
+      leaseToken: data?.leaseToken,
+      expiresAt: data?.expiresAt,
+      attemptId: data?.attemptId,
+      leaseEpoch: data?.leaseEpoch,
+    },
+  });
+  const taskId = normalizeString(normalizedServerLease.taskId);
+  const leaseToken = normalizeString(normalizedServerLease.leaseToken);
 
   if (store?.write && taskId && leaseToken) {
-    await store.write({ taskId, leaseToken, expiresAt });
+    await store.write(normalizedServerLease);
   } else if (
     store?.clear &&
     ['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)
@@ -353,7 +428,7 @@ export async function reconcileExecutionStationLease({
     ...data,
     action,
     lease: taskId && leaseToken
-      ? { taskId, leaseToken, expiresAt }
+      ? normalizedServerLease
       : null,
   };
 }

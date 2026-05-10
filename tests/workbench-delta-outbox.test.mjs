@@ -158,6 +158,55 @@ test('delta outbox resolves executor identity at flush time', async () => {
   assert.equal(envelopes[0][1].executorInstanceId, 'persisted_executor_id');
 });
 
+test('delta outbox attaches lease credentials and page fingerprint to ingest envelope', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  const outbox = createDeltaOutbox({
+    store,
+    ingestDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    getTaskExecutionContext: async (taskId) => ({
+      attemptId: `attempt-${taskId}`,
+      leaseToken: `lease-${taskId}`,
+      leaseEpoch: 4,
+      pageFingerprint: {
+        platform: 'xhs',
+        pageType: 'detail',
+        contentId: 'note_1',
+      },
+    }),
+    executorInstanceId: 'plugin_1',
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_1',
+    pluginRunId: 'run_1',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS,
+    source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+    sequence: 3,
+    payload: { message: 'flush uses execution truth' },
+  });
+
+  await outbox.flush();
+
+  assert.equal(envelopes[0][1].attemptId, 'attempt-task_1');
+  assert.equal(envelopes[0][1].leaseToken, 'lease-task_1');
+  assert.equal(envelopes[0][1].leaseEpoch, 4);
+  assert.deepEqual(envelopes[0][1].pageFingerprint, {
+    platform: 'xhs',
+    pageType: 'detail',
+    contentId: 'note_1',
+  });
+});
+
 test('delta outbox prepares record payloads before storing them', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
