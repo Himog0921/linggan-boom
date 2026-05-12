@@ -374,6 +374,57 @@ test('task poller turns retryable claim backpressure into an idle wait', async (
   assert.equal(poller.getState().lastIdleReason.nextPollAfterMs, 60_000);
 });
 
+test('task poller turns authorization failures into a long idle pause', async () => {
+  const error = new Error('authorization expired');
+  error.status = 401;
+  error.retryable = false;
+  let dispatchCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => {
+      throw error;
+    },
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run when authorization is invalid');
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.success, true);
+  assert.equal(result.idle, true);
+  assert.equal(result.idleReasonCode, 'authorization_invalid');
+  assert.equal(result.idleReasonMessage, 'authorization expired');
+  assert.equal(result.nextPollAfterMs, 15 * 60_000);
+  assert.equal(dispatchCalls, 0);
+  assert.equal(poller.getState().lastIdleReason.nextPollAfterMs, 15 * 60_000);
+});
+
+test('task poller pauses when trackable task recovery hits authorization failure', async () => {
+  const error = new Error('collection task list unauthorized');
+  error.status = 403;
+  error.retryable = false;
+  let claimCalls = 0;
+  const poller = createTaskPoller({
+    fetchTrackableTasks: async () => {
+      throw error;
+    },
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      throw new Error('claim should not run after recovery authorization failure');
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.success, true);
+  assert.equal(result.idle, true);
+  assert.equal(result.idleReasonCode, 'authorization_invalid');
+  assert.equal(result.idleReasonMessage, 'collection task list unauthorized');
+  assert.equal(result.nextPollAfterMs, 15 * 60_000);
+  assert.equal(claimCalls, 0);
+});
+
 test('task poller clears local active task when it has no valid lease for too long', async () => {
   let now = 1_000;
   const patches = [];

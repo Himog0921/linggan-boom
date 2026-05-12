@@ -73,6 +73,30 @@ test('task poll scheduler keeps the existing fallback cadence when claim provide
   assert.equal(slowCalls[0][1].periodInMinutes, (SLOW_TASK_POLL_INTERVAL_MS + IDLE_POLL_JITTER_MIN_MS) / 60_000);
 });
 
+test('task poll scheduler staggers empty claim waits without polling sooner than nextPollAfterMs', async () => {
+  const calls = [];
+  const config = scheduleWorkbenchTaskPollAlarm({
+    alarmsApi: {
+      create(name, options) {
+        calls.push([name, options]);
+      },
+    },
+    alarmName: 'workbench-task-poll',
+    result: {
+      idle: true,
+      nextPollAfterMs: 120_000,
+    },
+    consecutiveEmptyPolls: 0,
+    randomFn: () => 0,
+  });
+
+  assert.equal(config.intervalMs, 120_000 + IDLE_POLL_JITTER_MIN_MS);
+  assert.deepEqual(calls, [[
+    'workbench-task-poll',
+    { periodInMinutes: (120_000 + IDLE_POLL_JITTER_MIN_MS) / 60_000 },
+  ]]);
+});
+
 test('task poll scheduler respects server balancing waits without adding jitter', async () => {
   const calls = [];
   const config = scheduleWorkbenchTaskPollAlarm({

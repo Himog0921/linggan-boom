@@ -383,6 +383,10 @@ function isRetryableStatus(status) {
   return [408, 429, 500, 502, 503, 504].includes(Number(status));
 }
 
+function isAuthorizationFailureStatus(status) {
+  return [401, 403].includes(Number(status));
+}
+
 async function readErrorBody(response) {
   return response.text().catch(() => '');
 }
@@ -560,11 +564,11 @@ export async function fetchCollectionTasks(config = {}, query = {}) {
     : '/api/collection-tasks';
   const response = await fetchFlywheel(path, {
     serverUrl: config?.serverUrl || '',
+    apiToken: config?.apiToken || '',
     timeoutMs: 10000,
   });
   if (!response.ok) {
-    const error = await response.text().catch(() => '');
-    throw new Error(error || `HTTP ${response.status}`);
+    await throwForWorkbenchHttpError(response, 'fetch_collection_tasks_failed');
   }
   const data = await response.json().catch(() => ({}));
   return Array.isArray(data?.tasks) ? data.tasks : [];
@@ -581,7 +585,10 @@ export async function fetchTrackableCollectionTasks(
   if (!uniqueStatuses.length) return [];
 
   const groups = await Promise.all(
-    uniqueStatuses.map((status) => fetchCollectionTasks(config, { status, limit }).catch(() => [])),
+    uniqueStatuses.map((status) => fetchCollectionTasks(config, { status, limit }).catch((error) => {
+      if (isAuthorizationFailureStatus(error?.status)) throw error;
+      return [];
+    })),
   );
 
   const deduped = new Map();
@@ -605,6 +612,7 @@ export async function patchCollectionTask(config = {}, taskId = '', patch = {}) 
   }
   const response = await fetchFlywheel(`/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}`, {
     serverUrl: config?.serverUrl || '',
+    apiToken: config?.apiToken || '',
     method: 'PATCH',
     headers: {
       'Content-Type': 'application/json',
@@ -627,6 +635,7 @@ export async function ingestCollectionTaskDelta(config = {}, taskId = '', envelo
   try {
     const response = await fetchFlywheel(`/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/ingest`, {
       serverUrl: config?.serverUrl || '',
+      apiToken: config?.apiToken || '',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -666,13 +675,11 @@ export async function fetchCollectionTaskControlRequests(
       `/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/control-requests${suffix}`,
       {
         serverUrl: config?.serverUrl || '',
+        apiToken: config?.apiToken || '',
         method: 'GET',
         timeoutMs: 10000,
       },
     );
-    if (response.status === 404) {
-      return { success: true, controls: [], nextCursor: '' };
-    }
     if (!response.ok) {
       await throwForWorkbenchHttpError(response, 'fetch_control_requests_failed');
     }

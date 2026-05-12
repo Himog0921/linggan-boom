@@ -33,6 +33,7 @@ const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
+const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -43,6 +44,14 @@ function isLeaseConflictError(error) {
   const status = Number(error?.status || 0);
   const msg = String(error?.message || error || '');
   return status === 409 || /LEASE_CONFLICT|held by another station|lease is held/i.test(msg);
+}
+
+function isAuthorizationFailureError(error) {
+  return [401, 403].includes(Number(error?.status || 0));
+}
+
+function isMissingServerTaskError(error) {
+  return Number(error?.status || 0) === 404;
 }
 
 function isMonitorTask(task = {}) {
@@ -663,6 +672,18 @@ function buildRetryableClaimIdleResult(error = {}) {
   });
 }
 
+function buildAuthorizationFailureIdleResult(error = {}) {
+  const message = String(error?.message || '插件授权已失效，请重新授权后再接单。').trim();
+  return buildIdleTickResult({
+    task: null,
+    nextPollAfterMs: AUTHORIZATION_FAILURE_IDLE_MS,
+    reason: {
+      code: 'authorization_invalid',
+      message,
+    },
+  });
+}
+
 export function createTaskPoller(deps = {}) {
   const state = {
     activeTask: null,
@@ -967,8 +988,8 @@ export function createTaskPoller(deps = {}) {
         after: activeTask.controlCursor || '',
       });
     } catch (error) {
-      if (Number(error?.status) === 404) {
-        return { success: true, controls: 0, skipped: true, reason: 'control_api_unavailable' };
+      if (isMissingServerTaskError(error)) {
+        return { success: false, missingActiveTask: true, reason: 'control_task_missing' };
       }
       throw error;
     }
@@ -1085,6 +1106,17 @@ export function createTaskPoller(deps = {}) {
           };
         }
       } catch (error) {
+        if (isAuthorizationFailureError(error)) {
+          const idleResult = buildAuthorizationFailureIdleResult(error);
+          state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
+            leaseRenewalFailed: true,
+            reason: 'authorization_invalid',
+            errorMessage: String(error?.message || error || 'authorization_invalid'),
+            retryAfterMs: AUTHORIZATION_FAILURE_IDLE_MS,
+          });
+          return idleResult;
+        }
         if (isLeaseConflictError(error)) {
           await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
             leaseRenewalFailed: true,
@@ -1107,7 +1139,19 @@ export function createTaskPoller(deps = {}) {
         });
       }
     }
-    await consumeControlRequests(activeTask);
+    const controlResult = await consumeControlRequests(activeTask);
+    if (controlResult?.missingActiveTask) {
+      const cleanupTask = cleanupTaskSnapshot(activeTask);
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease();
+      return {
+        success: true,
+        released: true,
+        reason: controlResult.reason || 'control_task_missing',
+        cleanupTask,
+      };
+    }
 
     let result;
     try {
@@ -1347,6 +1391,11 @@ export function createTaskPoller(deps = {}) {
     try {
       result = await deps.reconcileTaskLease({ localLease });
     } catch (error) {
+      if (isAuthorizationFailureError(error)) {
+        const idleResult = buildAuthorizationFailureIdleResult(error);
+        state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+        return { idleResult };
+      }
       if (error?.retryable) {
         const idleResult = buildRetryableClaimIdleResult(error);
         state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
@@ -1399,7 +1448,22 @@ export function createTaskPoller(deps = {}) {
           return await pollActiveTask();
         }
 
-        const recoveredTask = await recoverTrackedTask();
+        let recoveredTask;
+        try {
+          recoveredTask = await recoverTrackedTask();
+        } catch (error) {
+          if (isAuthorizationFailureError(error)) {
+            const idleResult = buildAuthorizationFailureIdleResult(error);
+            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+            return idleResult;
+          }
+          if (error?.retryable) {
+            const idleResult = buildRetryableClaimIdleResult(error);
+            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+            return idleResult;
+          }
+          throw error;
+        }
         if (recoveredTask) {
           return await pollActiveTask();
         }
@@ -1413,6 +1477,11 @@ export function createTaskPoller(deps = {}) {
         try {
           claimed = await deps.claimTaskLease();
         } catch (error) {
+          if (isAuthorizationFailureError(error)) {
+            const idleResult = buildAuthorizationFailureIdleResult(error);
+            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+            return idleResult;
+          }
           if (error?.retryable) {
             const idleResult = buildRetryableClaimIdleResult(error);
             state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);

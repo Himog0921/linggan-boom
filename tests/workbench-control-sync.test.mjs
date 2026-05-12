@@ -4,8 +4,10 @@ import assert from 'node:assert/strict';
 import {
   getFlywheelConfig,
   fetchCollectionTaskControlRequests,
+  fetchTrackableCollectionTasks,
   ingestCollectionTaskDelta,
   mergeFlywheelAuthorization,
+  patchCollectionTask,
 } from '../src/sync/flywheelSync.js';
 import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
 import { REMOTE_TASK_CONTROL_ACTION, WORKBENCH_TASK_EVENT_TYPE } from '../src/workbench/protocol/schema.js';
@@ -77,7 +79,63 @@ test('workbench API config prefers the active plugin authorization token over st
   assert.equal(config.apiToken, 'active-token');
 });
 
-test('control request client uses control-requests endpoint and treats 404 as no controls', async () => {
+test('collection task clients prefer the active plugin authorization token over stale stored api token', async () => {
+  const originalChrome = globalThis.chrome;
+  const originalFetch = globalThis.fetch;
+  const calls = [];
+  globalThis.chrome = {
+    storage: {
+      local: {
+        async get() {
+          return {
+            flywheelConfig: {
+              serverUrl: 'http://workbench.test',
+              enabled: true,
+              apiToken: 'stale-token',
+            },
+          };
+        },
+        async set() {},
+      },
+    },
+  };
+  globalThis.fetch = async (url, options = {}) => {
+    calls.push([url, options]);
+    if (String(url).includes('/control-requests')) {
+      return new Response(JSON.stringify({ controls: [] }), { status: 200 });
+    }
+    if (String(url).includes('/ingest')) {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+    if (options.method === 'PATCH') {
+      return new Response(JSON.stringify({ success: true }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ tasks: [] }), { status: 200 });
+  };
+
+  try {
+    const config = {
+      serverUrl: 'http://workbench.test',
+      enabled: true,
+      apiToken: 'active-token',
+    };
+
+    await fetchTrackableCollectionTasks(config, { statuses: ['running'], limit: 1 });
+    await patchCollectionTask(config, 'task_1', { status: 'running' });
+    await ingestCollectionTaskDelta(config, 'task_1', { records: [] });
+    await fetchCollectionTaskControlRequests(config, 'task_1');
+
+    assert.equal(calls.length, 4);
+    for (const [, options] of calls) {
+      assert.equal(options.headers?.Authorization, 'Bearer active-token');
+    }
+  } finally {
+    globalThis.chrome = originalChrome;
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('control request client treats control-requests 404 as missing server task', async () => {
   const calls = [];
   const originalFetch = globalThis.fetch;
   globalThis.fetch = async (url, options) => {
@@ -86,18 +144,94 @@ test('control request client uses control-requests endpoint and treats 404 as no
   };
 
   try {
-    const result = await fetchCollectionTaskControlRequests(
-      { serverUrl: 'http://workbench.test' },
-      'task_1',
-      { executorInstanceId: 'plugin_1', after: 'cursor_1' },
+    await assert.rejects(
+      () => fetchCollectionTaskControlRequests(
+        { serverUrl: 'http://workbench.test' },
+        'task_1',
+        { executorInstanceId: 'plugin_1', after: 'cursor_1' },
+      ),
+      (error) => {
+        assert.equal(error.status, 404);
+        assert.equal(error.retryable, false);
+        return true;
+      },
     );
-
-    assert.deepEqual(result, { success: true, controls: [], nextCursor: '' });
     assert.equal(
       calls[0][0],
       'http://workbench.test/api/collection-tasks/task_1/control-requests?executorInstanceId=plugin_1&after=cursor_1',
     );
     assert.equal(calls[0][1].method, 'GET');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('task poller clears active task and lease when control endpoint says task is missing', async () => {
+  const clearedLeases = [];
+  let resultLookups = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: claimTask([{
+      id: 'task_missing_control_1',
+      taskType: 'xhs.batchNotes',
+      platform: 'xhs',
+    }]),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_missing_control_1',
+      resultLookup: { externalTaskId: 'task_missing_control_1' },
+    }),
+    fetchControlRequests: async () => {
+      const error = new Error('task not found');
+      error.status = 404;
+      error.retryable = false;
+      throw error;
+    },
+    applyTaskControl: async () => {
+      throw new Error('control should not be applied after task missing');
+    },
+    getResultPackage: async () => {
+      resultLookups += 1;
+      return { success: true, result: { status: 'running', records: { notes: [], comments: [], authors: [], mediaAssets: [] } } };
+    },
+    clearTaskLease: async () => {
+      clearedLeases.push('cleared');
+    },
+  });
+
+  await poller.tick();
+  const result = await poller.tick();
+
+  assert.equal(result.released, true);
+  assert.equal(result.reason, 'control_task_missing');
+  assert.equal(resultLookups, 0);
+  assert.deepEqual(clearedLeases, ['cleared']);
+  assert.equal(poller.getState().activeTask, null);
+  assert.equal(poller.getState().activeLease, null);
+});
+
+test('trackable task recovery propagates authorization failures instead of swallowing them', async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: 'plugin authorization expired' }),
+    { status: 401 },
+  );
+
+  try {
+    await assert.rejects(
+      () => fetchTrackableCollectionTasks(
+        { serverUrl: 'http://workbench.test' },
+        { statuses: ['running'], limit: 1 },
+      ),
+      (error) => {
+        assert.equal(error.status, 401);
+        assert.equal(error.retryable, false);
+        assert.match(error.message, /plugin authorization expired/);
+        return true;
+      },
+    );
   } finally {
     globalThis.fetch = originalFetch;
   }

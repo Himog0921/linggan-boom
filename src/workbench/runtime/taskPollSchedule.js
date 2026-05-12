@@ -52,7 +52,7 @@ export function resolveWorkbenchTaskPollIntervalMs(result = null, consecutiveEmp
   if (result?.idle && idleNextPollAfterMs > 0) {
     return shouldRespectExactIdleWait(result)
       ? idleNextPollAfterMs
-      : idleNextPollAfterMs + randomRangeMs(IDLE_POLL_JITTER_MIN_MS, IDLE_POLL_JITTER_MAX_MS, randomFn);
+      : Math.max(idleNextPollAfterMs, FAST_TASK_POLL_INTERVAL_MS) + randomRangeMs(IDLE_POLL_JITTER_MIN_MS, IDLE_POLL_JITTER_MAX_MS, randomFn);
   }
   const fallback = consecutiveEmptyPolls >= EMPTY_POLL_THRESHOLD
     ? SLOW_TASK_POLL_INTERVAL_MS

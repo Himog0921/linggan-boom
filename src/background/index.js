@@ -194,6 +194,7 @@ const workbenchTaskRegistry = new Map();
 const navigatedTabs = new Map();
 const NAVIGATED_TASK_TABS_STORAGE_KEY = 'workbenchNavigatedTaskTabs';
 const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
+const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
 const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
 
@@ -2140,6 +2141,10 @@ async function runExecutionStationHeartbeatTick() {
     return;
   }
   if (!heartbeat?.success) {
+    if ([401, 403].includes(Number(heartbeat?.status || 0))) {
+      nextExecutionStationHeartbeatAtMs = Date.now() + AUTHORIZATION_FAILURE_IDLE_MS;
+      return;
+    }
     if (heartbeat?.retryable && Number(heartbeat?.nextRetryAt || 0) > Date.now()) {
       nextExecutionStationHeartbeatAtMs = Number(heartbeat.nextRetryAt);
     }
