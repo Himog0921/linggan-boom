@@ -28,15 +28,47 @@ export function candidatePriority(url = '') {
   return 4;
 }
 
-export function normalizeCandidates(candidates = []) {
-  const list = Array.isArray(candidates) ? candidates : [candidates];
-  const dedup = [];
-  for (const raw of list) {
-    if (!raw) continue;
-    const item = normalizeCandidateUrl(raw);
-    if (!item || dedup.includes(item)) continue;
-    dedup.push(item);
+function collectCandidateUrls(raw, output) {
+  if (!raw) return;
+  if (Array.isArray(raw)) {
+    raw.forEach((item) => collectCandidateUrls(item, output));
+    return;
   }
+  if (typeof raw === 'object') {
+    [
+      raw.urlDefault,
+      raw.url,
+      raw.src,
+      raw.href,
+      raw.downloadUrl,
+      raw.download_url,
+      raw.originUrl,
+      raw.origin_url,
+      raw.masterUrl,
+      raw.master_url,
+      raw.backupUrl,
+      raw.backup_url,
+      raw.videoDownloadUrl,
+      raw.videoPlayUrl,
+      raw.urls,
+      raw.urlList,
+      raw.url_list,
+      raw.backupUrls,
+      raw.backup_urls,
+      raw.candidates,
+      raw.candidateUrls,
+    ].forEach((item) => collectCandidateUrls(item, output));
+    return;
+  }
+
+  const item = normalizeCandidateUrl(raw);
+  if (!item || output.includes(item)) return;
+  output.push(item);
+}
+
+export function normalizeCandidates(candidates = []) {
+  const dedup = [];
+  collectCandidateUrls(candidates, dedup);
   return dedup.sort((a, b) => candidatePriority(a) - candidatePriority(b));
 }
 

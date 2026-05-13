@@ -301,6 +301,63 @@ test('downloadNoteMediaFromRecord packages xhs image note media into a single zi
   }
 });
 
+test('downloadNoteMediaFromRecord accepts object-shaped xhs image candidates from saved dashboard records', async () => {
+  const browser = installBrowserMocks();
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  mediaAssetStore.bulkUpsert = async () => {};
+
+  const bgCalls = [];
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById() {},
+      },
+      sendToBackground: async (action, payload) => {
+        bgCalls.push({ action, payload });
+        assert.equal(action, 'fetchBinaryAsDataUrl');
+        assert.equal(payload.candidates[0], 'https://sns-img.example.com/candidate-cover.jpg');
+        return {
+          success: true,
+          dataUrl: `data:image/jpeg;base64,${Buffer.from('image-binary').toString('base64')}`,
+          candidate: payload.candidates[0],
+          candidateIndex: 0,
+        };
+      },
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => '',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'xhs_saved_note_1',
+      contentId: 'xhs_saved_note_1',
+      title: '保存记录',
+      images: ['https://sns-img.example.com/fallback-cover.jpg'],
+      imageCandidates: [[{ url: 'https://sns-img.example.com/candidate-cover.jpg' }]],
+    });
+
+    assert.equal(summary.total, 1);
+    assert.equal(summary.success, 1);
+    assert.equal(summary.failed, 0);
+    assert.equal(summary.zipped, true);
+    assert.equal(bgCalls.length, 1);
+    assert.equal(browser.downloads.length, 1);
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
 test('downloadNoteMediaFromRecord downloads xhs video directly and refreshes stale urls before retry', async () => {
   installBrowserMocks();
   globalThis.window.location = {
