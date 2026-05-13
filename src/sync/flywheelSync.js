@@ -383,10 +383,6 @@ function isRetryableStatus(status) {
   return [408, 429, 500, 502, 503, 504].includes(Number(status));
 }
 
-function isAuthorizationFailureStatus(status) {
-  return [401, 403].includes(Number(status));
-}
-
 async function readErrorBody(response) {
   return response.text().catch(() => '');
 }
@@ -551,58 +547,6 @@ export async function getFlywheelConfig() {
 
 export async function saveFlywheelConfig(config = {}) {
   return writeFlywheelStorage(config);
-}
-
-export async function fetchCollectionTasks(config = {}, query = {}) {
-  const params = new URLSearchParams();
-  Object.entries(query || {}).forEach(([key, value]) => {
-    if (value === undefined || value === null || value === '') return;
-    params.set(key, String(value));
-  });
-  const path = params.toString()
-    ? `/api/collection-tasks?${params.toString()}`
-    : '/api/collection-tasks';
-  const response = await fetchFlywheel(path, {
-    serverUrl: config?.serverUrl || '',
-    apiToken: config?.apiToken || '',
-    timeoutMs: 10000,
-  });
-  if (!response.ok) {
-    await throwForWorkbenchHttpError(response, 'fetch_collection_tasks_failed');
-  }
-  const data = await response.json().catch(() => ({}));
-  return Array.isArray(data?.tasks) ? data.tasks : [];
-}
-
-export async function fetchTrackableCollectionTasks(
-  config = {},
-  {
-    limit = 5,
-    statuses = ['dispatched', 'running', 'paused'],
-  } = {},
-) {
-  const uniqueStatuses = [...new Set(statuses)];
-  if (!uniqueStatuses.length) return [];
-
-  const groups = await Promise.all(
-    uniqueStatuses.map((status) => fetchCollectionTasks(config, { status, limit }).catch((error) => {
-      if (isAuthorizationFailureStatus(error?.status)) throw error;
-      return [];
-    })),
-  );
-
-  const deduped = new Map();
-  for (const list of groups) {
-    for (const task of Array.isArray(list) ? list : []) {
-      const id = String(task?.id || '').trim();
-      if (!id || deduped.has(id)) continue;
-      deduped.set(id, task);
-    }
-  }
-
-  return [...deduped.values()]
-    .sort((a, b) => new Date(b?.createdAt || 0).getTime() - new Date(a?.createdAt || 0).getTime())
-    .slice(0, limit);
 }
 
 export async function patchCollectionTask(config = {}, taskId = '', patch = {}) {

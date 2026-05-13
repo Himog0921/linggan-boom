@@ -127,9 +127,11 @@ Authorization: Bearer <authorizationToken>
 - `POST /api/collection-tasks/:taskId/lease`
 - `POST /api/collect/batch`
 - `POST /api/media-assets/cover`（上传采集封面图片本体，返回工作台稳定 `publicUrl`）
-- `GET /api/collection-tasks`（仅用于恢复已派发 / 执行中的任务，不再用于拉取 pending 任务接单）
+- `POST /api/execution-stations/reconcile`（工位唤醒后先对账，用服务端当前租约恢复执行）
 - `POST /api/collection-tasks/:taskId/ingest`
 - `GET /api/collection-tasks/:taskId/control-requests`
+
+执行工位模式下，插件不再调用 `GET /api/collection-tasks` 恢复扫描任务列表；旧版本如果继续高频轮询，会被工作台入口层拦截。
 
 普通同步数据归属规则：插件授权只证明“这台浏览器可以使用插件”，不代表普通采集数据应该写入授权者账号。Dashboard 手动同步、批量同步和封面上传在写入前必须先通过 `POST /api/plugin-data-workspace` 绑定当前登录的内容工作台使用者账号，并在后续请求里携带 `X-Plugin-Data-Token`。如果没有使用者登录或绑定失败，工作台应拒绝同步，而不是回退写到授权者、系统所有者或共享执行池。
 

@@ -4,7 +4,6 @@ import assert from 'node:assert/strict';
 import {
   getFlywheelConfig,
   fetchCollectionTaskControlRequests,
-  fetchTrackableCollectionTasks,
   ingestCollectionTaskDelta,
   mergeFlywheelAuthorization,
   patchCollectionTask,
@@ -120,12 +119,11 @@ test('collection task clients prefer the active plugin authorization token over 
       apiToken: 'active-token',
     };
 
-    await fetchTrackableCollectionTasks(config, { statuses: ['running'], limit: 1 });
     await patchCollectionTask(config, 'task_1', { status: 'running' });
     await ingestCollectionTaskDelta(config, 'task_1', { records: [] });
     await fetchCollectionTaskControlRequests(config, 'task_1');
 
-    assert.equal(calls.length, 4);
+    assert.equal(calls.length, 3);
     for (const [, options] of calls) {
       assert.equal(options.headers?.Authorization, 'Bearer active-token');
     }
@@ -210,31 +208,6 @@ test('task poller clears active task and lease when control endpoint says task i
   assert.deepEqual(clearedLeases, ['cleared']);
   assert.equal(poller.getState().activeTask, null);
   assert.equal(poller.getState().activeLease, null);
-});
-
-test('trackable task recovery propagates authorization failures instead of swallowing them', async () => {
-  const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => new Response(
-    JSON.stringify({ error: 'plugin authorization expired' }),
-    { status: 401 },
-  );
-
-  try {
-    await assert.rejects(
-      () => fetchTrackableCollectionTasks(
-        { serverUrl: 'http://workbench.test' },
-        { statuses: ['running'], limit: 1 },
-      ),
-      (error) => {
-        assert.equal(error.status, 401);
-        assert.equal(error.retryable, false);
-        assert.match(error.message, /plugin authorization expired/);
-        return true;
-      },
-    );
-  } finally {
-    globalThis.fetch = originalFetch;
-  }
 });
 
 test('ingest client classifies retryable and terminal HTTP failures', async () => {

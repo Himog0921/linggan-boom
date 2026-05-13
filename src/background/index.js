@@ -4,7 +4,6 @@ import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
-  fetchTrackableCollectionTasks,
   patchCollectionTask,
   fetchCollectionTaskControlRequests,
   ingestCollectionTaskDelta,
@@ -193,6 +192,8 @@ const resultPackager = createResultPackager({
 const workbenchTaskRegistry = new Map();
 const navigatedTabs = new Map();
 const NAVIGATED_TASK_TABS_STORAGE_KEY = 'workbenchNavigatedTaskTabs';
+const WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY = 'workbenchTaskAuthorizationBackoff';
+const WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY = 'workbenchStationHeartbeatBackoff';
 const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
@@ -218,6 +219,69 @@ async function readNavigatedTaskTabsSnapshot() {
   } catch {
     return navigatedTabsSnapshotFromMemory();
   }
+}
+
+function localStorageArea() {
+  return chrome.storage?.local || null;
+}
+
+async function readLocalStorageValue(key) {
+  const area = localStorageArea();
+  if (!area?.get) return null;
+  try {
+    const stored = await area.get(key);
+    return stored?.[key] || null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeLocalStorageValue(key, value) {
+  const area = localStorageArea();
+  if (!area?.set) return;
+  await area.set({ [key]: value || null });
+}
+
+async function clearLocalStorageValue(key) {
+  const area = localStorageArea();
+  if (!area) return;
+  if (area.remove) {
+    await area.remove(key);
+    return;
+  }
+  if (area.set) {
+    await area.set({ [key]: null });
+  }
+}
+
+async function readTaskAuthorizationBackoff() {
+  return readLocalStorageValue(WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY);
+}
+
+async function writeTaskAuthorizationBackoff(snapshot = {}) {
+  return writeLocalStorageValue(WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY, snapshot);
+}
+
+async function clearTaskAuthorizationBackoff() {
+  return clearLocalStorageValue(WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY);
+}
+
+async function readHeartbeatAuthorizationBackoff() {
+  return readLocalStorageValue(WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY);
+}
+
+async function writeHeartbeatAuthorizationBackoff(retryAtMs = 0) {
+  return writeLocalStorageValue(WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY, {
+    retryAtMs,
+    reason: {
+      code: 'authorization_invalid',
+      message: '执行工位授权失效，退避后重试。',
+    },
+  });
+}
+
+async function clearHeartbeatAuthorizationBackoff() {
+  return clearLocalStorageValue(WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY);
 }
 
 async function writeNavigatedTaskTabsSnapshot(snapshot = {}) {
@@ -1918,11 +1982,6 @@ const taskPoller = createTaskPoller({
     if (!normalizedAccountId) return;
     await accountStore.updateUsage(normalizedAccountId);
   },
-  fetchTrackableTasks: async () => {
-    const config = await getAuthorizedFlywheelConfig();
-    if (!shouldPollWorkbenchTasks(config)) return [];
-    return fetchTrackableCollectionTasks(config, { limit: 5 });
-  },
   claimTaskLease: async () => {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
@@ -1995,6 +2054,9 @@ const taskPoller = createTaskPoller({
       store: taskLeaseStore,
     });
   },
+  readAuthorizationFailureBackoff: readTaskAuthorizationBackoff,
+  writeAuthorizationFailureBackoff: writeTaskAuthorizationBackoff,
+  clearAuthorizationFailureBackoff: clearTaskAuthorizationBackoff,
   readTaskLease: () => taskLeaseStore.read(),
   clearTaskLease: () => taskLeaseStore.clear(),
   patchTask: async (taskId, patch) => {
@@ -2133,6 +2195,15 @@ async function runExecutionStationHeartbeatTick() {
   if (nextExecutionStationHeartbeatAtMs > now) {
     return;
   }
+  const storedBackoff = await readHeartbeatAuthorizationBackoff();
+  const storedRetryAtMs = Number(storedBackoff?.retryAtMs || 0);
+  if (Number.isFinite(storedRetryAtMs) && storedRetryAtMs > now) {
+    nextExecutionStationHeartbeatAtMs = storedRetryAtMs;
+    return;
+  }
+  if (storedBackoff) {
+    await clearHeartbeatAuthorizationBackoff();
+  }
   let heartbeat;
   try {
     heartbeat = await sendExecutionStationHeartbeat('online');
@@ -2143,6 +2214,7 @@ async function runExecutionStationHeartbeatTick() {
   if (!heartbeat?.success) {
     if ([401, 403].includes(Number(heartbeat?.status || 0))) {
       nextExecutionStationHeartbeatAtMs = Date.now() + AUTHORIZATION_FAILURE_IDLE_MS;
+      await writeHeartbeatAuthorizationBackoff(nextExecutionStationHeartbeatAtMs);
       return;
     }
     if (heartbeat?.retryable && Number(heartbeat?.nextRetryAt || 0) > Date.now()) {
@@ -2151,6 +2223,7 @@ async function runExecutionStationHeartbeatTick() {
     return;
   }
   nextExecutionStationHeartbeatAtMs = 0;
+  await clearHeartbeatAuthorizationBackoff();
   await runWorkbenchTaskPollTick();
 }
 

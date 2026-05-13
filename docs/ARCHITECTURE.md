@@ -253,7 +253,7 @@ idle → running ⇄ paused → stopping → done / error
   POST /api/plugin-authorizations/activate      → 激活插件授权
   POST /api/collect/batch                     ← 插件推送数据
   POST /api/media-assets/cover                ← 插件上传封面图片本体，工作台返回稳定资产地址
-  GET  /api/collection-tasks                  → 插件拉取任务
+  POST /api/execution-stations/reconcile      → 工位唤醒对账 / 恢复租约
   POST /api/collection-tasks/claim            → 执行工位认领任务租约
   POST /api/collection-tasks/[id]/lease       ← 执行工位续租
   POST /api/collection-tasks/[id]/ingest      ← 增量上传
@@ -264,7 +264,7 @@ idle → running ⇄ paused → stopping → done / error
         ↕ HTTPS + Bearer Token (PLUGIN_API_TOKEN)
 linggan-boom 插件
   pluginAuthorizationClient (授权码激活、设备资格、本地授权状态)
-  taskPoller (优先租约认领；未配对时回退旧轮询)
+  taskPoller (对账恢复、租约认领、续租和提交；不再扫旧任务列表)
   executionStationClient (工位配对、身份、心跳)
   taskLeaseClient (本地租约持久化、续租)
   deltaOutbox (增量上传 + 离线重试；笔记记录入队前会先整理为稳定封面地址)
@@ -281,10 +281,11 @@ linggan-boom 插件
 | 函数 | 方向 | 说明 |
 |---|---|---|
 | syncToFlywheel() | 出 | 批量推送笔记+评论到工作台 |
-| fetchCollectionTasks() | 入 | 获取待执行任务 |
 | ingestCollectionTaskDelta() | 出 | 增量上传事件和记录 |
 | fetchCollectionTaskControlRequests() | 入 | 获取远程控制指令 |
 | patchCollectionTask() | 出 | 更新任务状态 |
+
+> 执行工位不再通过 `GET /api/collection-tasks` 扫描待执行/运行中任务；恢复和接单统一走 `reconcile -> claim -> renew -> submit` 链路。
 
 ### 8.2.1 执行工位运行时 — src/workbench/runtime/
 

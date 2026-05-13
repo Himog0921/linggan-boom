@@ -27,7 +27,6 @@ function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
   };
 }
 
-const TRACKED_TASK_STALE_MS = 10 * 60 * 1000;
 const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
 const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
@@ -90,21 +89,6 @@ function parseTimestamp(value) {
   if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
   const parsed = new Date(value).getTime();
   return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function isTrackableTaskStale(task = {}, now = Date.now()) {
-  const activeExecutor = String(task?.activeExecutor || task?.executorInstanceId || '').trim();
-  const latestHeartbeatAt = parseTimestamp(task?.latestHeartbeatAt);
-  if (latestHeartbeatAt > 0) {
-    return now - latestHeartbeatAt > TRACKED_TASK_STALE_MS;
-  }
-
-  const lastActivityAt = parseTimestamp(task?.updatedAt)
-    || parseTimestamp(task?.dispatchedAt)
-    || parseTimestamp(task?.startedAt)
-    || parseTimestamp(task?.createdAt);
-  if (!lastActivityAt) return false;
-  return !activeExecutor && now - lastActivityAt > TRACKED_TASK_STALE_MS;
 }
 
 function buildRunningProgress(run = {}) {
@@ -700,6 +684,76 @@ export function createTaskPoller(deps = {}) {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
   }
 
+  async function readAuthorizationFailureBackoff() {
+    if (typeof deps.readAuthorizationFailureBackoff !== 'function') return null;
+    let snapshot = null;
+    try {
+      snapshot = await deps.readAuthorizationFailureBackoff();
+    } catch {
+      return null;
+    }
+    const retryAtMs = Number(snapshot?.retryAtMs || 0);
+    const now = getNow();
+    if (!Number.isFinite(retryAtMs) || retryAtMs <= now) {
+      if (snapshot && typeof deps.clearAuthorizationFailureBackoff === 'function') {
+        try {
+          await deps.clearAuthorizationFailureBackoff();
+        } catch {
+          // ignore storage cleanup failures
+        }
+      }
+      return null;
+    }
+    const reason = snapshot?.reason && typeof snapshot.reason === 'object' && !Array.isArray(snapshot.reason)
+      ? snapshot.reason
+      : {
+          code: String(snapshot?.code || 'authorization_invalid').trim() || 'authorization_invalid',
+          message: String(snapshot?.message || '授权或插件版本异常，退避后重试。').trim(),
+        };
+    const idleResult = buildIdleTickResult({
+      task: null,
+      nextPollAfterMs: retryAtMs - now,
+      reason,
+    });
+    state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+    return idleResult;
+  }
+
+  async function persistAuthorizationFailureBackoff(idleResult = {}) {
+    if (typeof deps.writeAuthorizationFailureBackoff !== 'function') return;
+    const nextPollAfterMs = Number.isFinite(Number(idleResult?.nextPollAfterMs))
+      ? Number(idleResult.nextPollAfterMs)
+      : AUTHORIZATION_FAILURE_IDLE_MS;
+    const retryAtMs = getNow() + Math.max(0, nextPollAfterMs);
+    try {
+      await deps.writeAuthorizationFailureBackoff({
+        retryAtMs,
+        reason: idleResult?.reason || {
+          code: String(idleResult?.idleReasonCode || 'authorization_invalid').trim() || 'authorization_invalid',
+          message: String(idleResult?.idleReasonMessage || '授权或插件版本异常，退避后重试。').trim(),
+        },
+      });
+    } catch {
+      // ignore storage write failures
+    }
+  }
+
+  async function clearAuthorizationFailureBackoff() {
+    if (typeof deps.clearAuthorizationFailureBackoff !== 'function') return;
+    try {
+      await deps.clearAuthorizationFailureBackoff();
+    } catch {
+      // ignore storage cleanup failures
+    }
+  }
+
+  async function handleAuthorizationFailure(error = {}) {
+    const idleResult = buildAuthorizationFailureIdleResult(error);
+    state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
+    await persistAuthorizationFailureBackoff(idleResult);
+    return idleResult;
+  }
+
   async function notifyContentScriptToStop(activeTask = {}) {
     const tabId = activeTask?.tabId;
     if (!tabId) return;
@@ -1107,15 +1161,13 @@ export function createTaskPoller(deps = {}) {
         }
       } catch (error) {
         if (isAuthorizationFailureError(error)) {
-          const idleResult = buildAuthorizationFailureIdleResult(error);
-          state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
           await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
             leaseRenewalFailed: true,
             reason: 'authorization_invalid',
             errorMessage: String(error?.message || error || 'authorization_invalid'),
             retryAfterMs: AUTHORIZATION_FAILURE_IDLE_MS,
           });
-          return idleResult;
+          return handleAuthorizationFailure(error);
         }
         if (isLeaseConflictError(error)) {
           await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
@@ -1329,52 +1381,6 @@ export function createTaskPoller(deps = {}) {
     return { success: true, final: mapped.final, status: mapped.status };
   }
 
-  async function recoverTrackedTask() {
-    if (typeof deps.fetchTrackableTasks !== 'function') return null;
-    const tasks = await deps.fetchTrackableTasks();
-    const now = getNow();
-    for (const task of Array.isArray(tasks) ? tasks : []) {
-      if (isTrackableTaskStale(task, now)) {
-        await patchTask(task.id, {
-          status: 'failed',
-          progress: 100,
-          errorMessage: 'Orphaned plugin task released after stale heartbeat.',
-        });
-        continue;
-      }
-      const hydrated = hydrateTrackedTask(task, now);
-      if (!hydrated) continue;
-      if (
-        hydrated.workbenchStatus === 'paused' &&
-        isMonitorTask(hydrated) &&
-        isRecoverableConnectionError(hydrated.errorMessage)
-      ) {
-        await patchTask(hydrated.taskId, {
-          status: 'failed',
-          progress: 100,
-          pluginRunId: hydrated.pluginRunId || null,
-          errorMessage: hydrated.errorMessage,
-        });
-        if (typeof deps.readTaskLease === 'function') {
-          const lease = await deps.readTaskLease();
-          if (lease?.taskId === hydrated.taskId) {
-            await clearActiveLease();
-          }
-        }
-        continue;
-      }
-      state.activeTask = hydrated;
-      if (typeof deps.readTaskLease === 'function') {
-        const lease = await deps.readTaskLease();
-        if (lease?.taskId === hydrated.taskId && lease?.leaseToken) {
-          state.activeLease = normalizeLeaseSnapshot(lease);
-        }
-      }
-      return hydrated;
-    }
-    return null;
-  }
-
   async function reconcileBeforeClaim() {
     if (typeof deps.reconcileTaskLease !== 'function') return null;
 
@@ -1392,9 +1398,7 @@ export function createTaskPoller(deps = {}) {
       result = await deps.reconcileTaskLease({ localLease });
     } catch (error) {
       if (isAuthorizationFailureError(error)) {
-        const idleResult = buildAuthorizationFailureIdleResult(error);
-        state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
-        return { idleResult };
+        return { idleResult: await handleAuthorizationFailure(error) };
       }
       if (error?.retryable) {
         const idleResult = buildRetryableClaimIdleResult(error);
@@ -1436,6 +1440,11 @@ export function createTaskPoller(deps = {}) {
     tickPromise = (async () => {
       state.ticking = true;
       try {
+        const authorizationBackoff = await readAuthorizationFailureBackoff();
+        if (authorizationBackoff) {
+          return authorizationBackoff;
+        }
+
         if (state.activeTask) {
           return await pollActiveTask();
         }
@@ -1448,28 +1457,9 @@ export function createTaskPoller(deps = {}) {
           return await pollActiveTask();
         }
 
-        let recoveredTask;
-        try {
-          recoveredTask = await recoverTrackedTask();
-        } catch (error) {
-          if (isAuthorizationFailureError(error)) {
-            const idleResult = buildAuthorizationFailureIdleResult(error);
-            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
-            return idleResult;
-          }
-          if (error?.retryable) {
-            const idleResult = buildRetryableClaimIdleResult(error);
-            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
-            return idleResult;
-          }
-          throw error;
-        }
-        if (recoveredTask) {
-          return await pollActiveTask();
-        }
-
         if (typeof deps.claimTaskLease !== 'function') {
           state.lastIdleReason = null;
+          await clearAuthorizationFailureBackoff();
           return buildIdleTickResult({}, null);
         }
 
@@ -1478,9 +1468,7 @@ export function createTaskPoller(deps = {}) {
           claimed = await deps.claimTaskLease();
         } catch (error) {
           if (isAuthorizationFailureError(error)) {
-            const idleResult = buildAuthorizationFailureIdleResult(error);
-            state.lastIdleReason = createTaskLeaseIdleSnapshot(idleResult);
-            return idleResult;
+            return handleAuthorizationFailure(error);
           }
           if (error?.retryable) {
             const idleResult = buildRetryableClaimIdleResult(error);
@@ -1490,11 +1478,17 @@ export function createTaskPoller(deps = {}) {
           throw error;
         }
         if (claimed?.task) {
+          await clearAuthorizationFailureBackoff();
           return await claimTask(claimed.task, claimed.lease || null);
         }
 
         const idleSnapshot = createTaskLeaseIdleSnapshot(claimed);
         state.lastIdleReason = idleSnapshot;
+        if (idleSnapshot?.idleReasonCode === 'PLUGIN_VERSION_OUTDATED') {
+          await persistAuthorizationFailureBackoff(buildIdleTickResult(claimed, idleSnapshot));
+        } else {
+          await clearAuthorizationFailureBackoff();
+        }
         return buildIdleTickResult(claimed, idleSnapshot);
       } finally {
         state.ticking = false;

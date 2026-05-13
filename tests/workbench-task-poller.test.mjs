@@ -379,6 +379,7 @@ test('task poller turns authorization failures into a long idle pause', async ()
   error.status = 401;
   error.retryable = false;
   let dispatchCalls = 0;
+  let persistedBackoff = null;
   const poller = createTaskPoller({
     claimTaskLease: async () => {
       throw error;
@@ -386,6 +387,9 @@ test('task poller turns authorization failures into a long idle pause', async ()
     dispatchTask: async () => {
       dispatchCalls += 1;
       throw new Error('dispatch should not run when authorization is invalid');
+    },
+    writeAuthorizationFailureBackoff: async (snapshot) => {
+      persistedBackoff = snapshot;
     },
   });
 
@@ -398,20 +402,25 @@ test('task poller turns authorization failures into a long idle pause', async ()
   assert.equal(result.nextPollAfterMs, 15 * 60_000);
   assert.equal(dispatchCalls, 0);
   assert.equal(poller.getState().lastIdleReason.nextPollAfterMs, 15 * 60_000);
+  assert.equal(persistedBackoff.reason.code, 'authorization_invalid');
+  assert.ok(persistedBackoff.retryAtMs > Date.now());
 });
 
-test('task poller pauses when trackable task recovery hits authorization failure', async () => {
-  const error = new Error('collection task list unauthorized');
-  error.status = 403;
-  error.retryable = false;
+test('task poller honors persisted authorization backoff before claiming work', async () => {
+  const retryAtMs = 1_000_000 + 15 * 60_000;
   let claimCalls = 0;
   const poller = createTaskPoller({
-    fetchTrackableTasks: async () => {
-      throw error;
-    },
+    now: () => 1_000_000,
+    readAuthorizationFailureBackoff: async () => ({
+      retryAtMs,
+      reason: {
+        code: 'authorization_invalid',
+        message: 'authorization expired',
+      },
+    }),
     claimTaskLease: async () => {
       claimCalls += 1;
-      throw new Error('claim should not run after recovery authorization failure');
+      throw new Error('claim should not run during persisted authorization backoff');
     },
   });
 
@@ -420,9 +429,36 @@ test('task poller pauses when trackable task recovery hits authorization failure
   assert.equal(result.success, true);
   assert.equal(result.idle, true);
   assert.equal(result.idleReasonCode, 'authorization_invalid');
-  assert.equal(result.idleReasonMessage, 'collection task list unauthorized');
+  assert.equal(result.idleReasonMessage, 'authorization expired');
   assert.equal(result.nextPollAfterMs, 15 * 60_000);
   assert.equal(claimCalls, 0);
+});
+
+test('task poller persists outdated plugin idle backoff', async () => {
+  let persistedBackoff = null;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => {
+      return {
+        task: null,
+        nextPollAfterMs: 300_000,
+        reason: {
+          code: 'PLUGIN_VERSION_OUTDATED',
+          message: '请先更新插件到最新版后再接单',
+        },
+      };
+    },
+    writeAuthorizationFailureBackoff: async (snapshot) => {
+      persistedBackoff = snapshot;
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.success, true);
+  assert.equal(result.idle, true);
+  assert.equal(result.idleReasonCode, 'PLUGIN_VERSION_OUTDATED');
+  assert.equal(result.nextPollAfterMs, 300_000);
+  assert.equal(persistedBackoff.reason.code, 'PLUGIN_VERSION_OUTDATED');
 });
 
 test('task poller clears local active task when it has no valid lease for too long', async () => {
@@ -1004,198 +1040,6 @@ test('task poller maps stopped status to final stopped patch with partial result
     },
   ]);
   assert.equal(poller.getState().activeTask, null);
-});
-
-test('task poller can recover and continue polling a tracked in-flight task after restart', async () => {
-  const patches = [];
-  const poller = createTaskPoller({
-    claimTaskLease: claimTask([]),
-    fetchTrackableTasks: async () => ([
-      {
-        id: 'task_5',
-        status: 'dispatched',
-        pluginRunId: 'run_5',
-      },
-    ]),
-    patchTask: async (taskId, patch) => {
-      patches.push([taskId, patch]);
-      return { success: true };
-    },
-    getResultPackage: async () => ({
-      success: true,
-      result: {
-        collectionRunId: 'run_5',
-        status: 'paused',
-        resultSummary: {
-          comments: 4,
-          itemsPlanned: 2,
-          itemsSucceeded: 1,
-          failedItems: 0,
-        },
-        records: {
-          notes: [],
-          comments: [{ commentId: 'comment_5', text: '恢复跟踪后的部分结果' }],
-          authors: [],
-          mediaAssets: [],
-        },
-      },
-    }),
-  });
-
-  const tick = await poller.tick();
-
-  assert.equal(tick.status, 'paused');
-  assert.deepEqual(patches[0], [
-    'task_5',
-    {
-      status: 'paused',
-      progress: 50,
-      pluginRunId: 'run_5',
-      resultSummary: {
-        comments: 4,
-        itemsPlanned: 2,
-        itemsSucceeded: 1,
-        failedItems: 0,
-        records: {
-          notes: [],
-          comments: [
-            {
-              commentId: 'comment_5',
-              noteId: '',
-              text: '恢复跟踪后的部分结果',
-              author: '',
-              authorId: '',
-              likes: 0,
-              level: 1,
-              url: '',
-            },
-          ],
-          authors: [],
-          mediaAssets: [],
-        },
-      },
-      errorMessage: null,
-    },
-  ]);
-  assert.notEqual(poller.getState().activeTask, null);
-});
-
-test('task poller releases stale tracked tasks before claiming fresh pending work', async () => {
-  const patches = [];
-  const dispatched = [];
-  const poller = createTaskPoller({
-    now: () => new Date('2026-04-13T10:00:00.000Z').getTime(),
-    fetchTrackableTasks: async () => ([
-      {
-        id: 'stale_task',
-        status: 'dispatched',
-        pluginRunId: 'run_stale',
-        updatedAt: '2026-04-09T10:00:00.000Z',
-      },
-    ]),
-    claimTaskLease: claimTask([
-      {
-        id: 'fresh_task',
-        taskType: 'xhs.batchNotes',
-        platform: 'xhs',
-        target: 'https://www.xiaohongshu.com/search_result?keyword=ADHD',
-      },
-    ]),
-    patchTask: async (taskId, patch) => {
-      patches.push([taskId, patch]);
-      return { success: true };
-    },
-    capabilityCheck: async () => ({ success: true, accepted: true }),
-    dispatchTask: async (task) => {
-      dispatched.push(task.id);
-      return {
-        success: true,
-        accepted: true,
-        taskId: task.id,
-        resultLookup: { externalTaskId: task.id },
-      };
-    },
-    getExecutorInstanceId: () => 'executor_1',
-  });
-
-  const tick = await poller.tick();
-
-  assert.equal(tick.accepted, true);
-  assert.deepEqual(dispatched, ['fresh_task']);
-  assert.equal(patches[0][0], 'stale_task');
-  assert.deepEqual(patches[0][1], {
-    status: 'failed',
-    progress: 100,
-    errorMessage: 'Orphaned plugin task released after stale heartbeat.',
-  });
-  assert.equal(patches[1][0], 'fresh_task');
-  assert.equal(patches[1][1].status, 'dispatched');
-  assert.equal(patches[1][1].activeExecutor, 'executor_1');
-  assert.ok(Number.isFinite(Date.parse(patches[1][1].latestHeartbeatAt)));
-  assert.equal(poller.getState().activeTask?.taskId, 'fresh_task');
-});
-
-test('task poller releases recovered paused monitor connection failures before pending work', async () => {
-  const patches = [];
-  const dispatched = [];
-  let clearLeaseCalls = 0;
-  const poller = createTaskPoller({
-    fetchTrackableTasks: async () => ([
-      {
-        id: 'paused_monitor_task',
-        status: 'paused',
-        taskType: 'xhs.collectAuthor',
-        platform: 'xhs',
-        source: 'monitor',
-        taskStrategy: 'author_patrol',
-        errorMessage: 'Could not establish connection. Receiving end does not exist.',
-      },
-    ]),
-    claimTaskLease: claimTask([
-      {
-        id: 'fresh_after_pause',
-        taskType: 'xhs.collectAuthor',
-        platform: 'xhs',
-        source: 'monitor',
-        taskStrategy: 'author_patrol',
-      },
-    ]),
-    readTaskLease: async () => ({ taskId: 'paused_monitor_task', leaseToken: 'lease-paused' }),
-    clearTaskLease: async () => {
-      clearLeaseCalls += 1;
-    },
-    patchTask: async (taskId, patch) => {
-      patches.push([taskId, patch]);
-      return { success: true };
-    },
-    capabilityCheck: async () => ({ success: true, accepted: true }),
-    dispatchTask: async (task) => {
-      dispatched.push(task.id);
-      return {
-        success: true,
-        accepted: true,
-        taskId: task.id,
-        resultLookup: { externalTaskId: task.id },
-      };
-    },
-  });
-
-  const tick = await poller.tick();
-
-  assert.equal(tick.accepted, true);
-  assert.deepEqual(patches[0], [
-    'paused_monitor_task',
-    {
-      status: 'failed',
-      progress: 100,
-      pluginRunId: null,
-      errorMessage: 'Could not establish connection. Receiving end does not exist.',
-    },
-  ]);
-  assert.equal(patches[1][0], 'fresh_after_pause');
-  assert.equal(patches[1][1].status, 'dispatched');
-  assert.deepEqual(dispatched, ['fresh_after_pause']);
-  assert.equal(clearLeaseCalls, 1);
 });
 
 test('task poller fails monitor tasks on recoverable tab connection errors and releases the lease', async () => {
