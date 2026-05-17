@@ -16,7 +16,7 @@
 
 | 编号 | 问题 | 说明 | 状态 |
 |------|------|------|------|
-| T5 | 加载边界需要按“稳定优先级”治理，而不是一刀切异步化 | 2026-04-02 已确认 `douyinRuntime`、`contentDataRuntime`、`JSZip` 曾发生静态导入回退；当前已把 `contentDataRuntime / douyinRuntime` 挪到 `webpackMode:"eager"` loader 边界，并补了轻量 `contentRouter` 来减少入口手写分流，但 `content.js` 仍约 `544 KiB`，说明后续仍需区分：真实页面关键运行时优先稳定，长尾依赖再优先按需加载 | 持续监控 |
+| T5 | 加载边界需要按“稳定优先级”治理，而不是一刀切异步化 | 2026-05-17 已确认 Chrome 内容脚本不适合继续拆运行时异步 chunk，`contentDataRuntime / douyinRuntime` 保持 `webpackMode:"eager"`；`content.js` 约 `581 KiB`，后续减包需采用内容脚本安全方案 | 持续监控 |
 | T6 | 消息协议 envelope 未统一 | Workbench runtime listener、Dashboard/content bridge、popup/content 数据消息已补兼容 `{ success, data }` envelope，但仓内其余接口仍同时存在 `{ success, data }`、裸数组、裸对象等返回格式 | 待处理 |
 | T12 | 工作台协议适配层已落地，但仍需继续收口 | `src/workbench/*` 已建立，第一批远程任务也已接入；但 `background` 网关、消息 envelope 和长任务语义仍未完全统一，后续若继续直接把逻辑塞进胖文件，复杂度仍会快速回升 | 持续监控 |
 | T7 | BaseBatchController 尚未抽象 | XHS / 抖音批量链路仍有重复生命周期控制逻辑 | 待处理 |
@@ -63,10 +63,13 @@
 | R17 | **状态漂移** — `300017` 切号后本地 poller 仍停留在 `dispatched` | `background/index.js` / `workbench/runtime/taskPoller.js` | 风控切号后会同步把 poller 内存态改成 `paused`，避免 45 秒后被误判为 dispatch startup timeout |
 | R18 | **配额时机错误** — 替换账号在 resume 前就提前扣 usage | `background/index.js` / `workbench/runtime/taskPoller.js` | 切号后只记录 `pendingAccountUsageId`，等任务真正恢复并拿到 run 再消费 usage |
 | R19 | **重试语义错误** — 启动超时文案写“自动释放重试”但状态打成 `failed` | `workbench/runtime/taskPoller.js` | 启动超时现在回到 `pending` 且清空本地 activeTask/lease，后续轮询可重新认领 |
+| R20 | **数据风险** — Dashboard 桥接 nonce 暴露且未校验 iframe 来源 | `content/dashboardBridge.js` / `dashboard/utils.js` | iframe URL 不再携带 nonce，并要求消息来源必须是真实 dashboard iframe |
+| R21 | **性能风险** — notes/authors 按 `collectionRunId` 查询全表扫描 | `db/index.js` / `db/noteStore.js` / `db/authorStore.js` | 新增 v13 索引并改为 indexed lookup；Dashboard 改为按批次读取本地记录 |
+| R22 | **死代码** — React 迁移后仍保留旧 `src/popup/popup.js` | `src/popup/popup.js` / `tests/*` | 删除旧源文件，测试改为校验 React App 与 utils 入口 |
 
 ### 待继续收口
 
 | 编号 | 问题 | 影响范围 | 建议 |
 |------|------|----------|------|
-| R12 | Content bundle 真正降体积仍未完成 | 构建产物 | 第一阶段已把 `contentDataRuntime / douyinRuntime` 收到 `webpackMode:"eager"` loader 边界，但这仍属于“缩耦”而非真正 code split；后续仍需在 MV3 前提下继续验证更激进的拆分方案 |
+| R12 | Content bundle 仍高于 webpack 默认建议阈值 | 构建产物 | 为避免 Chrome 内容脚本异步 chunk 加载风险，已回到 eager 运行时加载；`content.js` 约 581 KiB，后续若要继续降包，需要换成内容脚本安全的加载策略 |
 | R14 | 状态字符串 repo 级统一仍未完成 | 30+ 处 | 热路径 UI/controller 已开始统一走 `TASK_STATE`，但仓内剩余字符串状态仍多，建议继续随大重构逐步收口 |

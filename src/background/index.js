@@ -63,124 +63,19 @@ import { authorStore } from '../db/authorStore.js';
 import { mediaAssetStore } from '../db/mediaAssetStore.js';
 import { sendToTab as sendSharedToTab } from '../shared/messaging.js';
 import { normalizeWorkbenchMessageResponse } from '../workbench/protocol/responseEnvelope.js';
+import {
+  buildDownloadHeaders,
+  fetchBinaryAsDataUrl,
+  sanitizeDownloadFilename,
+  tryDownloadCandidate,
+} from './downloadService.js';
+import { authorizeBackgroundMessage, createSensitiveActionSet } from './messageSecurity.js';
 
 // ========== 启动时清理残留规则 ==========
 // 防止上次异常退出后 BLOCK_MEDIA 规则残留导致页面加载不出来
 chrome.declarativeNetRequest.updateDynamicRules({
   removeRuleIds: [1],
 }).catch(() => {});
-
-function dedupeCandidates(input = []) {
-  const list = Array.isArray(input) ? input : [input];
-  const seen = new Set();
-  const normalized = [];
-  for (const raw of list) {
-    if (!raw) continue;
-    const url = String(raw).trim();
-    if (!url || seen.has(url)) continue;
-    seen.add(url);
-    normalized.push(url);
-  }
-  return normalized;
-}
-
-function sanitizeDownloadFilename(filename = '灵感爆爆爆/下载文件') {
-  const normalized = String(filename || '灵感爆爆爆/下载文件')
-    .replace(/[\\:*?"<>|]/g, '_')
-    .replace(/\/+/g, '/')
-    .replace(/^\/+/, '')
-    .trim();
-  return normalized || '灵感爆爆爆/下载文件';
-}
-
-function buildDownloadHeaders(customHeaders = []) {
-  const list = Array.isArray(customHeaders) ? [...customHeaders] : [];
-  if (list.length === 0) return [];
-  const forbidden = new Set([
-    'accept-charset', 'accept-encoding', 'access-control-request-headers', 'access-control-request-method',
-    'connection', 'content-length', 'cookie', 'cookie2', 'date', 'dnt', 'expect', 'host', 'keep-alive',
-    'origin', 'sec-fetch-site', 'sec-fetch-mode', 'sec-fetch-user', 'sec-fetch-dest',
-    'te', 'trailer', 'transfer-encoding', 'upgrade', 'via',
-  ]);
-  const valid = [];
-  for (const item of list) {
-    const name = String(item?.name || '').trim();
-    const value = String(item?.value || '');
-    if (!name) continue;
-    const lower = name.toLowerCase();
-    if (forbidden.has(lower)) continue;
-    if (!/^[!#$%&'*+\-.^_`|~0-9A-Za-z]+$/.test(name)) continue;
-    valid.push({ name, value });
-  }
-  return valid;
-}
-
-
-function arrayBufferToBase64(buffer) {
-  const bytes = new Uint8Array(buffer);
-  const chunkSize = 0x8000;
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += chunkSize) {
-    const chunk = bytes.subarray(i, i + chunkSize);
-    binary += String.fromCharCode(...chunk);
-  }
-  return btoa(binary);
-}
-
-async function fetchBinaryAsDataUrl(candidates = []) {
-  const urls = dedupeCandidates(candidates);
-  for (let i = 0; i < urls.length; i += 1) {
-    const candidate = urls[i];
-    try {
-      const response = await fetch(candidate, { credentials: 'include' });
-      if (!response.ok) continue;
-      const buffer = await response.arrayBuffer();
-      if (!buffer || buffer.byteLength <= 0) continue;
-      const contentType = String(response.headers.get('content-type') || '').trim() || 'application/octet-stream';
-      return {
-        success: true,
-        candidate,
-        candidateIndex: i,
-        contentType,
-        dataUrl: `data:${contentType};base64,${arrayBufferToBase64(buffer)}`,
-      };
-    } catch {
-      // try next candidate
-    }
-  }
-  return { success: false };
-}
-
-function waitDownloadFinished(downloadId, timeoutMs = 180000) {
-  return new Promise((resolve) => {
-    let done = false;
-    const timer = setTimeout(() => {
-      if (done) return;
-      done = true;
-      chrome.downloads.onChanged.removeListener(onChanged);
-      resolve({ success: false, reason: 'timeout' });
-    }, timeoutMs);
-
-    const onChanged = (delta) => {
-      if (done || delta.id !== downloadId || !delta.state) return;
-      const state = delta.state.current;
-      if (state !== 'complete' && state !== 'interrupted') return;
-      done = true;
-      clearTimeout(timer);
-      chrome.downloads.onChanged.removeListener(onChanged);
-      if (state === 'complete') {
-        resolve({ success: true, reason: 'complete' });
-      } else {
-        resolve({
-          success: false,
-          reason: delta.error?.current || 'interrupted',
-        });
-      }
-    };
-
-    chrome.downloads.onChanged.addListener(onChanged);
-  });
-}
 
 const resultPackager = createResultPackager({
   collectionRunStore,
@@ -763,73 +658,26 @@ async function resolveTaskExecutionTabId(task = {}) {
   return null;
 }
 
-async function tryDownloadCandidate(url, filename, options = {}) {
-  const {
-    saveAs = false,
-    conflictAction = 'uniquify',
-    timeoutMs = 180000,
-    headers = [],
-    waitForCompletion = true,
-  } = options;
-  let downloadId;
-  try {
-    downloadId = await chrome.downloads.download({
-      url,
-      filename,
-      saveAs,
-      conflictAction,
-      headers,
-    });
-  } catch (err) {
-    const msg = String(err?.message || err || '');
-    // 兼容低版本 Chrome：不支持 headers 时自动降级
-    if (!/headers|Unexpected property|Unsafe request header name/i.test(msg)) {
-      throw err;
-    }
-    downloadId = await chrome.downloads.download({
-      url,
-      filename,
-      saveAs,
-      conflictAction,
-    });
-  }
-  if (!downloadId && downloadId !== 0) {
-    return { success: false, reason: 'download_id_empty' };
-  }
-  if (!waitForCompletion) {
-    return { success: true, reason: 'queued', downloadId };
-  }
-  const result = await waitDownloadFinished(downloadId, timeoutMs);
-  // 下载失败时自动清理浏览器下载栏中的失败条目，避免给用户看到多余的失败记录
-  if (!result.success && downloadId) {
-    try { await chrome.downloads.remove(downloadId); } catch {}
-  }
-  return { ...result, downloadId };
-}
-
 // ========== 消息路由 ==========
 
-const SENSITIVE_ACTIONS = new Set([
-  MSG.REMOVE_ACCOUNT,
-  MSG.CLEAR_PLUGIN_AUTHORIZATION,
-  MSG.DELETE_NOTE,
-  MSG.DELETE_COMMENT,
-  MSG.DELETE_AUTHOR,
-  MSG.ADD_ACCOUNT,
-]);
+const SENSITIVE_ACTIONS = createSensitiveActionSet(MSG);
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   const handler = bgHandlers[message.action];
   if (!handler) return false;
 
-  if (SENSITIVE_ACTIONS.has(message.action)) {
-    if (!sender.id || sender.id !== chrome.runtime.id) {
-      sendResponse(normalizeWorkbenchMessageResponse(message.action, {
-        success: false,
-        error: 'unauthorized_sender',
-      }));
-      return false;
-    }
+  const authorization = authorizeBackgroundMessage({
+    action: message.action,
+    sender,
+    runtimeId: chrome.runtime.id,
+    sensitiveActions: SENSITIVE_ACTIONS,
+  });
+  if (!authorization.allowed) {
+    sendResponse(normalizeWorkbenchMessageResponse(message.action, {
+      success: false,
+      error: authorization.error,
+    }));
+    return false;
   }
 
   Promise.resolve(handler(message, sender)).then((result) => {

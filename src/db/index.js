@@ -123,4 +123,15 @@ db.version(12).stores({
   }
 });
 
+// v13: notes/authors 增加 collectionRunId 索引，避免按任务打包结果时全表扫描
+db.version(13).stores({
+  notes: 'noteId, contentId, platformContentId, platform, collectionRunId, url, title, type, authorId, authorEntityId, authorName, likes, collects, comments, releaseDate, publishedAt, collectedAt, ipLocation, lastUpdateTime, mediaDownloadStatus, dataSource, triggerSource, shareShortUrl, createdAt, syncStatus',
+  comments: '++id, commentEntityId, commentId, platform, contentId, noteId, noteUrl, text, author, authorId, profileUrl, location, ipLocation, likes, parentCommentId, rootCommentId, level, replyToCommentId, replyToUserName, publishedAt, collectedAt, sortMode, collectionRunId, createdAt, syncStatus',
+  authors: 'userId, authorEntityId, platformAuthorId, platform, collectionRunId, handle, secUserId, redId, name, profileUrl, fans, follows, interactions, ipLocation, gender, accountStatus, followedByMe, collectedAt, createdAt, syncStatus',
+  collectionRuns: 'collectionRunId, externalTaskId, externalTaskType, executorInstanceId, protocolVersion, platform, taskType, pageType, triggerSource, status, resultUploadStatus, lastHeartbeatAt, startedAt, finishedAt, createdAt',
+  mediaAssets: 'assetId, contentId, collectionRunId, assetType, role, quality, downloadStatus, lastResolvedAt, createdAt',
+  workbenchOutbox: 'id, taskId, pluginRunId, &idempotencyKey, kind, status, nextAttemptAt, createdAt, [status+nextAttemptAt+createdAt]',
+  accounts: 'accountId, name, status, platform, lastUsedAt, createdAt',
+});
+
 export default db;

@@ -9,7 +9,8 @@ import {
 } from '../src/popup/utils.js';
 import { saveFlywheelConfig, syncToFlywheel } from '../src/sync/flywheelSync.js';
 
-const popupSourcePath = new URL('../src/popup/popup.js', import.meta.url);
+const popupAppSourcePath = new URL('../src/popup/App.jsx', import.meta.url);
+const popupUtilsSourcePath = new URL('../src/popup/utils.js', import.meta.url);
 const backgroundSourcePath = new URL('../src/background/index.js', import.meta.url);
 
 test('popup flywheel mappers preserve quality fields and collectionRunId', () => {
@@ -200,14 +201,18 @@ test('background workbench sync sends browser login credentials with authorized 
   assert.match(source, /X-Plugin-Data-Token/);
 });
 
-test('popup uses shared flywheel mappers from utils instead of local duplicates', async () => {
-  const source = await fs.readFile(popupSourcePath, 'utf8');
+test('popup app uses shared flywheel mappers from utils instead of local duplicates', async () => {
+  const [appSource, utilsSource] = await Promise.all([
+    fs.readFile(popupAppSourcePath, 'utf8'),
+    fs.readFile(popupUtilsSourcePath, 'utf8'),
+  ]);
 
-  assert.match(source, /mapNoteToFlywheel/);
-  assert.match(source, /mapCommentToFlywheel/);
-  assert.match(source, /mapAuthorToFlywheel/);
-  assert.match(source, /from '\.\/utils\.js'/);
-  assert.doesNotMatch(source, /function mapNoteToFlywheel\(/);
-  assert.doesNotMatch(source, /function mapCommentToFlywheel\(/);
-  assert.doesNotMatch(source, /function mapAuthorToFlywheel\(/);
+  assert.match(appSource, /mapNoteToFlywheel/);
+  assert.match(appSource, /mapCommentToFlywheel/);
+  assert.match(appSource, /mapAuthorToFlywheel/);
+  assert.match(appSource, /from '\.\/utils\.js'/);
+  assert.match(utilsSource, /export function mapNoteToFlywheel\(/);
+  assert.doesNotMatch(appSource, /function mapNoteToFlywheel\(/);
+  assert.doesNotMatch(appSource, /function mapCommentToFlywheel\(/);
+  assert.doesNotMatch(appSource, /function mapAuthorToFlywheel\(/);
 });

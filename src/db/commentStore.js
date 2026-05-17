@@ -66,6 +66,18 @@ export const commentStore = {
     return comments.map(normalizeCommentRecord);
   },
 
+  async getPage({ offset = 0, limit = 100 } = {}) {
+    const safeOffset = Math.max(0, Number(offset || 0));
+    const safeLimit = Math.max(1, Number(limit || 100));
+    const comments = await db.comments
+      .orderBy('createdAt')
+      .reverse()
+      .offset(safeOffset)
+      .limit(safeLimit)
+      .toArray();
+    return comments.map(normalizeCommentRecord);
+  },
+
   async getByNoteId(noteId) {
     const comments = await db.comments.where('noteId').equals(noteId).toArray();
     return comments.map(normalizeCommentRecord);

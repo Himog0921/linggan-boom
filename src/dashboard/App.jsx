@@ -22,6 +22,7 @@ const TABS = [
 ];
 
 const PAGE_SIZE = 50;
+const DASHBOARD_LOAD_CHUNK_SIZE = 200;
 const LINK_ACTION_TEXT = {
   url: '打开',
   noteUrl: '打开',
@@ -102,10 +103,22 @@ export default function App() {
     setLoading(true);
     try {
       const actionMap = { notes: MSG.GET_ALL_NOTES, comments: MSG.GET_ALL_COMMENTS, authors: MSG.GET_ALL_AUTHORS };
-      const response = await sendToParent(actionMap[tab || currentTab]);
-      const data = unwrapParentResponseData(response, []) || [];
-      const filtered = data.filter((item) => !isMonitorGeneratedRecord(item));
-      setAllData(sortByCreatedAt(filtered, sortByTime));
+      const action = actionMap[targetTab];
+      let offset = 0;
+      let hasMore = true;
+      let accumulated = [];
+      while (hasMore) {
+        const response = await sendToParent(action, {
+          offset,
+          limit: DASHBOARD_LOAD_CHUNK_SIZE,
+        });
+        const data = unwrapParentResponseData(response, []) || [];
+        const filtered = data.filter((item) => !isMonitorGeneratedRecord(item));
+        accumulated = accumulated.concat(filtered);
+        setAllData(sortByCreatedAt(accumulated, sortByTime));
+        offset += data.length;
+        hasMore = Boolean(response?.hasMore) && data.length > 0;
+      }
     } catch (e) {
       setAllData([]);
     } finally {

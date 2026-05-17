@@ -60,3 +60,31 @@ test('buildWorkbenchSyncPayload preserves quality fields for manual workbench sy
   assert.equal(authorsPayload.authors[0].collectionRunId, 'run_author_1');
   assert.equal(authorsPayload.authors[0].extractedAt, extractedAt);
 });
+
+test('buildWorkbenchSyncPayload keeps rich note media fields for manual workbench sync', () => {
+  const payload = buildWorkbenchSyncPayload('notes', [{
+    platform: 'douyin',
+    platformContentId: '9001',
+    contentId: 'dy_9001',
+    title: '视频标题',
+    content: '视频正文',
+    cover: 'https://img.example.com/cover.webp',
+    coverImg: 'https://img.example.com/cover.webp',
+    images: ['https://img.example.com/cover.webp'],
+    imageCandidates: [{ url: 'https://img.example.com/origin.webp', quality: 'origin' }],
+    videoDownloadUrl: 'https://video.example.com/download.mp4',
+    videoPlayUrl: 'https://video.example.com/play.mp4',
+    videoStreams: [{ url: 'https://video.example.com/stream.mp4', quality: '720p' }],
+    mediaDownloadStatus: '已完成',
+    rawUrl: 'https://www.douyin.com/video/9001',
+  }], { extractedAt: 1776671494763 });
+
+  assert.equal(payload.notes[0].noteId, 'dy_9001');
+  assert.equal(payload.notes[0].platformContentId, '9001');
+  assert.equal(payload.notes[0].contentId, 'dy_9001');
+  assert.equal(payload.notes[0].coverImg, 'https://img.example.com/cover.webp');
+  assert.deepEqual(payload.notes[0].imageCandidates, [{ url: 'https://img.example.com/origin.webp', quality: 'origin' }]);
+  assert.equal(payload.notes[0].videoDownloadUrl, 'https://video.example.com/download.mp4');
+  assert.deepEqual(payload.notes[0].videoStreams, [{ url: 'https://video.example.com/stream.mp4', quality: '720p' }]);
+  assert.equal(payload.notes[0].mediaDownloadStatus, '已完成');
+});

@@ -27,8 +27,12 @@ test('unwrapTabResponseData reads normalized envelope data and preserves raw pay
 
 test('popup implementations consume tab data through unwrap helper', () => {
   const appSource = fs.readFileSync(path.join(projectRoot, 'src/popup/App.jsx'), 'utf8');
-  const legacySource = fs.readFileSync(path.join(projectRoot, 'src/popup/popup.js'), 'utf8');
+  const legacySource = path.join(projectRoot, 'src/popup/popup.js');
 
   assert.match(appSource, /unwrapTabResponseData/);
-  assert.match(legacySource, /unwrapTabResponseData/);
+  assert.equal(
+    fs.existsSync(legacySource),
+    false,
+    'legacy popup source should be removed after the React migration',
+  );
 });

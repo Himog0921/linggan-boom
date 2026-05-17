@@ -53,6 +53,61 @@ test('dashboard bridge wraps raw collection payloads in a success/data envelope'
   });
 });
 
+test('dashboard bridge returns paged local records when a limit is provided', async () => {
+  const payloads = [];
+  const TEST_NONCE = 'test-nonce-page';
+  const bridge = createDashboardBridge({
+    MSG: {
+      GET_ALL_NOTES: 'getAllNotes',
+      GET_ALL_COMMENTS: 'getAllComments',
+      GET_ALL_AUTHORS: 'getAllAuthors',
+      DOWNLOAD_NOTE_MEDIA: 'downloadNoteMedia',
+      CLEAR_ALL_NOTES: 'clearAllNotes',
+      CLEAR_ALL_COMMENTS: 'clearAllComments',
+      CLEAR_ALL_AUTHORS: 'clearAllAuthors',
+      DELETE_NOTE: 'deleteNote',
+      DELETE_COMMENT: 'deleteComment',
+      DELETE_AUTHOR: 'deleteAuthor',
+      SYNC_TO_WORKBENCH: 'syncToWorkbench',
+    },
+    noteStore: {
+      count: async () => 3,
+      getPage: async ({ offset, limit }) => [
+        { noteId: `n${offset + 1}` },
+        { noteId: `n${offset + 2}` },
+      ].slice(0, limit),
+    },
+    commentStore: {},
+    authorStore: {},
+    downloadNoteMediaFromRecord: async () => ({}),
+    _testNonce: TEST_NONCE,
+  });
+
+  await bridge.handleDashboardMessageEvent({
+    data: {
+      source: 'lgboom-dashboard',
+      action: 'getAllNotes',
+      nonce: TEST_NONCE,
+      offset: 1,
+      limit: 2,
+    },
+    ports: [{
+      postMessage(value) {
+        payloads.push(value);
+      },
+    }],
+  });
+
+  assert.deepEqual(payloads[0], {
+    success: true,
+    data: [{ noteId: 'n2' }, { noteId: 'n3' }],
+    total: 3,
+    offset: 1,
+    limit: 2,
+    hasMore: false,
+  });
+});
+
 test('dashboard bridge preserves sync metadata while also exposing data envelope', async () => {
   const payloads = [];
   const TEST_NONCE = 'test-nonce-2';
@@ -174,7 +229,7 @@ test('sendToParent uses nonce from dashboard URL when storage has not caught up'
   }
 });
 
-test('dashboard bridge places the nonce in iframe URL for first load', async () => {
+test('dashboard bridge keeps the nonce out of iframe URL for first load', async () => {
   const appended = [];
   const storageWrites = [];
   globalThis.chrome = {
@@ -236,11 +291,60 @@ test('dashboard bridge places the nonce in iframe URL for first load', async () 
 
     const iframe = appended.find((node) => node.tagName === 'iframe');
     assert.ok(iframe);
-    assert.match(iframe.src, /dashboard\.html\?nonce=/);
+    assert.equal(iframe.src, 'chrome-extension://lgboom/dashboard.html');
     assert.equal(storageWrites.length, 1);
-    assert.equal(new URL(iframe.src).searchParams.get('nonce'), storageWrites[0].dashboardNonce);
+    assert.ok(storageWrites[0].dashboardNonce);
   } finally {
     delete globalThis.chrome;
     delete globalThis.document;
   }
+});
+
+test('dashboard bridge rejects page-forged destructive messages even with a matching nonce', async () => {
+  let clearCalls = 0;
+  const trustedDashboardWindow = {};
+  const pageWindow = {};
+  const TEST_NONCE = 'leaked-nonce';
+  const bridge = createDashboardBridge({
+    MSG: {
+      GET_ALL_NOTES: 'getAllNotes',
+      GET_ALL_COMMENTS: 'getAllComments',
+      GET_ALL_AUTHORS: 'getAllAuthors',
+      DOWNLOAD_NOTE_MEDIA: 'downloadNoteMedia',
+      CLEAR_ALL_NOTES: 'clearAllNotes',
+      CLEAR_ALL_COMMENTS: 'clearAllComments',
+      CLEAR_ALL_AUTHORS: 'clearAllAuthors',
+      DELETE_NOTE: 'deleteNote',
+      DELETE_COMMENT: 'deleteComment',
+      DELETE_AUTHOR: 'deleteAuthor',
+      SYNC_TO_WORKBENCH: 'syncToWorkbench',
+    },
+    noteStore: {
+      clear: async () => {
+        clearCalls += 1;
+      },
+    },
+    commentStore: {},
+    authorStore: {},
+    downloadNoteMediaFromRecord: async () => ({}),
+    _testNonce: TEST_NONCE,
+    _testDashboardWindow: trustedDashboardWindow,
+  });
+
+  const handled = await bridge.handleDashboardMessageEvent({
+    source: pageWindow,
+    data: {
+      source: 'lgboom-dashboard',
+      action: 'clearAllNotes',
+      nonce: TEST_NONCE,
+    },
+    ports: [{
+      postMessage() {
+        throw new Error('forged message should not receive a response');
+      },
+    }],
+  });
+
+  assert.equal(handled, false);
+  assert.equal(clearCalls, 0);
 });

@@ -18,6 +18,18 @@ export const noteStore = {
     return notes.map(normalizeNoteRecord);
   },
 
+  async getPage({ offset = 0, limit = 100 } = {}) {
+    const safeOffset = Math.max(0, Number(offset || 0));
+    const safeLimit = Math.max(1, Number(limit || 100));
+    const notes = await db.notes
+      .orderBy('createdAt')
+      .reverse()
+      .offset(safeOffset)
+      .limit(safeLimit)
+      .toArray();
+    return notes.map(normalizeNoteRecord);
+  },
+
   async getById(noteId) {
     const note = await db.notes.get(noteId);
     return note ? normalizeNoteRecord(note) : null;
@@ -27,7 +39,7 @@ export const noteStore = {
     const id = String(collectionRunId || '').trim();
     if (!id) return [];
     const notes = await db.notes
-      .filter((note) => String(note.collectionRunId || '').trim() === id)
+      .where('collectionRunId').equals(id)
       .toArray();
     return notes.map(normalizeNoteRecord);
   },

@@ -56,6 +56,24 @@ test('record normalization infers source tier from raw source when explicit tier
   assert.equal(normalizeNoteRecord({ rawSource: 'search_dom_result' }).sourceTier, 'seed');
 });
 
+test('record normalization derives a stable note id from platform content ids', () => {
+  assert.equal(
+    normalizeNoteRecord({
+      platform: 'xhs',
+      platformContentId: 'xhs_note_1',
+    }).noteId,
+    'xhs_note_1',
+  );
+
+  assert.equal(
+    normalizeNoteRecord({
+      platform: 'douyin',
+      platformContentId: '9001',
+    }).noteId,
+    'dy_9001',
+  );
+});
+
 test('inferDouyinVideoQualityMeta classifies seed and dom fallback sources', () => {
   assert.deepEqual(
     inferDouyinVideoQualityMeta('search_dom_result'),

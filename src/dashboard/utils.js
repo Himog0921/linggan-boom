@@ -1,5 +1,6 @@
 import { generateCsv, downloadFile, getUnifiedAuthorHandle } from '../shared/utils.js';
 import { unwrapCompatResponseData } from '../shared/responseEnvelope.js';
+import { normalizeAuthorRecord, normalizeCommentRecord, normalizeNoteRecord } from '../db/recordNormalization.js';
 
 export { generateCsv, downloadFile, getUnifiedAuthorHandle };
 
@@ -210,69 +211,81 @@ export function buildWorkbenchSyncPayload(tab = '', items = [], { extractedAt = 
 
   if (normalizedTab === 'notes') {
     return {
-      notes: selectedItems.map((note) => ({
-        noteId: note.noteId,
-        title: note.title,
-        content: note.content,
-        hashtags: Array.isArray(note.hashtags) ? note.hashtags : [],
-        images: Array.isArray(note.images) ? note.images : [],
-        platform: note.platform || 'xhs',
-        authorName: note.authorName,
-        likes: note.likes || 0,
-        collects: note.collects || 0,
-        comments: note.comments || 0,
-        url: getPreferredRecordUrl(note, 'noteUrl') || note.url || note.noteUrl,
-        createdAt: note.createdAt,
-        extractedAt,
-        source: '灵感爆爆爆插件',
-        ...pickQualityMeta(note),
-      })),
+      notes: selectedItems.map((note) => {
+        const normalized = normalizeNoteRecord(note);
+        return {
+          ...normalized,
+          noteId: normalized.noteId,
+          title: normalized.title,
+          content: normalized.content,
+          hashtags: normalized.hashtags,
+          images: normalized.images,
+          platform: normalized.platform || 'xhs',
+          authorName: normalized.authorName,
+          likes: normalized.likes || 0,
+          collects: normalized.collects || 0,
+          comments: normalized.comments || 0,
+          url: getPreferredRecordUrl(normalized, 'noteUrl') || normalized.url || normalized.noteUrl,
+          createdAt: normalized.createdAt,
+          extractedAt,
+          source: '灵感爆爆爆插件',
+          ...pickQualityMeta(normalized),
+        };
+      }),
     };
   }
 
   if (normalizedTab === 'comments') {
     return {
-      comments: selectedItems.map((comment) => ({
-        commentId: comment.commentId,
-        contentId: comment.contentId,
-        text: comment.text,
-        author: comment.author,
-        authorId: comment.authorId,
-        replyToUserName: comment.replyToUserName,
-        likes: comment.likes || 0,
-        platform: comment.platform || 'xhs',
-        level: comment.level || 1,
-        rootCommentId: comment.rootCommentId,
-        parentCommentId: comment.parentCommentId,
-        url: getPreferredRecordUrl(comment, 'noteUrl'),
-        createdAt: comment.createdAt,
-        extractedAt,
-        source: '灵感爆爆爆插件',
-        ...pickQualityMeta(comment),
-      })),
+      comments: selectedItems.map((comment) => {
+        const normalized = normalizeCommentRecord(comment);
+        return {
+          ...normalized,
+          commentId: normalized.commentId,
+          contentId: normalized.contentId,
+          text: normalized.text,
+          author: normalized.author,
+          authorId: normalized.authorId,
+          replyToUserName: normalized.replyToUserName,
+          likes: normalized.likes || 0,
+          platform: normalized.platform || 'xhs',
+          level: normalized.level || 1,
+          rootCommentId: normalized.rootCommentId,
+          parentCommentId: normalized.parentCommentId,
+          url: getPreferredRecordUrl(normalized, 'noteUrl'),
+          createdAt: normalized.createdAt,
+          extractedAt,
+          source: '灵感爆爆爆插件',
+          ...pickQualityMeta(normalized),
+        };
+      }),
     };
   }
 
   if (normalizedTab === 'authors') {
     return {
-      authors: selectedItems.map((author) => ({
-        userId: author.userId,
-        nickname: author.name || author.nickname || '',
-        avatar: author.avatar || author.avatarUrl || '',
-        signature: author.description || author.signature || author.bio || '',
-        fansCount: author.fans || author.fansCount || 0,
-        followingCount: author.follows || author.followingCount || 0,
-        notesCount: author.interactions || author.notesCount || 0,
-        likedCount: author.interactions || author.likedCount || 0,
-        collectedCount: author.collectedCount || 0,
-        platform: author.platform || 'xhs',
-        ipLocation: author.ipLocation || author.location || '',
-        url: author.profileUrl || author.url || '',
-        createdAt: author.createdAt,
-        extractedAt,
-        source: '灵感爆爆爆插件',
-        ...pickQualityMeta(author),
-      })),
+      authors: selectedItems.map((author) => {
+        const normalized = normalizeAuthorRecord(author);
+        return {
+          ...normalized,
+          userId: normalized.userId,
+          nickname: normalized.name || normalized.nickname || '',
+          avatar: normalized.avatar || normalized.avatarUrl || '',
+          signature: normalized.description || normalized.signature || normalized.bio || '',
+          fansCount: normalized.fans || normalized.fansCount || 0,
+          followingCount: normalized.follows || normalized.followingCount || 0,
+          notesCount: normalized.interactions || normalized.notesCount || 0,
+          likedCount: normalized.interactions || normalized.likedCount || 0,
+          collectedCount: normalized.collectedCount || 0,
+          platform: normalized.platform || 'xhs',
+          ipLocation: normalized.ipLocation || normalized.location || '',
+          url: normalized.profileUrl || normalized.url || '',
+          createdAt: normalized.createdAt,
+          extractedAt,
+          source: '灵感爆爆爆插件',
+          ...pickQualityMeta(normalized),
+        };
+      }),
     };
   }
 

@@ -31,10 +31,47 @@ export function createDashboardBridge({
   authorStore,
   downloadNoteMediaFromRecord,
   _testNonce = null,
+  _testDashboardWindow = null,
 } = {}) {
   let dashboardIframe = null;
   let dashboardOverlay = null;
   let currentNonce = _testNonce;
+
+  function getTrustedDashboardWindow() {
+    return dashboardIframe?.contentWindow || _testDashboardWindow || null;
+  }
+
+  function isDashboardMessageSourceTrusted(event) {
+    const trustedDashboardWindow = getTrustedDashboardWindow();
+    if (!trustedDashboardWindow) return true;
+    return event.source === trustedDashboardWindow;
+  }
+
+  function readPageRequest(data = {}) {
+    const limit = Number(data?.limit || 0);
+    if (!Number.isFinite(limit) || limit <= 0) return null;
+    return {
+      offset: Math.max(0, Number(data?.offset || 0)),
+      limit: Math.max(1, Math.min(500, limit)),
+    };
+  }
+
+  async function readStoreRecords(store, data = {}) {
+    const page = readPageRequest(data);
+    if (!page) return store.getAll();
+    const [records, total] = await Promise.all([
+      store.getPage(page),
+      store.count(),
+    ]);
+    return {
+      success: true,
+      data: records,
+      total,
+      offset: page.offset,
+      limit: page.limit,
+      hasMore: page.offset + records.length < total,
+    };
+  }
 
   async function toggleDashboard() {
     if (dashboardIframe && document.body.contains(dashboardIframe)) {
@@ -63,7 +100,6 @@ export function createDashboardBridge({
 
     dashboardIframe = document.createElement('iframe');
     const dashboardUrl = new URL(chrome.runtime.getURL('dashboard.html'));
-    dashboardUrl.searchParams.set('nonce', currentNonce);
     dashboardIframe.src = dashboardUrl.toString();
     Object.assign(dashboardIframe.style, {
       position: 'fixed',
@@ -83,9 +119,9 @@ export function createDashboardBridge({
   }
 
   const dashboardMessageHandlers = {
-    [MSG.GET_ALL_NOTES]: () => noteStore.getAll(),
-    [MSG.GET_ALL_COMMENTS]: () => commentStore.getAll(),
-    [MSG.GET_ALL_AUTHORS]: () => authorStore.getAll(),
+    [MSG.GET_ALL_NOTES]: (data) => readStoreRecords(noteStore, data),
+    [MSG.GET_ALL_COMMENTS]: (data) => readStoreRecords(commentStore, data),
+    [MSG.GET_ALL_AUTHORS]: (data) => readStoreRecords(authorStore, data),
     [MSG.DOWNLOAD_NOTE_MEDIA]: async (data) => {
       const noteId = data.noteId || '';
       if (!noteId) return { success: false, error: 'noteId required' };
@@ -133,6 +169,10 @@ export function createDashboardBridge({
 
   async function handleDashboardMessageEvent(event) {
     if (event.data?.source !== 'lgboom-dashboard') return false;
+    if (!isDashboardMessageSourceTrusted(event)) {
+      console.warn('[DashboardBridge] Rejected message: untrusted dashboard window');
+      return false;
+    }
     if (!currentNonce || event.data?.nonce !== currentNonce) {
       console.warn('[DashboardBridge] Rejected message: invalid or missing nonce');
       return false;

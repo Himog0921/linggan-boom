@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '..');
 
 test('workbench runtime clients reuse shared normalizeServerUrl helper', () => {
   const taskLeaseSource = fs.readFileSync(path.join(projectRoot, 'src/workbench/runtime/taskLeaseClient.js'), 'utf8');
@@ -15,12 +18,15 @@ test('workbench runtime clients reuse shared normalizeServerUrl helper', () => {
   assert.doesNotMatch(stationClientSource, /function normalizeServerUrl\(/);
 });
 
-test('popup batch settings dialogs share one overlay reset helper', () => {
-  const popupSource = fs.readFileSync(path.join(projectRoot, 'src/popup/popup.js'), 'utf8');
+test('popup batch settings dialogs use the React modal as the single source of truth', () => {
+  const appSource = fs.readFileSync(path.join(projectRoot, 'src/popup/App.jsx'), 'utf8');
+  const modalSource = fs.readFileSync(path.join(projectRoot, 'src/popup/components/BatchSettingsModal.jsx'), 'utf8');
+  const legacySource = path.join(projectRoot, 'src/popup/popup.js');
 
-  assert.match(popupSource, /function resetBatchSettingsOverlay\(/);
-  assert.match(popupSource, /resetBatchSettingsOverlay\(\{\s*subtitle:/);
-  assert.doesNotMatch(popupSource, /subtitle\.textContent = "选择采集数量和排序方式";[\s\S]*subtitle\.textContent = "选择采集数量和排序方式";/);
+  assert.equal(fs.existsSync(legacySource), false);
+  assert.match(appSource, /BatchSettingsModal/);
+  assert.match(modalSource, /readPopupBatchSettings/);
+  assert.doesNotMatch(appSource, /resetBatchSettingsOverlay/);
 });
 
 test('background workbench task routing uses one shared task context registry', () => {

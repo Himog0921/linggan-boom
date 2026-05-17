@@ -41,6 +41,7 @@
 说明：
 - `src/popup/popup.html` 与 `src/dashboard/dashboard.html` 只是 UI 容器壳文件。
 - 运行时加载的 `popup.js` 与 `dashboard.js` 都是由各自的 `index.jsx` 构建生成，不再对应旧的原生 DOM 源文件。
+- Webpack 配置文件为 `webpack.config.cjs`；项目源码按 ES Module 运行。
 
 ## 4. Chrome API 使用清单
 
@@ -77,15 +78,16 @@
   - `https://*.douyinvod.com/*`
   - `https://*.bytevcloudcdn.com/*`
 
-## 6. 当前构建快照（2026-04-20）
+## 6. 当前构建快照（2026-05-17）
 
 - `vendor.js`（React 共享 chunk）：约 `185 KiB`
-- `content.js`：约 `483 KiB`
-- `background.js`：约 `194 KiB`
-- `popup.js`：约 `41.3 KiB`
-- `dashboard.js`：约 `34.4 KiB`
+- `content.js`：约 `581 KiB`
+- `background.js`：约 `247 KiB`
+- `popup.js`：约 `65.8 KiB`
+- `dashboard.js`：约 `47.5 KiB`
+- 内容脚本异步 chunk：无
 
 备注：
 - React 运行时通过 `splitChunks` 提取为 `vendor.js`，由 popup / dashboard / content 共享
 - content script 注入 UI（按钮组、任务控制条、Toast、Dialog）已全部迁移为 React 组件
-- 抖音运行时、内容数据运行时、评论图片区 ZIP 依赖维持按需加载
+- 抖音运行时、内容数据运行时保持 eager 动态加载，避免 Chrome 内容脚本运行空间导致异步 chunk 加载失败

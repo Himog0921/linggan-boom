@@ -62,6 +62,13 @@ function buildContentId(platform, platformContentId) {
   return `${getPlatformPrefix(platform)}_${id}`;
 }
 
+function inferNoteId(record = {}, platform = inferPlatform(record), platformContentId = '', contentId = '') {
+  const explicit = normalizeString(record.noteId);
+  if (explicit) return explicit;
+  if (platform === 'douyin') return normalizeString(contentId) || buildContentId(platform, platformContentId);
+  return normalizeString(platformContentId) || stripKnownPrefix(contentId);
+}
+
 function ensureRawFields(record = {}) {
   return {
     collectorVersion: normalizeString(record.collectorVersion),
@@ -98,6 +105,7 @@ export function normalizeNoteRecord(record = {}) {
   const platform = inferPlatform(record);
   const platformContentId = inferPlatformContentId(record, platform);
   const contentId = normalizeString(record.contentId) || buildContentId(platform, platformContentId);
+  const noteId = inferNoteId(record, platform, platformContentId, contentId);
   const url = normalizeString(record.url);
   const canonicalUrl = normalizeString(record.canonicalUrl) || url;
   const bodyText = normalizeString(record.bodyText || record.content || record.desc || record.title);
@@ -109,6 +117,7 @@ export function normalizeNoteRecord(record = {}) {
 
   return {
     ...record,
+    noteId,
     platform,
     platformContentId,
     contentId,

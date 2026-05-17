@@ -2,10 +2,7 @@ let contentDataRuntimeModulePromise = null;
 
 export async function loadContentDataRuntimeFactory() {
   if (!contentDataRuntimeModulePromise) {
-    contentDataRuntimeModulePromise = import(
-      /* webpackMode: "eager" */
-      './contentDataRuntime.js'
-    );
+    contentDataRuntimeModulePromise = import(/* webpackMode: "eager" */ './contentDataRuntime.js');
   }
 
   const { createContentDataRuntime } = await contentDataRuntimeModulePromise;

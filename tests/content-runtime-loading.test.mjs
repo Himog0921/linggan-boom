@@ -38,8 +38,10 @@ test('content entry keeps heavy runtime seams behind loader indirection', () => 
   );
 });
 
-test('douyin runtime loader defers module evaluation without async chunk split', () => {
+test('content runtime loaders keep heavy modules eager for extension content scripts', () => {
+  const contentDataRuntimeSource = fs.readFileSync(path.join(projectRoot, 'src/content/contentDataRuntimeLoader.js'), 'utf8');
   const douyinRuntimeSource = fs.readFileSync(path.join(projectRoot, 'src/content/douyinRuntime.js'), 'utf8');
+  const manifest = fs.readFileSync(path.join(projectRoot, 'manifest.json'), 'utf8');
 
   assert.doesNotMatch(
     douyinRuntimeSource,
@@ -47,8 +49,18 @@ test('douyin runtime loader defers module evaluation without async chunk split',
     'douyin runtime loader should not use a static namespace import',
   );
   assert.match(
+    contentDataRuntimeSource,
+    /webpackMode:\s*"eager"/,
+    'content data runtime loader should avoid async content-script chunks',
+  );
+  assert.match(
     douyinRuntimeSource,
-    /import\(\s*\/\*\s*webpackMode:\s*"eager"\s*\*\/\s*'\.\/douyinRuntimeModule\.js'\s*\)/,
-    'douyin runtime loader should use webpack eager dynamic import',
+    /webpackMode:\s*"eager"/,
+    'douyin runtime loader should avoid async content-script chunks',
+  );
+  assert.doesNotMatch(
+    manifest,
+    /"\*\.chunk\.js"/,
+    'content script should not expose async runtime chunks',
   );
 });

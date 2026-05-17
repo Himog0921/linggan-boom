@@ -22,6 +22,18 @@ export const authorStore = {
     return authors.map(normalizeAuthorRecord);
   },
 
+  async getPage({ offset = 0, limit = 100 } = {}) {
+    const safeOffset = Math.max(0, Number(offset || 0));
+    const safeLimit = Math.max(1, Number(limit || 100));
+    const authors = await db.authors
+      .orderBy('createdAt')
+      .reverse()
+      .offset(safeOffset)
+      .limit(safeLimit)
+      .toArray();
+    return authors.map(normalizeAuthorRecord);
+  },
+
   async getById(userId) {
     const author = await db.authors.get(userId);
     return author ? normalizeAuthorRecord(author) : null;
@@ -31,7 +43,7 @@ export const authorStore = {
     const id = String(collectionRunId || '').trim();
     if (!id) return [];
     const authors = await db.authors
-      .filter((author) => String(author.collectionRunId || '').trim() === id)
+      .where('collectionRunId').equals(id)
       .toArray();
     return authors.map(normalizeAuthorRecord);
   },
