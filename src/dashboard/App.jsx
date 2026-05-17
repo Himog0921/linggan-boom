@@ -9,7 +9,7 @@ import {
   extractHashtags, stripHashtags, cleanDisplayBodyText, getHashtagsForItem,
   formatReplyTargetLabel, formatCollectionRunLabel, formatBatchSelectionModeLabel,
   formatDataQualityLabel, formatQualityReasonLabel, formatSourceTierLabel,
-  isMonitorGeneratedRecord, truncate, escapeHtml, debounce,
+  truncate, escapeHtml, debounce,
   sortByCreatedAt, formatLocalDate, normalizeUrl, toDisplayUrl, getPreferredRecordUrl, getUnifiedAuthorHandle,
   buildWorkbenchSyncPayload, getItemId, getTabLabel, getColumns, getExportColumns, sendToParent, unwrapParentResponseData,
 } from './utils.js';
@@ -113,8 +113,7 @@ export default function App() {
           limit: DASHBOARD_LOAD_CHUNK_SIZE,
         });
         const data = unwrapParentResponseData(response, []) || [];
-        const filtered = data.filter((item) => !isMonitorGeneratedRecord(item));
-        accumulated = accumulated.concat(filtered);
+        accumulated = accumulated.concat(data);
         setAllData(sortByCreatedAt(accumulated, sortByTime));
         offset += data.length;
         hasMore = Boolean(response?.hasMore) && data.length > 0;

@@ -113,16 +113,6 @@ export function formatQualityReasonLabel(value = '') {
   return reason.replace(/_/g, ' ');
 }
 
-export function isMonitorGeneratedRecord(item = {}) {
-  if (!item || typeof item !== 'object') return false;
-  if (item.monitorId || item.monitorMode || item.monitorMeta) return true;
-  const taskStrategy = String(item.taskStrategy || '').trim();
-  if (/^(author|keyword)_/.test(taskStrategy)) return true;
-  const dataSource = String(item.dataSource || item.rawSource || '').trim();
-  if (dataSource.includes('monitor_')) return true;
-  return false;
-}
-
 export function truncate(str, max) {
   const s = String(str || '');
   return s.length > max ? s.slice(0, max) + '...' : s;

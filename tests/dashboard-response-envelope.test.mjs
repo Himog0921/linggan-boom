@@ -1,8 +1,15 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createDashboardBridge } from '../src/content/dashboardBridge.js';
 import { sendToParent, unwrapParentResponseData } from '../src/dashboard/utils.js';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const projectRoot = path.resolve(__dirname, '..');
 
 test('dashboard bridge wraps raw collection payloads in a success/data envelope', async () => {
   const payloads = [];
@@ -106,6 +113,21 @@ test('dashboard bridge returns paged local records when a limit is provided', as
     limit: 2,
     hasMore: false,
   });
+});
+
+test('dashboard app keeps workbench and monitor records visible in local data table', () => {
+  const appSource = fs.readFileSync(path.join(projectRoot, 'src/dashboard/App.jsx'), 'utf8');
+
+  assert.doesNotMatch(
+    appSource,
+    /isMonitorGeneratedRecord/,
+    'dashboard should not hide records created by workbench monitor tasks',
+  );
+  assert.match(
+    appSource,
+    /accumulated\s*=\s*accumulated\.concat\(data\)/,
+    'dashboard should append every local record returned by the bridge',
+  );
 });
 
 test('dashboard bridge preserves sync metadata while also exposing data envelope', async () => {
