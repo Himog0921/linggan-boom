@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   discoverNotesFromDOM,
   isCollectedNoteUsable,
+  parseXhsInteractCount,
   parseXhsPublishedAt,
   resolveExpectedNoteFromMap,
   selectNoteKey,
@@ -38,6 +39,33 @@ test('isCollectedNoteUsable rejects mismatched note ids even when content exists
     noteId: 'actual_note_id',
     title: 'A title',
   }, 'expected_note_id'), false);
+});
+
+test('parseXhsInteractCount accepts xhs detail metric aliases', () => {
+  const interactInfo = {
+    likeCount: '1.2万',
+    collectCount: '575',
+    comments: '43',
+    shares: '6',
+  };
+
+  assert.equal(parseXhsInteractCount(interactInfo, ['likedCount', 'likeCount', 'likes']), 12000);
+  assert.equal(parseXhsInteractCount(interactInfo, ['collectedCount', 'collectCount', 'collects']), 575);
+  assert.equal(parseXhsInteractCount(interactInfo, ['commentCount', 'comments']), 43);
+  assert.equal(parseXhsInteractCount(interactInfo, ['shareCount', 'shares']), 6);
+});
+
+test('isCollectedNoteUsable treats aliased xhs metrics as complete stats', () => {
+  assert.equal(isCollectedNoteUsable({
+    noteId: 'note_alias_metrics',
+    title: '别名字段笔记',
+    imageList: [{ urlDefault: 'https://img.example.com/cover.jpg' }],
+    interactInfo: {
+      likeCount: 1300,
+      collectCount: 575,
+      comments: 43,
+    },
+  }, 'note_alias_metrics', { requireStats: true }), true);
 });
 
 test('resolveExpectedNoteFromMap finds exact note id from wrapped note payload', () => {

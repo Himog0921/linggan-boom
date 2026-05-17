@@ -77,6 +77,18 @@ function normalizeNoteData(noteData) {
   return note || null;
 }
 
+function firstPresentValue(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') return null;
+  for (const key of keys) {
+    if (source[key] != null && source[key] !== '') return source[key];
+  }
+  return null;
+}
+
+export function parseXhsInteractCount(interactInfo = {}, keys = []) {
+  return parseCount(firstPresentValue(interactInfo, keys));
+}
+
 export function isCollectedNoteUsable(note = {}, expectedNoteId = '', { requireStats = false } = {}) {
   const normalizedExpectedId = String(expectedNoteId || '').trim();
   const normalizedActualId = String(note?.noteId || note?.id || '').trim();
@@ -93,11 +105,12 @@ export function isCollectedNoteUsable(note = {}, expectedNoteId = '', { requireS
   const hasAuthor = Boolean(String(note?.user?.nickname || '').trim() || String(note?.user?.userId || '').trim());
 
   if (!requireStats) {
+    const interactInfo = note?.interactInfo || {};
     const hasStats = Boolean(
-      note?.interactInfo?.likedCount
-      || note?.interactInfo?.commentCount
-      || note?.interactInfo?.shareCount
-      || note?.interactInfo?.collectedCount
+      firstPresentValue(interactInfo, ['likedCount', 'likeCount', 'likes'])
+      || firstPresentValue(interactInfo, ['commentCount', 'comments'])
+      || firstPresentValue(interactInfo, ['shareCount', 'shares'])
+      || firstPresentValue(interactInfo, ['collectedCount', 'collectCount', 'collects', 'favoriteCount'])
     );
     return hasText || hasMedia || hasAuthor || hasStats;
   }
@@ -419,10 +432,10 @@ export async function collectNote(wd = window, options = {}) {
     imageCandidates,
     video: videoSelection.url || note.video?.media?.stream?.h264?.[0]?.masterUrl || '',
     videoStreams: videoSelection.streams || [],
-    likes: parseCount(note.interactInfo?.likedCount),
-    collects: parseCount(note.interactInfo?.collectedCount),
-    comments: parseCount(note.interactInfo?.commentCount),
-    shares: parseCount(note.interactInfo?.shareCount),
+    likes: parseXhsInteractCount(note.interactInfo, ['likedCount', 'likeCount', 'likes']),
+    collects: parseXhsInteractCount(note.interactInfo, ['collectedCount', 'collectCount', 'collects', 'favoriteCount']),
+    comments: parseXhsInteractCount(note.interactInfo, ['commentCount', 'comments']),
+    shares: parseXhsInteractCount(note.interactInfo, ['shareCount', 'shares']),
     keywords: (note.tagList || []).map(t => t.name).filter(Boolean),
     topicIds: (note.tagList || []).map(t => t.id).filter(Boolean),
     atUserList: (note.atUserList || []).map((u) => ({
