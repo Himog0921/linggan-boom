@@ -3,6 +3,7 @@ import { parseCount, randomDelay } from '../../shared/utils.js';
 import { commentStore } from '../../db/commentStore.js';
 import { mediaAssetStore } from '../../db/mediaAssetStore.js';
 import { collectionRunStore } from '../../db/collectionRunStore.js';
+import { noteStore } from '../../db/noteStore.js';
 import { collectDouyinVideo, collectDouyinVideoById, collectDouyinVideoByAweme } from './videoCollector.js';
 import { detectDouyinPageType, isStrictDouyinDetailPage, extractDouyinContentId } from './pageDetector.js';
 import {
@@ -44,19 +45,25 @@ function buildCommentImagePackageBase(note = {}) {
   return keyword ? `${keyword}_${contentId}` : contentId;
 }
 
-async function resolveCurrentDouyinNote() {
+async function resolveCurrentDouyinNote({ collectionRunId = '' } = {}) {
   // 视频详情页：URL 里已有 video ID，直接走轻量路径，不做 DOM 探测
   const videoId = extractDouyinContentId(window.location.href);
   console.log('[灵感爆爆爆] resolveCurrentDouyinNote: videoId =', videoId || '(空)');
   if (videoId) {
     console.log('[灵感爆爆爆] 尝试轻量路径: collectDouyinVideoById...');
-    const idResult = await collectDouyinVideoById(videoId, { triggerSource: 'comment_collect' });
+    const idResult = await collectDouyinVideoById(videoId, {
+      triggerSource: 'comment_collect',
+      collectionRunId,
+    });
     console.log('[灵感爆爆爆] collectDouyinVideoById 结果: ok =', idResult?.ok, ', hasData =', !!idResult?.data);
     if (idResult?.ok && idResult?.data) return idResult.data;
   }
   // 降级：走完整的 DOM + API 采集
   console.log('[灵感爆爆爆] 降级到完整 DOM 采集: collectDouyinVideo...');
-  const videoResult = await collectDouyinVideo({ triggerSource: 'comment_collect' });
+  const videoResult = await collectDouyinVideo({
+    triggerSource: 'comment_collect',
+    collectionRunId,
+  });
   console.log('[灵感爆爆爆] collectDouyinVideo 结果: ok =', videoResult?.ok, ', hasData =', !!videoResult?.data);
   if (!videoResult?.ok || !videoResult?.data) {
     throw new Error(videoResult?.error || '未能定位当前抖音视频');
@@ -398,7 +405,7 @@ export async function collectDouyinComments({
   let note = null;
   try {
     console.log('[灵感爆爆爆] collectDouyinComments: 开始定位当前视频...');
-    note = await resolveCurrentDouyinNote();
+    note = await resolveCurrentDouyinNote({ collectionRunId });
     console.log('[灵感爆爆爆] collectDouyinComments: 视频定位完成, title =', (note?.title || '').slice(0, 30));
     if (!collectionRunId && manageCollectionRun) {
       run = await createSingleCommentRun({
@@ -416,6 +423,13 @@ export async function collectDouyinComments({
         },
       });
       collectionRunId = run.collectionRunId;
+    }
+    if (collectionRunId && note) {
+      note = {
+        ...note,
+        collectionRunId,
+      };
+      await noteStore.upsert(note);
     }
 
     const result = await collectDouyinCommentsForNote(note, {
