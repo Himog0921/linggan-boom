@@ -26,6 +26,14 @@ test('pickBestVideoStream keeps xhs h266 and backup video urls as download candi
         height: 720,
       },
     ],
+    h_265: [
+      {
+        master_url: 'https://sns-video.example/h265-snake-master.mp4',
+        avg_bitrate: 3000,
+        width: 1440,
+        height: 900,
+      },
+    ],
   });
 
   assert.equal(result.url, 'https://sns-video.example/h266-master.mp4');
@@ -35,6 +43,7 @@ test('pickBestVideoStream keeps xhs h266 and backup video urls as download candi
       'https://sns-video.example/h266-master.mp4',
       'https://sns-video.example/h266-backup-1.mp4',
       'https://sns-video.example/h266-backup-2.mp4',
+      'https://sns-video.example/h265-snake-master.mp4',
       'https://sns-video.example/h264-master.mp4',
       'https://sns-video.example/h264-backup.mp4',
     ],

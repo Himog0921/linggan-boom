@@ -132,7 +132,9 @@ export function createDashboardBridge({
       if (!noteId) return { success: false, error: 'noteId required' };
       const note = await noteStore.getById(noteId);
       if (!note) return { success: false, error: 'note not found' };
-      const summary = await downloadNoteMediaFromRecord(note);
+      const summary = await downloadNoteMediaFromRecord(note, {
+        mediaTypes: Array.isArray(data.mediaTypes) ? data.mediaTypes : undefined,
+      });
       return { success: true, summary };
     },
     [MSG.CLEAR_ALL_NOTES]: () => noteStore.clear(),

@@ -32,6 +32,59 @@ const LINK_ACTION_TEXT = {
 
 const BRAND_BANNER_SRC = getBrandAssetUrl(BRAND_ASSETS.banner);
 
+function hasMediaValue(value) {
+  if (Array.isArray(value)) return value.some(hasMediaValue);
+  if (value && typeof value === 'object') {
+    return [
+      value.urlDefault,
+      value.url_default,
+      value.url,
+      value.src,
+      value.href,
+      value.masterUrl,
+      value.master_url,
+      value.candidates,
+      value.streams,
+    ].some(hasMediaValue);
+  }
+  return Boolean(String(value || '').trim());
+}
+
+function getMediaDownloadOptions(item = {}) {
+  const imageGroups = Array.isArray(item.imageCandidates) && item.imageCandidates.length > 0
+    ? item.imageCandidates
+    : (Array.isArray(item.images) ? item.images : []);
+  const imageCount = imageGroups.filter(hasMediaValue).length;
+  const liveCount = Array.isArray(item.livePhotoStreams) ? item.livePhotoStreams.filter(hasMediaValue).length : 0;
+  const hasVideo = hasMediaValue([item.videoStreams, item.videoDownloadUrl, item.videoPlayUrl, item.video]);
+  const isVideo = String(item.type || '').trim() === 'video' || hasVideo;
+  const hasCover = hasMediaValue([
+    item.cover,
+    item.coverImg,
+    item.coverUrl,
+    item.thumbnail,
+    Array.isArray(item.images) ? item.images[0] : '',
+    Array.isArray(item.imageCandidates) ? item.imageCandidates[0] : '',
+  ]);
+  const options = [];
+  if (hasCover) options.push({ value: 'cover', label: '下载封面', count: 1 });
+  if (imageCount > 0 && (!isVideo || imageCount > 1)) {
+    options.push({ value: 'images', label: '下载所有图片', count: imageCount });
+  }
+  if (liveCount > 0) options.push({ value: 'live', label: '下载 Live', count: liveCount });
+  if (hasVideo) options.push({ value: 'video', label: '下载视频', count: 1 });
+  return options;
+}
+
+function countSelectedMedia(options = [], selectedValues = []) {
+  const selected = new Set(selectedValues);
+  const hasImages = selected.has('images');
+  return options
+    .filter((item) => !(item.value === 'cover' && hasImages))
+    .filter((item) => selected.has(item.value))
+    .reduce((total, item) => total + Number(item.count || 0), 0);
+}
+
 const TASK_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
 
 function loadIdleClaimSnapshot(value = null) {
@@ -82,6 +135,13 @@ export default function App() {
     detail: '',
     confirmText: '',
     confirmTone: 'danger',
+    onConfirm: null,
+  });
+  const [mediaDownloadDialog, setMediaDownloadDialog] = useState({
+    open: false,
+    title: '',
+    options: [],
+    selected: [],
     onConfirm: null,
   });
   const [mediaPreview, setMediaPreview] = useState({ open: false, url: '', title: '', type: 'image' });
@@ -281,6 +341,55 @@ export default function App() {
       onConfirm: null,
     }));
   }, [confirmDialog]);
+
+  const showMediaDownloadDialog = useCallback((item) => new Promise((resolve) => {
+    const options = getMediaDownloadOptions(item);
+    if (options.length === 0) {
+      resolve(null);
+      return;
+    }
+    setMediaDownloadDialog({
+      open: true,
+      title: item?.title || item?.noteId || '媒体下载',
+      options,
+      selected: options.map((option) => option.value),
+      onConfirm: resolve,
+    });
+  }), []);
+
+  const toggleMediaDownloadType = useCallback((value) => {
+    setMediaDownloadDialog((dialog) => {
+      const selected = new Set(dialog.selected);
+      if (selected.has(value)) selected.delete(value);
+      else selected.add(value);
+      return {
+        ...dialog,
+        selected: Array.from(selected),
+      };
+    });
+  }, []);
+
+  const handleMediaDownloadDialog = useCallback((confirmed) => {
+    const resolver = mediaDownloadDialog.onConfirm;
+    const selected = mediaDownloadDialog.selected;
+    const options = mediaDownloadDialog.options;
+    setMediaDownloadDialog({
+      open: false,
+      title: '',
+      options: [],
+      selected: [],
+      onConfirm: null,
+    });
+    if (!resolver) return;
+    if (!confirmed || selected.length === 0) {
+      resolver(null);
+      return;
+    }
+    resolver({
+      mediaTypes: selected,
+      count: countSelectedMedia(options, selected),
+    });
+  }, [mediaDownloadDialog]);
 
   const idleClaimNotice = useMemo(
     () => formatTaskLeaseIdleNotice(idleClaimSnapshot),
@@ -827,11 +936,17 @@ export default function App() {
                           onClick={async (e) => {
                             const noteId = String(item.noteId || '').trim();
                             if (!noteId) return;
+                            const selection = await showMediaDownloadDialog(item);
+                            if (!selection) return;
                             const busyKey = `download:${noteId}`;
                             if (rowBusyActionsRef.current[busyKey]) return;
                             setRowBusyActionState(busyKey, true);
                             try {
-                              const result = await sendToParent(MSG.DOWNLOAD_NOTE_MEDIA, { noteId }, { timeoutMs: 10 * 60 * 1000 });
+                              showNotice(`正在下载 ${selection.count || 0} 个媒体文件...`, 'info');
+                              const result = await sendToParent(MSG.DOWNLOAD_NOTE_MEDIA, {
+                                noteId,
+                                mediaTypes: selection.mediaTypes,
+                              }, { timeoutMs: 10 * 60 * 1000 });
                               if (result?.success) {
                                 const s = result.summary || {};
                                 const refreshedText = s.refreshed ? ' 已自动刷新媒体链接后重试。' : '';
@@ -930,6 +1045,43 @@ export default function App() {
             <div className="dashboard-dialog-actions">
               <button className="toolbar-btn" onClick={() => handleConfirm(false)}>取消</button>
               <button className="toolbar-btn danger" onClick={() => handleConfirm(true)}>{confirmDialog.confirmText}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 媒体下载选择 */}
+      {mediaDownloadDialog.open && (
+        <div className="dashboard-dialog-overlay" style={{ display: 'flex' }} aria-hidden="false">
+          <div className="dashboard-dialog media-download-dialog" role="dialog" aria-modal="true">
+            <span className="dashboard-dialog-badge">媒体下载</span>
+            <h2>下载媒体文件</h2>
+            <p>{mediaDownloadDialog.title}</p>
+            <div className="media-download-options">
+              {mediaDownloadDialog.options.map((option) => {
+                const checked = mediaDownloadDialog.selected.includes(option.value);
+                return (
+                  <label key={option.value} className={`media-download-option${checked ? ' is-selected' : ''}`}>
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={() => toggleMediaDownloadType(option.value)}
+                    />
+                    <span>{option.label}</span>
+                    <em>{option.count} 个</em>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="dashboard-dialog-actions">
+              <button className="toolbar-btn" onClick={() => handleMediaDownloadDialog(false)}>取消</button>
+              <button
+                className="toolbar-btn"
+                disabled={countSelectedMedia(mediaDownloadDialog.options, mediaDownloadDialog.selected) === 0}
+                onClick={() => handleMediaDownloadDialog(true)}
+              >
+                下载选中
+              </button>
             </div>
           </div>
         </div>

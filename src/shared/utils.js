@@ -254,7 +254,7 @@ function collectVideoStreamUrls(item = {}) {
       return;
     }
     if (typeof value === 'object') {
-      push(value.masterUrl || value.url || value.backupUrl || value.backup_url);
+      push(value.masterUrl || value.master_url || value.url || value.backupUrl || value.backup_url);
       return;
     }
     const url = String(value || '').trim();
@@ -262,6 +262,7 @@ function collectVideoStreamUrls(item = {}) {
   };
 
   push(item.masterUrl);
+  push(item.master_url);
   push(item.url);
   push(item.backupUrl);
   push(item.backup_url);
@@ -275,8 +276,11 @@ function collectVideoStreamUrls(item = {}) {
 export function pickBestVideoStream(stream = {}) {
   const pools = [
     ...(Array.isArray(stream?.h266) ? stream.h266 : []),
+    ...(Array.isArray(stream?.h_266) ? stream.h_266 : []),
     ...(Array.isArray(stream?.h265) ? stream.h265 : []),
+    ...(Array.isArray(stream?.h_265) ? stream.h_265 : []),
     ...(Array.isArray(stream?.h264) ? stream.h264 : []),
+    ...(Array.isArray(stream?.h_264) ? stream.h_264 : []),
     ...(Array.isArray(stream?.av1) ? stream.av1 : []),
   ];
   if (pools.length === 0) return { url: '', streams: [] };

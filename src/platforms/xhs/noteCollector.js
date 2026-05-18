@@ -55,6 +55,38 @@ async function waitForDiscoverySettle(containerSelector, previousSnapshot, timeo
   }
 }
 
+function getXhsImageUrl(image = {}) {
+  return image?.urlDefault || image?.url_default || image?.url || '';
+}
+
+export function extractXhsLivePhotoStreams(imageList = []) {
+  if (!Array.isArray(imageList)) return [];
+  return imageList.map((image, index) => {
+    const stream = image?.stream || image?.livePhoto?.stream || image?.live_photo?.stream || {};
+    const hasLiveFlag = Boolean(
+      image?.livePhoto
+      || image?.live_photo
+      || image?.isLivePhoto
+      || image?.is_live_photo
+      || (stream && Object.keys(stream).length > 0)
+    );
+    if (!hasLiveFlag || !stream || Object.keys(stream).length === 0) return null;
+
+    const selection = pickBestVideoStream(stream);
+    const candidates = (selection.streams || []).map((item) => item?.url).filter(Boolean);
+    if (!selection.url && candidates.length === 0) return null;
+
+    const coverUrl = toHighQualityImageUrl(getXhsImageUrl(image));
+    return {
+      imageIndex: index + 1,
+      url: selection.url || candidates[0] || '',
+      candidates,
+      streams: selection.streams || [],
+      coverUrl,
+    };
+  }).filter(Boolean);
+}
+
 export function selectNoteKey(noteMap = {}, preferredNoteId = '', currentUrl = '') {
   const expectedId = String(preferredNoteId || '').trim();
   if (expectedId && noteMap && noteMap[expectedId]) {
@@ -395,11 +427,12 @@ export async function collectNote(wd = window, options = {}) {
 
   // 3. 映射字段
   const imageUrls = (note.imageList || [])
-    .map((img) => toHighQualityImageUrl(img.urlDefault || img.url || ''))
+    .map((img) => toHighQualityImageUrl(getXhsImageUrl(img)))
     .filter(Boolean);
   const imageCandidates = (note.imageList || [])
-    .map((img) => getHighQualityImageCandidates(img.urlDefault || img.url || ''))
+    .map((img) => getHighQualityImageCandidates(getXhsImageUrl(img)))
     .filter((arr) => arr.length > 0);
+  const livePhotoStreams = extractXhsLivePhotoStreams(note.imageList || []);
   const videoSelection = pickBestVideoStream(note.video?.media?.stream || {});
   const existing = await noteStore.getById(note.noteId || note.id || noteKey);
 
@@ -427,9 +460,10 @@ export async function collectNote(wd = window, options = {}) {
     bodyText: cleanNoteBodyText(note.desc || ''),
     hashtags: [...new Set([...extractHashtags(note.title || ''), ...extractHashtags(note.desc || '')])],
     type: note.type === 'video' ? 'video' : 'normal',
-    cover: toHighQualityImageUrl(note.imageList?.[0]?.urlDefault || note.imageList?.[0]?.url || ''),
+    cover: toHighQualityImageUrl(getXhsImageUrl(note.imageList?.[0] || {})),
     images: imageUrls,
     imageCandidates,
+    livePhotoStreams,
     video: videoSelection.url || note.video?.media?.stream?.h264?.[0]?.masterUrl || '',
     videoStreams: videoSelection.streams || [],
     likes: parseXhsInteractCount(note.interactInfo, ['likedCount', 'likeCount', 'likes']),

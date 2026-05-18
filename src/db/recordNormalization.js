@@ -129,6 +129,7 @@ export function normalizeNoteRecord(record = {}) {
     imageCandidates: normalizeArray(record.imageCandidates),
     images: normalizeArray(record.images),
     videoStreams: normalizeArray(record.videoStreams),
+    livePhotoStreams: normalizeArray(record.livePhotoStreams),
     authorEntityId: normalizeString(record.authorEntityId) || (normalizeString(record.authorId) ? `${getPlatformPrefix(platform)}_${normalizeString(record.authorId)}` : ''),
     cover: normalizeString(record.cover || record.coverImg || normalizeArray(record.images)[0] || ''),
     coverImg: normalizeString(record.coverImg || record.cover || normalizeArray(record.images)[0] || ''),

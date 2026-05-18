@@ -132,9 +132,9 @@ const xhsPageController = createXhsPageController({
   reportDone,
   extractNoteId,
   sendToBackground,
-  downloadNoteMediaFromRecord: async (note) => {
+  downloadNoteMediaFromRecord: async (note, options = {}) => {
     const runtime = await loadContentDataRuntime();
-    return runtime.downloadNoteMediaFromRecord(note);
+    return runtime.downloadNoteMediaFromRecord(note, options);
   },
 });
 

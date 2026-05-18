@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   discoverNotesFromDOM,
+  extractXhsLivePhotoStreams,
   isCollectedNoteUsable,
   parseXhsInteractCount,
   parseXhsPublishedAt,
@@ -155,5 +156,32 @@ test('parseXhsPublishedAt parses relative and calendar time text', () => {
   assert.equal(
     parseXhsPublishedAt('3小时前', { now: fixedNow }),
     new Date('2026-04-21T09:00:00+08:00').getTime(),
+  );
+});
+
+test('extractXhsLivePhotoStreams keeps xhs live photo stream candidates', () => {
+  const streams = extractXhsLivePhotoStreams([
+    {
+      url_default: 'https://sns-img-qc.xhscdn.com/live-cover.jpg',
+      live_photo: true,
+      stream: {
+        h_265: [{
+          master_url: 'https://sns-video-hw.xhscdn.com/live-master.mp4',
+          backup_urls: ['https://sns-video-hw.xhscdn.com/live-backup.mp4'],
+          avg_bitrate: 2000,
+        }],
+      },
+    },
+  ]);
+
+  assert.equal(streams.length, 1);
+  assert.equal(streams[0].imageIndex, 1);
+  assert.equal(streams[0].url, 'https://sns-video-hw.xhscdn.com/live-master.mp4');
+  assert.deepEqual(
+    streams[0].candidates,
+    [
+      'https://sns-video-hw.xhscdn.com/live-master.mp4',
+      'https://sns-video-hw.xhscdn.com/live-backup.mp4',
+    ],
   );
 });

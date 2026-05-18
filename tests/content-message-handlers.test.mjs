@@ -154,6 +154,51 @@ test('remote xhs single-note collection creates a run and writes back success su
   ]]);
 });
 
+test('content message handlers forward selected media types into note media download', async () => {
+  const downloadCalls = [];
+  const handlers = createContentMessageHandlers({
+    MSG,
+    isDouyinPage: () => false,
+    collectNote: async () => null,
+    collectComments: async () => null,
+    collectAuthor: async () => null,
+    collectDouyinVideo: async () => null,
+    collectDouyinComments: async () => null,
+    downloadDouyinCommentImages: async () => null,
+    collectDouyinAuthor: async () => null,
+    noteStore: {
+      getById: async () => ({ noteId: 'n1', title: '测试笔记' }),
+    },
+    commentStore: {},
+    authorStore: {},
+    reportDone: () => {},
+    batchMessageHandlers: {},
+    extractNoteId: () => '',
+    downloadNoteMediaFromRecord: async (note, options) => {
+      downloadCalls.push({ note, options });
+      return { total: 1, success: 1, failed: 0 };
+    },
+    generateCsv: () => '',
+    downloadFile: () => {},
+    backfillLegacyAiReadyFields: async () => null,
+    getPageContext: async () => ({ platform: 'xhs', pageType: 'detail' }),
+    collectionRunStore: {},
+    packageWorkbenchResult: async () => null,
+    discoverXhsSurfaceNotes: async () => [],
+    discoverDouyinSurfaceTargets: async () => [],
+  });
+
+  const result = await handlers[MSG.DOWNLOAD_NOTE_MEDIA]({
+    noteId: 'n1',
+    mediaTypes: ['cover'],
+  });
+
+  assert.equal(result.success, true);
+  assert.deepEqual(result.summary, { total: 1, success: 1, failed: 0 });
+  assert.equal(downloadCalls.length, 1);
+  assert.deepEqual(downloadCalls[0].options, { mediaTypes: ['cover'] });
+});
+
 test('remote xhs single-note collection writes structured diagnostics on failure', async () => {
   const failedCalls = [];
   const previousWindow = globalThis.window;

@@ -83,6 +83,7 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `videoPlayUrl` | 当前播放直链 |
 | `videoDownloadUrl` | 当前下载直链 |
 | `videoStreams` | 备选流列表；小红书视频会保留主链与备用链接，用于下载失败时顺序重试 |
+| `livePhotoStreams` | 小红书 Live 图备选流列表，用于采集后或数据面板按 Live 类型下载 |
 | `stats.likes` | 点赞数 |
 | `stats.comments` | 评论数 |
 | `stats.collects` | 收藏数 |

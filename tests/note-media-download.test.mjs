@@ -1,7 +1,5 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import JSZip from 'jszip';
-
 import { createNoteMediaDownloadService } from '../src/content/noteMediaDownload.js';
 import { mediaAssetStore } from '../src/db/mediaAssetStore.js';
 
@@ -227,7 +225,7 @@ test('downloadNoteMediaFromRecord retries douyin video download after refreshing
   }
 });
 
-test('downloadNoteMediaFromRecord packages xhs image note media into a single zip download', async () => {
+test('downloadNoteMediaFromRecord downloads xhs image note media directly', async () => {
   const browser = installBrowserMocks();
   const originalBulkUpsert = mediaAssetStore.bulkUpsert;
   mediaAssetStore.bulkUpsert = async () => {};
@@ -245,23 +243,13 @@ test('downloadNoteMediaFromRecord packages xhs image note media into a single zi
       },
       sendToBackground: async (action, payload) => {
         bgCalls.push({ action, payload });
-        if (action !== 'fetchBinaryAsDataUrl') {
-          throw new Error(`unexpected action: ${action}`);
-        }
-        const first = String(payload.candidates?.[0] || '');
-        if (first.endsWith('.mp4')) {
-          return {
-            success: true,
-            dataUrl: `data:video/mp4;base64,${Buffer.from('video-binary').toString('base64')}`,
-            candidate: first,
-            candidateIndex: 0,
-          };
-        }
+        assert.equal(action, 'downloadMediaFile');
         return {
           success: true,
-          dataUrl: `data:image/jpeg;base64,${Buffer.from(first).toString('base64')}`,
-          candidate: first,
+          quality: 'HD',
+          sourceUrl: payload.candidates?.[0] || '',
           candidateIndex: 0,
+          via: 'chrome.downloads',
         };
       },
       collectNote: async () => null,
@@ -279,23 +267,20 @@ test('downloadNoteMediaFromRecord packages xhs image note media into a single zi
       contentId: 'xhs_note_1',
       title: '测试标题',
       imageCandidates: [
-        ['https://sns.example/1.jpg'],
-        ['https://sns.example/2.jpg'],
+        ['https://sns-img-qc.xhscdn.com/1.jpg'],
+        ['https://sns-img-qc.xhscdn.com/2.jpg'],
       ],
     });
 
     assert.equal(summary.total, 2);
     assert.equal(summary.success, 2);
     assert.equal(summary.failed, 0);
-    assert.equal(summary.zipped, true);
+    assert.equal(summary.zipped, false);
     assert.equal(bgCalls.length, 2);
-    assert.equal(browser.downloads.length, 1);
-    assert.match(browser.downloads[0].download, /测试标题.*\.zip|xhs_note_1_测试标题.*\.zip/);
-    assert.equal(browser.objectUrls.length, 1);
-
-    const zip = await JSZip.loadAsync(await browser.objectUrls[0].blob.arrayBuffer());
-    const names = Object.keys(zip.files).sort();
-    assert.deepEqual(names, ['图_01.jpg', '图_02.jpg']);
+    assert.equal(bgCalls[0].payload.candidates[0], 'https://sns-img-qc.xhscdn.com/1.jpg');
+    assert.equal(bgCalls[1].payload.candidates[0], 'https://sns-img-qc.xhscdn.com/2.jpg');
+    assert.equal(bgCalls[0].payload.headers[0].name, 'Referer');
+    assert.equal(browser.downloads.length, 0);
   } finally {
     mediaAssetStore.bulkUpsert = originalBulkUpsert;
     uninstallBrowserMocks();
@@ -320,13 +305,14 @@ test('downloadNoteMediaFromRecord accepts object-shaped xhs image candidates fro
       },
       sendToBackground: async (action, payload) => {
         bgCalls.push({ action, payload });
-        assert.equal(action, 'fetchBinaryAsDataUrl');
+        assert.equal(action, 'downloadMediaFile');
         assert.equal(payload.candidates[0], 'https://sns-img.example.com/candidate-cover.jpg');
         return {
           success: true,
-          dataUrl: `data:image/jpeg;base64,${Buffer.from('image-binary').toString('base64')}`,
-          candidate: payload.candidates[0],
+          quality: 'HD',
+          sourceUrl: payload.candidates[0],
           candidateIndex: 0,
+          via: 'chrome.downloads',
         };
       },
       collectNote: async () => null,
@@ -350,9 +336,186 @@ test('downloadNoteMediaFromRecord accepts object-shaped xhs image candidates fro
     assert.equal(summary.total, 1);
     assert.equal(summary.success, 1);
     assert.equal(summary.failed, 0);
-    assert.equal(summary.zipped, true);
+    assert.equal(summary.zipped, false);
     assert.equal(bgCalls.length, 1);
+    assert.equal(browser.downloads.length, 0);
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
+test('downloadNoteMediaFromRecord honors selected xhs media types', async () => {
+  installBrowserMocks();
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  mediaAssetStore.bulkUpsert = async () => {};
+
+  const bgCalls = [];
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById() {},
+      },
+      sendToBackground: async (action, payload) => {
+        bgCalls.push({ action, payload });
+        return {
+          success: true,
+          quality: 'HD',
+          sourceUrl: payload.candidates?.[0] || '',
+          candidateIndex: 0,
+          via: 'chrome.downloads',
+        };
+      },
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => '',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'xhs_rich_note_1',
+      contentId: 'xhs_rich_note_1',
+      title: '富媒体记录',
+      type: 'video',
+      cover: 'https://sns-img-qc.xhscdn.com/cover.jpg',
+      imageCandidates: [
+        ['https://sns-img-qc.xhscdn.com/image-1.jpg'],
+        ['https://sns-img-qc.xhscdn.com/image-2.jpg'],
+      ],
+      livePhotoStreams: [{
+        imageIndex: 2,
+        candidates: ['https://sns-video-hw.xhscdn.com/live-2.mp4'],
+      }],
+      videoStreams: [{ url: 'https://sns-video-hw.xhscdn.com/video.mp4', bitrate: 1000 }],
+    }, {
+      mediaTypes: ['cover', 'live', 'video'],
+    });
+
+    assert.equal(summary.total, 3);
+    assert.equal(summary.success, 3);
+    assert.deepEqual(summary.details.map((item) => item.id), ['cover-1', 'live-2', 'video-1']);
+    assert.equal(bgCalls.length, 3);
+    assert.ok(bgCalls[0].payload.filename.endsWith('/封面.jpg'));
+    assert.ok(bgCalls[1].payload.filename.endsWith('/Live_02.mp4'));
+    assert.ok(bgCalls[2].payload.filename.endsWith('/富媒体记录.mp4'));
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
+test('downloadNoteMediaFromRecord downloads only cover when cover is the only selected xhs media type', async () => {
+  installBrowserMocks();
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  mediaAssetStore.bulkUpsert = async () => {};
+
+  const bgCalls = [];
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById() {},
+      },
+      sendToBackground: async (action, payload) => {
+        bgCalls.push({ action, payload });
+        return {
+          success: true,
+          quality: 'HD',
+          sourceUrl: payload.candidates?.[0] || '',
+          candidateIndex: 0,
+          via: 'chrome.downloads',
+        };
+      },
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => '',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'xhs_cover_only_1',
+      contentId: 'xhs_cover_only_1',
+      title: '只下封面',
+      cover: 'https://sns-img-qc.xhscdn.com/cover.jpg',
+      imageCandidates: [
+        ['https://sns-img-qc.xhscdn.com/image-1.jpg'],
+        ['https://sns-img-qc.xhscdn.com/image-2.jpg'],
+        ['https://sns-img-qc.xhscdn.com/image-3.jpg'],
+      ],
+    }, {
+      mediaTypes: ['cover'],
+    });
+
+    assert.equal(summary.total, 1);
+    assert.equal(summary.success, 1);
+    assert.deepEqual(summary.details.map((item) => item.id), ['cover-1']);
+    assert.equal(bgCalls.length, 1);
+    assert.ok(bgCalls[0].payload.filename.endsWith('/封面.jpg'));
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
+test('downloadNoteMediaFromRecord falls back to page fetch for xhs images when background download fails', async () => {
+  const browser = installBrowserMocks();
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  mediaAssetStore.bulkUpsert = async () => {};
+  globalThis.fetch = async () => ({
+    ok: true,
+    blob: async () => new Blob(['image-binary'], { type: 'image/jpeg' }),
+  });
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById() {},
+      },
+      sendToBackground: async () => ({ success: false, error: 'all_candidates_failed' }),
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => '',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'xhs_blob_fallback_1',
+      contentId: 'xhs_blob_fallback_1',
+      title: '兜底下载',
+      imageCandidates: [['https://sns-img-qc.xhscdn.com/fallback.jpg']],
+    });
+
+    assert.equal(summary.total, 1);
+    assert.equal(summary.success, 1);
+    assert.equal(summary.failed, 0);
+    assert.equal(summary.details[0].result.via, 'blob-fallback');
     assert.equal(browser.downloads.length, 1);
+    assert.match(browser.downloads[0].download, /图_01\.jpg$/);
   } finally {
     mediaAssetStore.bulkUpsert = originalBulkUpsert;
     uninstallBrowserMocks();

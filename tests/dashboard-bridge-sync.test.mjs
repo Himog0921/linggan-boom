@@ -80,3 +80,61 @@ test('dashboard bridge forwards notes, comments, and authors to background sync 
 
   delete globalThis.chrome;
 });
+
+test('dashboard bridge forwards selected media types into note media download', async () => {
+  const payloads = [];
+  const downloadCalls = [];
+  const TEST_NONCE = 'test-nonce-media-types';
+
+  const bridge = createDashboardBridge({
+    MSG: {
+      GET_ALL_NOTES: 'getAllNotes',
+      GET_ALL_COMMENTS: 'getAllComments',
+      GET_ALL_AUTHORS: 'getAllAuthors',
+      DOWNLOAD_NOTE_MEDIA: 'downloadNoteMedia',
+      CLEAR_ALL_NOTES: 'clearAllNotes',
+      CLEAR_ALL_COMMENTS: 'clearAllComments',
+      CLEAR_ALL_AUTHORS: 'clearAllAuthors',
+      DELETE_NOTE: 'deleteNote',
+      DELETE_COMMENT: 'deleteComment',
+      DELETE_AUTHOR: 'deleteAuthor',
+      SYNC_TO_WORKBENCH: 'syncToWorkbench',
+    },
+    noteStore: {
+      getById: async () => ({ noteId: 'n1', title: '测试笔记' }),
+    },
+    commentStore: {},
+    authorStore: {},
+    downloadNoteMediaFromRecord: async (note, options) => {
+      downloadCalls.push({ note, options });
+      return { total: 1, success: 1, failed: 0 };
+    },
+    _testNonce: TEST_NONCE,
+  });
+
+  await bridge.handleDashboardMessageEvent({
+    data: {
+      source: 'lgboom-dashboard',
+      action: 'downloadNoteMedia',
+      nonce: TEST_NONCE,
+      noteId: 'n1',
+      mediaTypes: ['cover'],
+    },
+    ports: [{
+      postMessage(value) {
+        payloads.push(value);
+      },
+    }],
+  });
+
+  assert.equal(downloadCalls.length, 1);
+  assert.equal(downloadCalls[0].note.noteId, 'n1');
+  assert.deepEqual(downloadCalls[0].options, { mediaTypes: ['cover'] });
+  assert.deepEqual(payloads[0], {
+    success: true,
+    summary: { total: 1, success: 1, failed: 0 },
+    data: {
+      summary: { total: 1, success: 1, failed: 0 },
+    },
+  });
+});

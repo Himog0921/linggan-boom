@@ -54,6 +54,7 @@
 | `videoDownloadUrl` | string | 视频下载直链（可能会过期） |
 | `videoStreams` | object[] | 视频候选流列表；小红书会保留 `h266 / h265 / h264 / av1` 主链与备用链接 |
 | `imageCandidates` | string[][] | 图片高清候选链接 |
+| `livePhotoStreams` | object[] | 小红书 Live 图候选流列表，按图片序号保留主链与备用链接 |
 | `mediaDownloadStatus` | string | 媒体下载状态 |
 | `dataSource` | string | 数据来源，例如 `dom` / `render` / `api` |
 | `triggerSource` | string | 触发来源，例如 `manual` / `native_share` / `batch_profile` |

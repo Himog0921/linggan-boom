@@ -201,13 +201,14 @@ export function createXhsPageController({
           const note = await collectNote();
           showToast(`笔记采集成功：${note.title}`, 'success');
           reportDone('note', 1);
-          if ((note.images && note.images.length > 0) || note.video) {
+          if ((note.images && note.images.length > 0) || note.video || note.cover || note.coverUrl || note.livePhotoStreams?.length > 0) {
             const mediaCount = (note.images?.length || 0) + (note.video ? 1 : 0);
             try {
-              const shouldDownload = await showMediaDownloadDialog(mediaCount, note.type);
-              if (shouldDownload) {
-                showToast(`正在打包 ${mediaCount} 个媒体文件...`, 'info');
-                const summary = await downloadNoteMediaFromRecord(note);
+              const selection = await showMediaDownloadDialog(note);
+              const mediaTypes = selection === true ? undefined : selection?.mediaTypes;
+              if (selection && (selection === true || mediaTypes?.length > 0)) {
+                showToast(`正在下载 ${selection?.count || mediaCount} 个媒体文件...`, 'info');
+                const summary = await downloadNoteMediaFromRecord(note, { mediaTypes });
                 showToast(
                   summary.zipped
                     ? `媒体下载完成：已打包 ZIP（成功 ${summary.success}/${summary.total}，失败 ${summary.failed}）`

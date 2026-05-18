@@ -60,17 +60,111 @@ export function createNoteMediaDownloadService({
     return `灵感爆爆爆_笔记媒体_${noteId}_${title}.zip`;
   }
 
-  function buildNoteMediaDownloadQueue(note) {
+  function getNoteImageGroups(note = {}) {
+    if (Array.isArray(note?.imageCandidates) && note.imageCandidates.length > 0) {
+      return note.imageCandidates;
+    }
+    return Array.isArray(note?.images) ? note.images.map((url) => [url]) : [];
+  }
+
+  function getNoteCoverCandidates(note = {}, imageGroups = getNoteImageGroups(note)) {
+    return normalizeCandidates([
+      note?.cover,
+      note?.coverImg,
+      note?.coverUrl,
+      note?.thumbnail,
+      imageGroups?.[0],
+      Array.isArray(note?.images) ? note.images[0] : '',
+    ]);
+  }
+
+  function getNoteLivePhotoGroups(note = {}) {
+    const streams = Array.isArray(note?.livePhotoStreams) ? note.livePhotoStreams : [];
+    return streams.map((item, index) => ({
+      index: Number(item?.imageIndex || index + 1),
+      candidates: normalizeCandidates([item?.candidates, item?.url, item?.streams]),
+    })).filter((item) => item.candidates.length > 0);
+  }
+
+  function getNoteVideoCandidates(note = {}) {
+    const sortedVideoStreams = Array.isArray(note?.videoStreams)
+      ? [...note.videoStreams].sort((a, b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))
+      : [];
+    return normalizeCandidates([
+      ...sortedVideoStreams.map((item) => item?.url).filter(Boolean),
+      note?.videoDownloadUrl,
+      note?.videoPlayUrl,
+      note?.video,
+    ]);
+  }
+
+  function getNoteMediaDownloadOptions(note = {}) {
+    const imageGroups = getNoteImageGroups(note);
+    const coverCandidates = getNoteCoverCandidates(note, imageGroups);
+    const liveGroups = getNoteLivePhotoGroups(note);
+    const videoCandidates = getNoteVideoCandidates(note);
+    const isVideoNote = String(note?.type || '').trim() === 'video' || videoCandidates.length > 0;
+    const options = [];
+
+    if (coverCandidates.length > 0) {
+      options.push({ value: 'cover', label: '下载封面', count: 1 });
+    }
+    if (imageGroups.length > 0 && (!isVideoNote || imageGroups.length > 1)) {
+      options.push({ value: 'images', label: '下载所有图片', count: imageGroups.length });
+    }
+    if (liveGroups.length > 0) {
+      options.push({ value: 'live', label: '下载 Live', count: liveGroups.length });
+    }
+    if (videoCandidates.length > 0) {
+      options.push({ value: 'video', label: '下载视频', count: 1 });
+    }
+
+    return options;
+  }
+
+  function normalizeMediaTypeSelection(mediaTypes) {
+    if (!Array.isArray(mediaTypes) || mediaTypes.length === 0) {
+      return { all: true, values: new Set() };
+    }
+
+    const values = new Set(
+      mediaTypes.map((item) => String(item || '').trim()).filter(Boolean),
+    );
+    return {
+      all: values.has('all'),
+      values,
+    };
+  }
+
+  function buildNoteMediaDownloadQueue(note, options = {}) {
     const noteId = sanitizePathSegment(note?.noteId || 'unknown');
     const title = sanitizePathSegment(note?.title || noteId, noteId);
     const folder = `灵感爆爆爆/笔记媒体/${noteId}_${title}`;
     const queue = [];
+    const selected = normalizeMediaTypeSelection(options.mediaTypes);
+    const availableTypes = new Set(getNoteMediaDownloadOptions(note).map((item) => item.value));
+    const shouldInclude = (type) => selected.all
+      ? availableTypes.has(type)
+      : selected.values.has(type);
 
-    const imageGroups = Array.isArray(note?.imageCandidates) && note.imageCandidates.length > 0
-      ? note.imageCandidates
-      : (Array.isArray(note?.images) ? note.images.map((url) => [url]) : []);
+    const imageGroups = getNoteImageGroups(note);
+    const includeImages = shouldInclude('images');
+    const includeCover = shouldInclude('cover') && !includeImages;
 
-    imageGroups.forEach((group, index) => {
+    if (includeCover) {
+      const candidates = getNoteCoverCandidates(note, imageGroups);
+      if (candidates.length > 0) {
+        const ext = detectFileExt(candidates[0], 'jpg');
+        queue.push({
+          id: 'cover-1',
+          type: 'cover',
+          candidates,
+          filename: `${folder}/封面.${ext}`,
+        });
+      }
+    }
+
+    if (includeImages) imageGroups.forEach((group, index) => {
       const candidates = normalizeCandidates(group);
       if (candidates.length === 0) return;
       const ext = detectFileExt(candidates[0], 'jpg');
@@ -82,16 +176,20 @@ export function createNoteMediaDownloadService({
       });
     });
 
-    const sortedVideoStreams = Array.isArray(note?.videoStreams)
-      ? [...note.videoStreams].sort((a, b) => Number(b?.bitrate || 0) - Number(a?.bitrate || 0))
-      : [];
-    const videoCandidates = normalizeCandidates([
-      ...sortedVideoStreams.map((item) => item?.url).filter(Boolean),
-      note?.videoDownloadUrl,
-      note?.videoPlayUrl,
-      note?.video,
-    ]);
-    if (videoCandidates.length > 0) {
+    if (shouldInclude('live')) {
+      getNoteLivePhotoGroups(note).forEach((item) => {
+        const ext = detectFileExt(item.candidates[0], 'mp4');
+        queue.push({
+          id: `live-${item.index}`,
+          type: 'live_photo',
+          candidates: item.candidates,
+          filename: `${folder}/Live_${String(item.index).padStart(2, '0')}.${ext}`,
+        });
+      });
+    }
+
+    const videoCandidates = getNoteVideoCandidates(note);
+    if (shouldInclude('video') && videoCandidates.length > 0) {
       queue.push({
         id: 'video-1',
         type: 'video',
@@ -103,10 +201,11 @@ export function createNoteMediaDownloadService({
     return queue;
   }
 
-  function shouldPackageAsZip(note, queue = []) {
+  function shouldPackageAsZip(note, queue = [], options = {}) {
+    if (options.packageAsZip !== true) return false;
     const platform = String(note?.platform || 'xhs').trim();
     if (platform === 'douyin') return false;
-    return !queue.some((task) => task?.type === 'video');
+    return !queue.some((task) => task?.type === 'video' || task?.type === 'live_photo');
   }
 
   function buildMediaDownloadHeaders(candidates = []) {
@@ -141,13 +240,17 @@ export function createNoteMediaDownloadService({
         ? String(result?.quality || (task.candidates?.length > 0 ? 'download' : 'thumb')).trim()
         : String(task.candidates?.length > 0 ? 'download' : 'thumb');
       const sourceUrl = String(result?.sourceUrl || task.candidates?.[0] || '').trim();
+      const assetType = task.type === 'cover' ? 'image' : (task.type || 'image');
+      const role = task.type === 'cover'
+        ? 'cover'
+        : (task.type === 'live_photo' ? 'live_photo' : 'body');
 
       return {
         assetId: `media_${contentId}_${task.id}`,
         contentId,
         collectionRunId: String(note?.collectionRunId || collectionRunId || '').trim() || undefined,
-        assetType: task.type || 'image',
-        role: 'body',
+        assetType,
+        role,
         quality,
         downloadStatus,
         lastResolvedAt: now,
@@ -181,7 +284,7 @@ export function createNoteMediaDownloadService({
       if (pageResult.success) return pageResult;
     }
 
-    const referer = window.location.href || 'https://www.douyin.com/';
+    const referer = window.location.href || 'https://www.xiaohongshu.com/';
     const isDouyin = candidates.some((url) => /douyin/i.test(String(url || '')));
 
     // 2. 降级到 content script 原生 fetch（尝试 omit / include 两种配置）
@@ -190,11 +293,14 @@ export function createNoteMediaDownloadService({
       const candidate = candidates[i];
       const configs = isDouyin
         ? [
-            { credentials: 'include', headers: { Referer: referer } },
-            { credentials: 'omit', headers: { Referer: referer } },
-            { credentials: 'include', headers: { Referer: referer, Range: 'bytes=0-5242880' } },
+            { credentials: 'include', referrer: referer, headers: { Referer: referer } },
+            { credentials: 'omit', referrer: referer, headers: { Referer: referer } },
+            { credentials: 'include', referrer: referer, headers: { Referer: referer, Range: 'bytes=0-5242880' } },
           ]
-        : [{ credentials: 'include', headers: { Referer: referer } }];
+        : [
+            { credentials: 'include', referrer: referer },
+            { credentials: 'omit', referrer: referer },
+          ];
 
       for (const config of configs) {
         try {
@@ -352,7 +458,7 @@ export function createNoteMediaDownloadService({
         }
 
         const shouldUseBlobFallback = task.type === 'video'
-          || remoteCandidates.some((url) => /douyin/i.test(String(url || '')));
+          || remoteCandidates.some((url) => /douyin|xhscdn|xiaohongshu|xhslink|sns-img|sns-video/i.test(String(url || '')));
 
         if (result?.success) {
           summary.success += 1;
@@ -644,7 +750,7 @@ export function createNoteMediaDownloadService({
     async downloadNoteMediaFromRecord(note, options = {}) {
       const noteId = note?.noteId || '';
       let workingNote = note;
-      let queue = buildNoteMediaDownloadQueue(workingNote);
+      let queue = buildNoteMediaDownloadQueue(workingNote, options);
       let refreshed = false;
 
       const shouldAttemptInitialRefresh = options.retryOnRefresh !== false
@@ -655,7 +761,7 @@ export function createNoteMediaDownloadService({
         const refreshedNote = await refreshNoteMediaSnapshot(workingNote);
         if (refreshedNote) {
           workingNote = refreshedNote;
-          queue = buildNoteMediaDownloadQueue(workingNote);
+          queue = buildNoteMediaDownloadQueue(workingNote, options);
           refreshed = queue.length > 0;
           if (noteId) {
             await noteStore.updateById(noteId, refreshedNote);
@@ -692,7 +798,7 @@ export function createNoteMediaDownloadService({
         });
       }
 
-      const isZipDownload = shouldPackageAsZip(workingNote, queue);
+      const isZipDownload = shouldPackageAsZip(workingNote, queue, options);
       const baseSummary = isZipDownload
         ? await downloadQueueAsZip(workingNote, queue, options)
         : await downloadQueueViaBackground(queue, options);
@@ -711,7 +817,7 @@ export function createNoteMediaDownloadService({
       if (shouldRetry) {
         const refreshedNote = await refreshNoteMediaSnapshot(workingNote);
         if (refreshedNote) {
-          const refreshedQueue = buildNoteMediaDownloadQueue(refreshedNote);
+          const refreshedQueue = buildNoteMediaDownloadQueue(refreshedNote, options);
           await persistNoteMediaAssets(refreshedNote, refreshedQueue, {
             status: '下载中',
             refreshed: true,
