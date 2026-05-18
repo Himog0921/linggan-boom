@@ -65,6 +65,15 @@ test('mapErrorToProtocolError maps plain strings into retryable protocol errors'
   assert.match(mapped.message, /当前页面/);
 });
 
+test('mapErrorToProtocolError maps platform verification to platform block', () => {
+  const mapped = mapErrorToProtocolError('检测到抖音安全验证，请先完成验证码后继续操作');
+
+  assert.equal(mapped.code, 'platform_security_challenge');
+  assert.equal(mapped.category, 'platform_block');
+  assert.equal(mapped.retryable, true);
+  assert.match(mapped.userMessage, /安全验证/);
+});
+
 test('mapErrorToProtocolError keeps explicit code and category overrides', () => {
   const mapped = mapErrorToProtocolError(new Error('用户主动停止任务'), {
     code: 'task_stopped_by_user',

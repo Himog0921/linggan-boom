@@ -18,6 +18,18 @@ function buildBreakdown(records = [], key = '') {
   return buckets;
 }
 
+function normalizeTextArray(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .map((item) => String(item || '').trim())
+    .filter(Boolean);
+}
+
+function normalizeObjectArray(value = []) {
+  return (Array.isArray(value) ? value : [])
+    .filter((item) => item && typeof item === 'object' && !Array.isArray(item))
+    .map((item) => ({ ...item }));
+}
+
 export function buildResultSummary({
   notes = [],
   comments = [],
@@ -43,6 +55,10 @@ export function buildResultSummary({
     requestedCount: normalizeCount(runRecord.requestedCount, 0),
     discoveredCount: normalizeCount(runRecord.discoveredCount, 0),
     shortfallCount: normalizeCount(runRecord.shortfallCount, 0),
+    totalComments: normalizeCount(runRecord.totalComments, 0),
+    targetIds: normalizeTextArray(runRecord.targetIds),
+    contentIds: normalizeTextArray(runRecord.contentIds),
+    failedTargets: normalizeObjectArray(runRecord.failedTargets),
     dataQualityBreakdown: buildBreakdown(allRecords, 'dataQuality'),
     sourceTierBreakdown: buildBreakdown(allRecords, 'sourceTier'),
   };

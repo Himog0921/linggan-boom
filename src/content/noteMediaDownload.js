@@ -351,11 +351,14 @@ export function createNoteMediaDownloadService({
           result = { success: false, error: String(err?.message || err) };
         }
 
+        const shouldUseBlobFallback = task.type === 'video'
+          || remoteCandidates.some((url) => /douyin/i.test(String(url || '')));
+
         if (result?.success) {
           summary.success += 1;
           if (result.quality === 'HD') summary.hdCount += 1;
           else summary.sdCount += 1;
-        } else if (task.type === 'video') {
+        } else if (shouldUseBlobFallback) {
           const fallbackResult = await tryDownloadByBlobFallback(task);
           if (fallbackResult?.success) {
             result = fallbackResult;

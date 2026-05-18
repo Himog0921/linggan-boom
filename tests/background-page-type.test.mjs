@@ -50,6 +50,7 @@ globalThis.chrome = {
 const {
   buildBatchCommentsDispatchMessage,
   buildBatchNotesDispatchMessage,
+  buildContentScriptUnavailableCapabilityResponse,
   inferPageTypeFromTask,
   normalizeWorkbenchTaskTarget,
 } = await import('../src/background/index.js');
@@ -71,6 +72,16 @@ test('douyin detail url maps batchNotes tasks to detail page type', () => {
     inferPageTypeFromTask({
       taskType: 'douyin.batchNotes',
       target: 'https://www.douyin.com/video/7260000000000000001',
+    }),
+    'detail',
+  );
+});
+
+test('douyin note detail url maps batchNotes tasks to detail page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'douyin.batchNotes',
+      target: 'https://www.douyin.com/note/7321309610927770930',
     }),
     'detail',
   );
@@ -236,4 +247,27 @@ test('background keeps batch comment fields intact when forwarding to content', 
       },
     },
   );
+});
+
+test('background capability check returns a readable rejection when content script is missing', () => {
+  const result = buildContentScriptUnavailableCapabilityResponse({
+    task: {
+      taskType: 'douyin.batchComments',
+      platform: 'douyin',
+      target: {
+        pageType: 'search',
+        url: 'https://www.douyin.com/search/%E5%92%96%E5%95%A1',
+      },
+    },
+    error: new Error('Could not establish connection. Receiving end does not exist.'),
+  });
+
+  assert.equal(result.success, true);
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'page_context_unavailable');
+  assert.match(result.reasonMessage, /没有加载插件内容脚本/);
+  assert.equal(result.report.platform, 'douyin');
+  assert.equal(result.report.pageType, 'search');
+  assert.equal(result.report.contextSnapshot.contentScriptLoaded, false);
+  assert.deepEqual(result.report.capabilities.canRunTaskTypes, []);
 });

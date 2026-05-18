@@ -7,6 +7,8 @@ import {
 } from '../protocol/schema.js';
 
 function inferCanRunTaskTypes(pageContext = {}) {
+  if (pageContext.platformBlocked) return [];
+
   const platform = String(pageContext.platform || '').trim();
   const capabilities = pageContext.capabilities || {};
   const taskTypes = [];
@@ -32,6 +34,9 @@ function inferCanRunTaskTypes(pageContext = {}) {
 }
 
 function inferRecommendedNextAction(pageContext = {}) {
+  if (pageContext.platformBlocked) {
+    return 'resolve_platform_security_challenge';
+  }
   const pageType = String(pageContext.pageType || '').trim();
   if (pageType === REMOTE_TARGET_PAGE_TYPE.SEARCH && !pageContext.isStableSearchList) {
     return 'wait_for_search_results_stable';
@@ -46,6 +51,14 @@ function inferRecommendedNextAction(pageContext = {}) {
 }
 
 function inferReadiness(pageContext = {}, canRunTaskTypes = []) {
+  if (pageContext.platformBlocked) {
+    return {
+      ready: false,
+      reasonCode: String(pageContext.blockReasonCode || REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE).trim(),
+      reasonMessage: String(pageContext.blockReasonMessage || '平台触发了安全验证，请先完成验证后继续').trim(),
+    };
+  }
+
   if (canRunTaskTypes.length > 0) {
     return {
       ready: true,
@@ -96,6 +109,7 @@ export function buildCapabilityReport(pageContext = {}) {
       isStableSearchList: Boolean(pageContext.isStableSearchList),
       isDyVideoPage: Boolean(pageContext.isDyVideoPage),
       isDyStrictDetailPage: Boolean(pageContext.isDyStrictDetailPage),
+      platformBlocked: Boolean(pageContext.platformBlocked),
     },
   };
 }

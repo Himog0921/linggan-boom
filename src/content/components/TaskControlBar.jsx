@@ -61,6 +61,7 @@ export default function TaskControlBar({
   const isStopping = normalizedTaskState === TASK_STATE.STOPPING;
   const isPaused = isPausedTaskState(normalizedTaskState);
   const isDone = isTerminalTaskState(normalizedTaskState);
+  const isStopDisabled = isStopping || isDone;
 
   const isDy = platform === 'douyin';
   const pauseAction = isDy ? 'dy_pauseBatch' : 'pauseBatch';
@@ -127,14 +128,14 @@ export default function TaskControlBar({
         <button
           className={stopClass}
           data-action={stopAction}
-          disabled={isStopping}
+          disabled={isStopDisabled}
           style={{
             ...btnBase,
             background: isAc ? '#FFBCB5' : '#e03e3e',
-            cursor: isStopping ? 'not-allowed' : 'pointer',
-            opacity: isStopping ? 0.7 : 1,
+            cursor: isStopDisabled ? 'not-allowed' : 'pointer',
+            opacity: isStopDisabled ? 0.7 : 1,
           }}
-          onMouseEnter={(e) => { if (!isStopping) { e.currentTarget.style.transform = 'translate(-1px,-1px)'; e.currentTarget.style.boxShadow = btnHoverShadow; } }}
+          onMouseEnter={(e) => { if (!isStopDisabled) { e.currentTarget.style.transform = 'translate(-1px,-1px)'; e.currentTarget.style.boxShadow = btnHoverShadow; } }}
           onMouseLeave={(e) => { e.currentTarget.style.transform = 'translate(0,0)'; e.currentTarget.style.boxShadow = btnShadow; }}
         >{isStopping ? '停止中...' : '停止'}</button>
       </div>

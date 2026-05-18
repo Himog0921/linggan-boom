@@ -228,7 +228,12 @@ export function inferProgressStage({ statusText = '', taskState = '', stage = ''
   return { label: '进行中', className: 'is-running', description: '任务正在执行中，可在这里查看进度和控制。' };
 }
 
-export const sendToTab = sendSharedToTab;
+export function sendToTab(tabId, payload, options = {}) {
+  return sendSharedToTab(tabId, payload, {
+    autoReconnect: true,
+    ...options,
+  });
+}
 
 export function unwrapTabResponseData(result, fallback) {
   return unwrapCompatResponseData(result, fallback);

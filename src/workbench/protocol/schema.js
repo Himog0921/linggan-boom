@@ -118,6 +118,7 @@ export const REMOTE_ERROR_CODE = {
   PAGE_TYPE_MISMATCH: 'page_type_mismatch',
   PAGE_TARGET_MISMATCH: 'page_target_mismatch',
   PAGE_CONTEXT_UNAVAILABLE: 'page_context_unavailable',
+  PLATFORM_SECURITY_CHALLENGE: 'platform_security_challenge',
   SEARCH_LIST_UNSTABLE: 'search_list_unstable',
   LOGIN_REQUIRED: 'login_required',
   EXECUTOR_BUSY: 'executor_busy',
@@ -213,7 +214,12 @@ export const SUPPORTED_REMOTE_TASKS = {
     targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
     dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
     startAction: MSG.COLLECT_SINGLE_COMMENT,
-    controlActions: {},
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
+    },
     capabilityKey: 'canCollectComments',
   },
   [REMOTE_TASK_TYPE.DOUYIN_COMMENT_IMAGE_DOWNLOAD]: {
@@ -221,7 +227,12 @@ export const SUPPORTED_REMOTE_TASKS = {
     targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
     dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
     startAction: MSG.DOWNLOAD_CURRENT_COMMENT_IMAGES,
-    controlActions: {},
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
+    },
     capabilityKey: 'canDownloadCommentImages',
   },
 };

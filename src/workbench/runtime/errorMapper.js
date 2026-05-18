@@ -18,6 +18,9 @@ function normalizeMessage(error = '') {
 
 function inferErrorCode(message = '') {
   const text = normalizeMessage(message);
+  if (/安全验证|验证码|滑块|请完成验证|security.?challenge|captcha|verify/i.test(text)) {
+    return REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE;
+  }
   if (/搜索结果列表|稳定搜索列表/.test(text)) return REMOTE_ERROR_CODE.SEARCH_LIST_UNSTABLE;
   if (/当前页面|可执行上下文|页面未形成/.test(text)) return REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE;
   if (/登录|login/i.test(text)) return REMOTE_ERROR_CODE.LOGIN_REQUIRED;
@@ -30,6 +33,9 @@ function inferErrorCode(message = '') {
 
 function inferErrorCategory(code = '', message = '') {
   if (code === 'rate_limited') return REMOTE_ERROR_CATEGORY.RATE_LIMIT;
+  if (code === REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE) {
+    return REMOTE_ERROR_CATEGORY.PLATFORM_BLOCK;
+  }
   if (code === REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE || code === REMOTE_ERROR_CODE.SEARCH_LIST_UNSTABLE) {
     return REMOTE_ERROR_CATEGORY.CONTEXT;
   }

@@ -2,6 +2,10 @@ import { accountStore } from '../../db/accountStore.js';
 
 const XHS_DOMAIN = '.xiaohongshu.com';
 const XHS_URL = 'https://www.xiaohongshu.com';
+export const PLATFORM_COOKIE_DOMAINS = {
+  xhs: XHS_DOMAIN,
+  douyin: '.douyin.com',
+};
 
 function parseCookieJson(cookieJson) {
   if (Array.isArray(cookieJson)) return cookieJson;
@@ -20,6 +24,13 @@ export async function selectAvailableAccount(platform = 'xhs') {
   return accountStore.getAvailable(platform);
 }
 
+export function resolveCookieDomain(platformOrDomain = 'xhs') {
+  const value = String(platformOrDomain || '').trim();
+  if (!value) return XHS_DOMAIN;
+  if (PLATFORM_COOKIE_DOMAINS[value]) return PLATFORM_COOKIE_DOMAINS[value];
+  return value;
+}
+
 export async function clearCookiesForDomain(domain = XHS_DOMAIN) {
   try {
     const cookies = await chrome.cookies.getAll({ domain });
@@ -34,7 +45,8 @@ export async function clearCookiesForDomain(domain = XHS_DOMAIN) {
   }
 }
 
-export async function injectCookiesForAccount(cookieJson, domain = XHS_DOMAIN) {
+export async function injectCookiesForAccount(cookieJson, platformOrDomain = 'xhs') {
+  const domain = resolveCookieDomain(platformOrDomain);
   const cookies = parseCookieJson(cookieJson);
   if (!cookies.length) {
     return { success: false, error: 'no_valid_cookies' };

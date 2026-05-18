@@ -64,3 +64,36 @@ test('content runtime loaders keep heavy modules eager for extension content scr
     'content script should not expose async runtime chunks',
   );
 });
+
+test('manifest keeps the douyin injection contract explicit', () => {
+  const manifest = JSON.parse(fs.readFileSync(path.join(projectRoot, 'manifest.json'), 'utf8'));
+  const douyinContentScript = manifest.content_scripts.find((entry) =>
+    entry.matches.includes('https://www.douyin.com/*')
+  );
+
+  assert.ok(douyinContentScript, 'douyin pages must load the content script');
+  assert.deepEqual(douyinContentScript.js, ['vendor.js', 'content.js']);
+  assert.deepEqual(douyinContentScript.css, ['content.css']);
+  assert.equal(douyinContentScript.run_at, 'document_end');
+
+  for (const permission of [
+    'https://www.douyin.com/*',
+    'https://*.douyinpic.com/*',
+    'https://*.douyinvod.com/*',
+  ]) {
+    assert.ok(
+      manifest.host_permissions.includes(permission),
+      `douyin host permission is missing: ${permission}`,
+    );
+  }
+
+  const douyinResources = manifest.web_accessible_resources.find((entry) =>
+    entry.matches.includes('https://www.douyin.com/*')
+  );
+
+  assert.ok(douyinResources, 'douyin pages must be allowed to load injected capture code');
+  assert.ok(
+    douyinResources.resources.includes('injected/douyinApiCapture.js'),
+    'douyin API capture script must remain web-accessible',
+  );
+});

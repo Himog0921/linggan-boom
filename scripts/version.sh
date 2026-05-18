@@ -26,15 +26,19 @@ esac
 NEW="$MAJOR.$MINOR.$PATCH"
 echo "新版本:   v$NEW"
 
-# 同步版本号到 package.json 和 manifest.json
+# 同步版本号到 package.json、package-lock.json 和 manifest.json
 node -e "
 const fs = require('fs');
-['package.json', 'manifest.json'].forEach(f => {
+const files = ['package.json', 'package-lock.json', 'manifest.json'];
+for (const f of files) {
   const data = JSON.parse(fs.readFileSync(f, 'utf8'));
   data.version = '$NEW';
+  if (f === 'package-lock.json' && data.packages && data.packages['']) {
+    data.packages[''].version = '$NEW';
+  }
   fs.writeFileSync(f, JSON.stringify(data, null, 2) + '\n');
   console.log('  ✓ ' + f + ' -> v$NEW');
-});
+}
 "
 
 # 构建
@@ -44,11 +48,15 @@ echo "  ✓ 构建完成"
 
 # 打包 dist 为 zip（方便分发）
 ZIP_NAME="linggan-boom-v${NEW}.zip"
+mkdir -p releases
+rm -f "releases/$ZIP_NAME"
 cd dist && zip -r -q "../releases/$ZIP_NAME" . && cd ..
 echo "  ✓ 打包: releases/$ZIP_NAME"
 
+node scripts/verify-release-package.mjs --version "$NEW" --zip "releases/$ZIP_NAME"
+
 # Git 提交 + 打 tag
-git add package.json manifest.json dist/
+git add package.json package-lock.json manifest.json
 git commit -m "release: v$NEW — $MSG"
 git tag -a "v$NEW" -m "v$NEW: $MSG"
 

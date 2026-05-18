@@ -32,7 +32,7 @@ function extractDetailIdentity(url = '') {
   if (!normalizedUrl) return '';
 
   const match = normalizedUrl.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
-    || normalizedUrl.match(/douyin\.com\/video\/([^/?#]+)/i);
+    || normalizedUrl.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
   return String(match?.[1] || '').trim().toLowerCase();
 }
 
@@ -40,6 +40,17 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
   const supportedTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
     ? report.capabilities.canRunTaskTypes
     : [];
+  const readinessReasonCode = String(report?.readiness?.reasonCode || '').trim();
+  const platformBlocked = Boolean(report?.contextSnapshot?.platformBlocked)
+    || readinessReasonCode === REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE;
+
+  if (platformBlocked && !report?.readiness?.ready) {
+    return {
+      accepted: false,
+      reasonCode: readinessReasonCode || REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE,
+      reasonMessage: String(report?.readiness?.reasonMessage || '平台触发了安全验证，请先完成验证后继续').trim(),
+    };
+  }
 
   if (!supportedTaskTypes.includes(String(taskType || '').trim())) {
     return {

@@ -20,6 +20,8 @@ export function mapTaskControlToInternalCommand(taskControl = {}, { tabId = null
     action,
     payload: {
       tabId,
+      command: String(taskControl.action || '').trim(),
+      taskControl,
     },
     taskMeta: {
       externalTaskId: String(taskControl.taskId || '').trim(),

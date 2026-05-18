@@ -990,6 +990,10 @@ test('task poller maps stopped status to final stopped patch with partial result
           itemsPlanned: 3,
           itemsSucceeded: 1,
           failedItems: 0,
+          totalComments: 6,
+          targetIds: ['7001', '7002', '7003'],
+          contentIds: ['dy_7001'],
+          failedTargets: [{ awemeId: '7002', error: 'comment api blocked' }],
         },
         records: {
           notes: [],
@@ -1018,6 +1022,10 @@ test('task poller maps stopped status to final stopped patch with partial result
         itemsPlanned: 3,
         itemsSucceeded: 1,
         failedItems: 0,
+        totalComments: 6,
+        targetIds: ['7001', '7002', '7003'],
+        contentIds: ['dy_7001'],
+        failedTargets: [{ awemeId: '7002', error: 'comment api blocked' }],
         records: {
           notes: [],
           comments: [

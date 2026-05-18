@@ -832,6 +832,10 @@ export default function App() {
       showNotice('请先配置工作台地址。', 'warning');
       return;
     }
+    if (platform === PLATFORM.UNKNOWN) {
+      showNotice('请先打开小红书或抖音页面，再同步采集数据。', 'warning');
+      return;
+    }
     await withBusyAction('syncFlywheel', async () => {
       hideNotice();
       await sendToBackground(MSG.SAVE_FLYWHEEL_CONFIG, { config: { serverUrl, enabled: true } });
@@ -840,11 +844,13 @@ export default function App() {
       setProgressTotal(1);
       setProgressStatus('正在读取本地数据...');
       try {
-        const xhsTabs = await chrome.tabs.query({ url: '*://*.xiaohongshu.com/*' });
-        const dataTabId = xhsTabs.find(t => t.id === tabId)?.id || xhsTabs[0]?.id;
+        const dataTabQuery = platform === PLATFORM.DOUYIN ? '*://*.douyin.com/*' : '*://*.xiaohongshu.com/*';
+        const platformText = platform === PLATFORM.DOUYIN ? '抖音' : '小红书';
+        const dataTabs = await chrome.tabs.query({ url: dataTabQuery });
+        const dataTabId = dataTabs.find(t => t.id === tabId)?.id || dataTabs[0]?.id;
         if (!dataTabId) {
           setProgressVisible(false);
-          showNotice('请先打开小红书页面，插件需要通过页面读取采集数据。', 'warning');
+          showNotice(`请先打开${platformText}页面，插件需要通过页面读取采集数据。`, 'warning');
           return;
         }
 
@@ -860,11 +866,11 @@ export default function App() {
 
         if (!notes || notes.length === 0) {
           setProgressVisible(false);
-          showNotice('没有可同步的数据。请先在小红书页面采集笔记。', 'warning');
+          showNotice(`没有可同步的数据。请先在${platformText}页面采集内容。`, 'warning');
           return;
         }
 
-        setProgressStatus(`正在发送 ${notes.length} 条笔记到飞轮...`);
+        setProgressStatus(`正在发送 ${notes.length} 条${platformText}内容到飞轮...`);
 
         const result = await sendToBackground(MSG.SYNC_TO_WORKBENCH, {
           notes: notes.map(mapNoteToFlywheel),
@@ -885,7 +891,7 @@ export default function App() {
         showNotice(`发送失败：${err.message || '网络错误'}`, 'warning');
       }
     });
-  }, [flywheelUrl, tabId, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
+  }, [flywheelUrl, tabId, platform, hideNotice, showNotice, withBusyAction, requirePluginAuthorization]);
 
   const handleGetCookies = useCallback(async () => {
     if (!requirePluginAuthorization()) return;
@@ -919,9 +925,24 @@ export default function App() {
             loadAccounts();
           }
 
+          if (platform === PLATFORM.DOUYIN && dy?.count > 0) {
+            const name = `抖音-${new Date().toLocaleDateString('zh-CN')} ${new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })}`;
+            await sendToBackground('addAccount', {
+              name,
+              cookieJson: JSON.stringify(dy.cookies),
+              platform: 'douyin',
+              dailyQuotaLimit: 100,
+            });
+            loadAccounts();
+          }
+
           const currentResult = platform === PLATFORM.DOUYIN ? dy : xhs;
           const currentLabel = platform === PLATFORM.DOUYIN ? '抖音' : '小红书';
-          const accountNote = platform === PLATFORM.XHS && xhs?.count > 0 ? '，小红书 Cookie 已自动保存为采集账号。' : '';
+          const accountNote = platform === PLATFORM.XHS && xhs?.count > 0
+            ? '，小红书 Cookie 已自动保存为采集账号。'
+            : platform === PLATFORM.DOUYIN && dy?.count > 0
+              ? '，抖音 Cookie 已自动保存为采集账号。'
+              : '';
           showNotice(`获取成功：${currentLabel} ${currentResult?.count || 0} 条${accountNote}`, 'success');
         } else {
           showNotice(`获取 Cookie 失败，请确认当前${platformText}页面已登录。`, 'warning');
@@ -1224,15 +1245,17 @@ export default function App() {
         open={addAccountModalOpen}
         onClose={() => setAddAccountModalOpen(false)}
         onConfirm={handleAddAccount}
+        currentPlatform={platform}
         onExtractCookie={async () => {
           try {
-            const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES, { platform: PLATFORM.XHS });
-            const xhs = result?.results?.xhs;
+            const result = await sendToBackground(MSG.GET_PLATFORM_COOKIES, { platform });
+            const current = platform === PLATFORM.DOUYIN ? result?.results?.douyin : result?.results?.xhs;
+            const currentLabel = platform === PLATFORM.DOUYIN ? '抖音' : '小红书';
             return {
-              success: Number(xhs?.count || 0) > 0,
-              cookies: Number(xhs?.count || 0) > 0 ? xhs.cookies : null,
+              success: Number(current?.count || 0) > 0,
+              cookies: Number(current?.count || 0) > 0 ? current.cookies : null,
               allResults: result?.results,
-              error: result?.success ? null : '未检测到小红书 Cookie',
+              error: result?.success ? null : `未检测到${currentLabel} Cookie`,
             };
           } catch (err) {
             return { success: false, error: err.message };

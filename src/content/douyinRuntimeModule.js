@@ -10,6 +10,7 @@ import {
   isStrictDouyinDetailPage,
   extractDouyinContentId as extractDouyinContentIdImpl,
 } from '../platforms/douyin/pageDetector.js';
+import { detectDouyinSecurityChallenge } from '../platforms/douyin/securityChallenge.js';
 
 export {
   DouyinAdapter,
@@ -23,6 +24,7 @@ export {
   downloadDouyinCommentImages,
   detectDouyinPageType,
   detectDouyinSearchBatchContext,
+  detectDouyinSecurityChallenge,
   isStrictDouyinDetailPage,
 };
 

@@ -10,6 +10,7 @@ import { mediaAssetStore } from '../db/mediaAssetStore.js';
 import { backfillLegacyAiReadyFields } from '../db/legacyDataMaintenance.js';
 import { buildCapabilityReport } from '../workbench/runtime/capabilityReportBuilder.js';
 import { createResultPackager } from '../workbench/runtime/resultPackager.js';
+import { REMOTE_ERROR_CODE } from '../workbench/protocol/schema.js';
 
 export function createContentDataRuntime({
   MSG,
@@ -61,6 +62,32 @@ export function createContentDataRuntime({
   async function getPageContext() {
     if (isDouyinPage()) {
       const douyinRuntime = await loadDouyinRuntime();
+      const hasSecurityChallenge = douyinRuntime.detectDouyinSecurityChallenge({
+        root: document,
+        href: window.location.href,
+      });
+      if (hasSecurityChallenge) {
+        return buildCapabilityReport({
+          platform: 'douyin',
+          mode: 'unknown',
+          pageType: 'unknown',
+          url: window.location.href,
+          platformBlocked: true,
+          blockReasonCode: REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE,
+          blockReasonMessage: '检测到抖音安全验证，请先完成验证后继续操作',
+          capabilities: {
+            canCollectPrimary: false,
+            canCollectSecondary: false,
+            canCollectAuthor: false,
+            canCollectComments: false,
+            canDownloadCommentImages: false,
+            canBatchNotes: false,
+            canBatchComments: false,
+            secondaryAction: 'none',
+          },
+        });
+      }
+
       const page = douyinRuntime.detectDouyinPageType();
       const searchContext = douyinRuntime.detectDouyinSearchBatchContext(window);
       const isDyVideoPage = page.type === 'videoDetail' || page.type === 'noteDetail';

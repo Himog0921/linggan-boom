@@ -251,6 +251,47 @@ test('sendToParent uses nonce from dashboard URL when storage has not caught up'
   }
 });
 
+test('sendToParent falls back to local storage nonce when session storage is empty', async () => {
+  const payloads = [];
+  globalThis.chrome = {
+    storage: {
+      session: {
+        async get() {
+          return {};
+        },
+      },
+      local: {
+        async get() {
+          return { dashboardNonce: 'local-nonce-1' };
+        },
+      },
+    },
+  };
+  globalThis.window = {
+    location: {
+      href: 'chrome-extension://lgboom/dashboard.html',
+      search: '',
+      hash: '',
+    },
+    parent: {
+      postMessage(payload, _targetOrigin, ports) {
+        payloads.push(payload);
+        ports[0].postMessage({ success: true, data: [{ noteId: 'n1' }] });
+      },
+    },
+  };
+
+  try {
+    const response = await sendToParent('getAllNotes', {}, { timeoutMs: 500 });
+
+    assert.equal(payloads[0].nonce, 'local-nonce-1');
+    assert.deepEqual(response, { success: true, data: [{ noteId: 'n1' }] });
+  } finally {
+    delete globalThis.chrome;
+    delete globalThis.window;
+  }
+});
+
 test('dashboard bridge keeps the nonce out of iframe URL for first load', async () => {
   const appended = [];
   const storageWrites = [];
@@ -263,7 +304,13 @@ test('dashboard bridge keeps the nonce out of iframe URL for first load', async 
     storage: {
       session: {
         async set(value) {
-          storageWrites.push(value);
+          storageWrites.push({ area: 'session', value });
+        },
+        async remove() {},
+      },
+      local: {
+        async set(value) {
+          storageWrites.push({ area: 'local', value });
         },
         async remove() {},
       },
@@ -314,8 +361,8 @@ test('dashboard bridge keeps the nonce out of iframe URL for first load', async 
     const iframe = appended.find((node) => node.tagName === 'iframe');
     assert.ok(iframe);
     assert.equal(iframe.src, 'chrome-extension://lgboom/dashboard.html');
-    assert.equal(storageWrites.length, 1);
-    assert.ok(storageWrites[0].dashboardNonce);
+    assert.deepEqual(storageWrites.map((write) => write.area).sort(), ['local', 'session']);
+    assert.ok(storageWrites.every((write) => write.value.dashboardNonce));
   } finally {
     delete globalThis.chrome;
     delete globalThis.document;

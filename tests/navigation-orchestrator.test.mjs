@@ -29,6 +29,16 @@ test('douyin.batchNotes keeps full video urls intact for detail probe navigation
   );
 });
 
+test('douyin.batchNotes keeps full note urls intact for detail probe navigation', () => {
+  const noteUrl = 'https://www.douyin.com/note/7321309610927770930';
+
+  assert.equal(buildTaskNavigationUrl('douyin.batchNotes', noteUrl), noteUrl);
+  assert.equal(
+    buildTaskNavigationUrl('douyin.batchNotes', noteUrl, { targetPageType: 'detail' }),
+    noteUrl,
+  );
+});
+
 test('batchNotes still builds search urls for keyword targets', () => {
   assert.equal(
     buildTaskNavigationUrl('xhs.batchNotes', '数学启蒙'),

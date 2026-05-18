@@ -42,7 +42,30 @@ function isTabContextError(message = '') {
   return /Receiving end does not exist|context invalidated|The message port closed/i.test(String(message || ''));
 }
 
-export function sendToTab(tabId, payload, { allowContextError = false, timeoutMs = 0 } = {}) {
+async function reinjectContentScript(tabId, {
+  contentScriptFiles = ['vendor.js', 'content.js'],
+  contentCssFiles = ['content.css'],
+} = {}) {
+  if (!chrome?.scripting?.executeScript) {
+    throw new Error('chrome.scripting.executeScript unavailable');
+  }
+  if (Array.isArray(contentCssFiles) && contentCssFiles.length > 0 && chrome?.scripting?.insertCSS) {
+    try {
+      await chrome.scripting.insertCSS({
+        target: { tabId },
+        files: contentCssFiles,
+      });
+    } catch {
+      // CSS is helpful for the floating UI, but message recovery only requires JS.
+    }
+  }
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: contentScriptFiles,
+  });
+}
+
+function sendRawToTab(tabId, payload, { allowContextError = false, timeoutMs = 0 } = {}) {
   return new Promise((resolve, reject) => {
     const timer = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
       ? setTimeout(() => {
@@ -74,6 +97,25 @@ export function sendToTab(tabId, payload, { allowContextError = false, timeoutMs
       resolve(response || { success: true });
     });
   });
+}
+
+export async function sendToTab(tabId, payload, {
+  allowContextError = false,
+  timeoutMs = 0,
+  autoReconnect = false,
+  contentScriptFiles,
+  contentCssFiles,
+} = {}) {
+  try {
+    return await sendRawToTab(tabId, payload, { allowContextError, timeoutMs });
+  } catch (error) {
+    const message = String(error?.message || error || '');
+    if (!autoReconnect || allowContextError || !isTabContextError(message)) {
+      throw error;
+    }
+    await reinjectContentScript(tabId, { contentScriptFiles, contentCssFiles });
+    return sendRawToTab(tabId, payload, { allowContextError, timeoutMs });
+  }
 }
 
 /**

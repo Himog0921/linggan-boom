@@ -8,8 +8,11 @@ function generateNonce() {
 
 async function storeDashboardNonce(nonce) {
   try {
-    const area = chrome.storage.session || chrome.storage.local;
-    await area.set({ dashboardNonce: nonce, dashboardNonceAt: Date.now() });
+    const payload = { dashboardNonce: nonce, dashboardNonceAt: Date.now() };
+    const areas = [chrome.storage.session, chrome.storage.local]
+      .filter(Boolean)
+      .filter((area, index, list) => list.indexOf(area) === index);
+    await Promise.all(areas.map((area) => area.set(payload)));
   } catch (e) {
     console.error('[DashboardBridge] Failed to store nonce:', e);
   }
@@ -17,8 +20,10 @@ async function storeDashboardNonce(nonce) {
 
 async function clearDashboardNonce() {
   try {
-    const area = chrome.storage.session || chrome.storage.local;
-    await area.remove(['dashboardNonce', 'dashboardNonceAt']);
+    const areas = [chrome.storage.session, chrome.storage.local]
+      .filter(Boolean)
+      .filter((area, index, list) => list.indexOf(area) === index);
+    await Promise.all(areas.map((area) => area.remove(['dashboardNonce', 'dashboardNonceAt'])));
   } catch (e) {
     // ignore
   }

@@ -31,7 +31,7 @@ function isXhsDetailUrl(url = '') {
 }
 
 function isDouyinDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?douyin\.com\/video\/[^/?#]+/i.test(String(url || '').trim());
+  return /^https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/[^/?#]+/i.test(String(url || '').trim());
 }
 
 function shouldPreserveDetailTarget(taskType, target, options = {}) {

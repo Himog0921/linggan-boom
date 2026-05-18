@@ -460,13 +460,7 @@ export function getExportColumns(tab, allData) {
 export async function sendToParent(action, data = {}, options = {}) {
   let nonce = readDashboardNonceFromUrl();
   if (!nonce) {
-    try {
-      const area = chrome.storage.session || chrome.storage.local;
-      const result = await area.get(['dashboardNonce']);
-      nonce = result.dashboardNonce || '';
-    } catch (e) {
-      console.error('[Dashboard] Failed to read nonce:', e);
-    }
+    nonce = await readDashboardNonceFromStorage();
   }
 
   return new Promise((resolve) => {
@@ -489,6 +483,25 @@ export async function sendToParent(action, data = {}, options = {}) {
       }, timeoutMs);
     }
   });
+}
+
+async function readDashboardNonceFromStorage() {
+  const areas = [
+    globalThis.chrome?.storage?.session,
+    globalThis.chrome?.storage?.local,
+  ].filter(Boolean);
+
+  for (const area of areas) {
+    try {
+      const result = await area.get(['dashboardNonce']);
+      const nonce = String(result?.dashboardNonce || '').trim();
+      if (nonce) return nonce;
+    } catch (e) {
+      console.error('[Dashboard] Failed to read nonce:', e);
+    }
+  }
+
+  return '';
 }
 
 function readDashboardNonceFromUrl() {

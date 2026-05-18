@@ -14,6 +14,7 @@ import {
 } from '../sync/flywheelSync.js';
 import { validateCapabilityCheck, validateTaskControl, validateTaskEnvelope } from '../workbench/protocol/validator.js';
 import {
+  REMOTE_ERROR_CODE,
   WORKBENCH_EVENT_SOURCE,
   WORKBENCH_MESSAGE_TYPE,
   WORKBENCH_PROTOCOL_VERSION,
@@ -227,7 +228,7 @@ function isXhsDetailUrl(url = '') {
 }
 
 function isDouyinDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?douyin\.com\/video\/[^/?#]+/i.test(String(url || '').trim());
+  return /^https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/[^/?#]+/i.test(String(url || '').trim());
 }
 
 function normalizeString(value = '') {
@@ -246,7 +247,7 @@ function extractXhsDetailIdFromUrl(url = '') {
 function extractDouyinDetailIdFromUrl(url = '') {
   const raw = normalizeString(url);
   if (!raw) return '';
-  const match = raw.match(/douyin\.com\/video\/([^/?#]+)/i);
+  const match = raw.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
   return normalizeString(match?.[1] || '').replace(/^dy_/, '');
 }
 
@@ -283,6 +284,49 @@ function getTaskStrategy(task = {}) {
 function isRecoverableConnectionError(error) {
   const message = String(error?.message || error || '');
   return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout/i.test(message);
+}
+
+function buildContentScriptUnavailableCapabilityResponse({ task = {}, error = null } = {}) {
+  const target = task.target || {};
+  const platform = normalizeString(task.platform);
+  const pageType = normalizeString(target.pageType);
+  const url = normalizeString(target.url || task.target);
+  const technicalMessage = normalizeString(error?.message || error || 'content_script_unavailable');
+
+  return {
+    success: true,
+    accepted: false,
+    error: REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE,
+    reasonCode: REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE,
+    reasonMessage: '当前页面没有加载插件内容脚本，请刷新页面，或确认正在使用已加载灵感爆爆爆插件的抖音/小红书页面。',
+    recommendedAction: 'reload_supported_page_with_plugin',
+    report: {
+      type: WORKBENCH_MESSAGE_TYPE.CAPABILITY_REPORT,
+      protocolVersion: WORKBENCH_PROTOCOL_VERSION,
+      contextVersion: WORKBENCH_PROTOCOL_VERSION,
+      supportedProtocolVersions: [WORKBENCH_PROTOCOL_VERSION],
+      platform,
+      mode: pageType,
+      pageType,
+      url,
+      isStableSearchList: false,
+      isDyVideoPage: false,
+      isDyStrictDetailPage: false,
+      capabilities: {
+        canRunTaskTypes: [],
+      },
+      readiness: {
+        ready: false,
+        reasonCode: REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE,
+        reasonMessage: '当前页面没有加载插件内容脚本',
+      },
+      recommendedNextAction: 'reload_supported_page_with_plugin',
+      contextSnapshot: {
+        contentScriptLoaded: false,
+        technicalMessage,
+      },
+    },
+  };
 }
 
 function isSignedXhsShareUrl(url = '') {
@@ -459,6 +503,7 @@ export {
   normalizeWorkbenchTaskTarget,
   resolveRiskControlAccountId,
   buildRiskControlActiveTaskPatch,
+  buildContentScriptUnavailableCapabilityResponse,
   resolvePreferredTaskTarget,
   scoreTaskTabCandidate,
   selectReachableTaskTab,
@@ -693,6 +738,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
 function sendToTab(tabId, payload, options = {}) {
   return sendSharedToTab(tabId, payload, {
+    autoReconnect: true,
     timeoutMs: 10000,
     ...options,
   });
@@ -1520,10 +1566,18 @@ const bgHandlers = {
       return { success: false, accepted: false, error: 'No tabId' };
     }
 
-    const response = await sendToTab(tabId, { action: MSG.GET_PAGE_CONTEXT }, {
-      allowContextError: false,
-      timeoutMs: 4000,
-    });
+    let response;
+    try {
+      response = await sendToTab(tabId, { action: MSG.GET_PAGE_CONTEXT }, {
+        allowContextError: false,
+        timeoutMs: 4000,
+      });
+    } catch (error) {
+      if (isRecoverableConnectionError(error)) {
+        return buildContentScriptUnavailableCapabilityResponse({ task, error });
+      }
+      throw error;
+    }
     const report = response?.context || null;
     const decision = canDispatchTaskFromCapabilityReport(report, task.taskType, task.target);
     return {
@@ -1808,12 +1862,12 @@ const taskDeltaReporter = createTaskDeltaReporter({
 const taskPoller = createTaskPoller({
   beforeDispatch: async (task) => {
     const platform = String(task.platform || '').trim();
-    if (platform !== 'xhs') return { shouldPause: false };
+    if (platform !== 'xhs' && platform !== 'douyin') return { shouldPause: false };
     const account = await selectAvailableAccount(platform);
     if (!account) {
       return { shouldPause: true, reason: 'no_available_account' };
     }
-    const result = await injectCookiesForAccount(account.cookieJson);
+    const result = await injectCookiesForAccount(account.cookieJson, platform);
     if (!result.success) {
       return { shouldPause: true, reason: 'cookie_injection_failed' };
     }
@@ -1822,7 +1876,7 @@ const taskPoller = createTaskPoller({
   afterDispatchSuccess: async (task, preCheck = {}) => {
     const platform = String(task?.platform || '').trim();
     const accountId = String(preCheck?.accountId || '').trim();
-    if (platform !== 'xhs' || !accountId) return;
+    if ((platform !== 'xhs' && platform !== 'douyin') || !accountId) return;
     await accountStore.updateUsage(accountId);
   },
   consumePendingAccountUsage: async (accountId) => {

@@ -1,4 +1,5 @@
 import { detectDouyinPageType, detectDouyinSearchBatchContext, getDouyinSearchTabType, DY_PAGE_TYPE } from './pageDetector.js';
+import { detectDouyinSecurityChallenge } from './securityChallenge.js';
 import { renderButtonGroup, unmountButtonGroup } from '../../content/components/ButtonGroup.jsx';
 import { renderTaskControlBar, unmountTaskControlBar } from '../../content/components/TaskControlBar.jsx';
 import { showDouyinToast } from '../../content/components/Toast.jsx';
@@ -25,6 +26,10 @@ export function injectDouyinUI() {
       unmountButtonGroup(el);
       el.remove();
     });
+
+    if (detectDouyinSecurityChallenge({ root: document, href: window.location.href })) {
+      return;
+    }
 
     switch (page.type) {
       case DY_PAGE_TYPE.VIDEO_DETAIL:

@@ -99,6 +99,30 @@ test('douyin selector preflight requires detail page signal before collecting co
   assert.equal(fail.code, 'selector_missing');
 });
 
+test('douyin selector preflight blocks actions on security verification pages', () => {
+  const document = createDocument({
+    '[class*="captcha"]': { offsetHeight: 32 },
+  });
+  document.body = { innerText: '请完成下列验证后继续' };
+
+  const result = runDouyinSelectorPreflight('dy_collectComments', {
+    document,
+    win: {
+      location: {
+        href: 'https://www.douyin.com/video/123',
+        pathname: '/video/123',
+        search: '',
+        origin: 'https://www.douyin.com',
+      },
+      document,
+    },
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'security_challenge');
+  assert.match(result.message, /安全验证/);
+});
+
 test('douyin selector bootstrap probe inspects current detail route without waiting for a click', () => {
   const detailDocument = createDocument({
     video: { nodeType: 1 },
@@ -119,4 +143,28 @@ test('douyin selector bootstrap probe inspects current detail route without wait
   assert.equal(result.action, 'bootstrap');
   assert.equal(result.ok, true);
   assert.equal(result.checks[1].name, 'detailDom');
+});
+
+test('douyin selector bootstrap reports security verification before page type checks', () => {
+  const document = createDocument({
+    'iframe[src*="captcha"]': { offsetHeight: 320 },
+  });
+
+  const result = runDouyinSelectorBootstrapProbe({
+    document,
+    win: {
+      location: {
+        href: 'https://www.douyin.com/video/123',
+        pathname: '/video/123',
+        search: '',
+        origin: 'https://www.douyin.com',
+      },
+      document,
+    },
+  });
+
+  assert.equal(result.action, 'bootstrap');
+  assert.equal(result.ok, false);
+  assert.equal(result.code, 'security_challenge');
+  assert.equal(result.checks[0].name, 'securityChallenge');
 });

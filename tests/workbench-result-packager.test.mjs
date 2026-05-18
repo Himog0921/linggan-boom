@@ -19,7 +19,12 @@ test('buildResultSummary counts records and failed items', () => {
     ],
     runRecord: {
       itemsPlanned: 5,
+      itemsSucceeded: 3,
       itemsFailed: 2,
+      totalComments: 7,
+      targetIds: [' n1 ', '', 'n2'],
+      contentIds: [' xhs_n1 ', 'xhs_n2'],
+      failedTargets: [{ noteId: 'n3', error: 'timeout' }, null],
       completionNote: '这轮原计划建档 50 条，但当前主页最终只发现 28 条可采作品，所以先按现有作品完成建档。',
       requestedCount: 50,
       discoveredCount: 28,
@@ -32,7 +37,12 @@ test('buildResultSummary counts records and failed items', () => {
   assert.equal(summary.authors, 1);
   assert.equal(summary.mediaAssets, 2);
   assert.equal(summary.downloadedMediaAssets, 1);
+  assert.equal(summary.itemsSucceeded, 3);
   assert.equal(summary.failedItems, 2);
+  assert.equal(summary.totalComments, 7);
+  assert.deepEqual(summary.targetIds, ['n1', 'n2']);
+  assert.deepEqual(summary.contentIds, ['xhs_n1', 'xhs_n2']);
+  assert.deepEqual(summary.failedTargets, [{ noteId: 'n3', error: 'timeout' }]);
   assert.equal(summary.completionNote, '这轮原计划建档 50 条，但当前主页最终只发现 28 条可采作品，所以先按现有作品完成建档。');
   assert.equal(summary.requestedCount, 50);
   assert.equal(summary.discoveredCount, 28);
@@ -59,6 +69,13 @@ test('createResultPackager packages one run with records and summary', async () 
         platform: 'douyin',
         taskType: 'batchComments',
         status: 'done',
+        itemsPlanned: 2,
+        itemsSucceeded: 1,
+        itemsFailed: 1,
+        totalComments: 2,
+        targetIds: ['7001', '7002'],
+        contentIds: ['dy_7001'],
+        failedTargets: [{ awemeId: '7002', error: 'comment api blocked' }],
       }),
       markResultUploadStatus: async (runId, status, patch = {}) => {
         calls.push([runId, status, patch]);
@@ -83,6 +100,10 @@ test('createResultPackager packages one run with records and summary', async () 
   assert.equal(result.collectionRunId, 'run_1');
   assert.equal(result.platform, 'douyin');
   assert.equal(result.resultSummary.comments, 2);
+  assert.deepEqual(result.resultSummary.targetIds, ['7001', '7002']);
+  assert.deepEqual(result.resultSummary.contentIds, ['dy_7001']);
+  assert.deepEqual(result.resultSummary.failedTargets, [{ awemeId: '7002', error: 'comment api blocked' }]);
+  assert.equal(result.resultSummary.totalComments, 2);
   assert.equal(result.records.notes.length, 1);
   assert.equal(result.records.authors.length, 1);
   assert.equal(calls[0][0], 'run_1');

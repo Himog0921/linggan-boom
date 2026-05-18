@@ -3,6 +3,7 @@ import { getUnifiedAuthorHandle } from '../shared/utils.js';
 import {
   MONITOR_RECORD_MODE,
   MONITOR_TASK_STRATEGY,
+  REMOTE_TASK_CONTROL_ACTION,
 } from '../workbench/protocol/schema.js';
 import {
   buildDouyinSurfaceNoteRecords,
@@ -70,6 +71,92 @@ export function createContentMessageHandlers({
   });
 
   const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
+
+  const activeRemoteControls = new Map();
+  const normalizeControlKey = (value = '') => String(value || '').trim();
+
+  function createRemoteControlHandle() {
+    let paused = false;
+    let stopped = false;
+    let pauseResolve = null;
+
+    const releasePause = () => {
+      if (pauseResolve) {
+        pauseResolve();
+        pauseResolve = null;
+      }
+    };
+
+    return {
+      shouldStop: () => stopped,
+      async waitIfPaused() {
+        while (paused && !stopped) {
+          await new Promise((resolve) => {
+            pauseResolve = resolve;
+          });
+        }
+      },
+      apply(action = '') {
+        const normalizedAction = String(action || '').trim();
+        if (normalizedAction === REMOTE_TASK_CONTROL_ACTION.PAUSE) {
+          if (stopped) return { success: false, accepted: false, error: 'task_already_stopped' };
+          paused = true;
+          return { success: true, accepted: true, status: 'paused' };
+        }
+        if (normalizedAction === REMOTE_TASK_CONTROL_ACTION.RESUME) {
+          if (stopped) return { success: false, accepted: false, error: 'task_already_stopped' };
+          paused = false;
+          releasePause();
+          return { success: true, accepted: true, status: 'running' };
+        }
+        if (
+          normalizedAction === REMOTE_TASK_CONTROL_ACTION.STOP
+          || normalizedAction === REMOTE_TASK_CONTROL_ACTION.DELETE
+        ) {
+          stopped = true;
+          paused = false;
+          releasePause();
+          return { success: true, accepted: true, status: 'stopping' };
+        }
+        return { success: false, accepted: false, error: 'unsupported_control_action' };
+      },
+    };
+  }
+
+  function bindRemoteControl({ remoteRun = null, remoteTaskMeta = {} } = {}) {
+    const control = createRemoteControlHandle();
+    const keys = [
+      remoteTaskMeta?.externalTaskId,
+      remoteRun?.collectionRunId,
+    ].map(normalizeControlKey).filter(Boolean);
+    keys.forEach((key) => activeRemoteControls.set(key, control));
+
+    return {
+      control,
+      release() {
+        keys.forEach((key) => {
+          if (activeRemoteControls.get(key) === control) {
+            activeRemoteControls.delete(key);
+          }
+        });
+      },
+    };
+  }
+
+  function findRemoteControl(msg = {}) {
+    const taskControl = msg.taskControl || {};
+    const keys = [
+      taskControl.taskId,
+      taskControl.collectionRunId,
+      msg.taskId,
+      msg.collectionRunId,
+    ].map(normalizeControlKey).filter(Boolean);
+    for (const key of keys) {
+      const control = activeRemoteControls.get(key);
+      if (control) return control;
+    }
+    return null;
+  }
 
   const inferSingleNoteFailureReasonCode = (message = '') => {
     if (/未稳定就绪|未找到笔记数据|数据结构异常|加载/i.test(message)) {
@@ -330,6 +417,10 @@ export function createContentMessageHandlers({
           },
         });
         const runCommentCollection = async (remoteRun = null) => {
+          const controlBinding = bindRemoteControl({
+            remoteRun,
+            remoteTaskMeta: msg.externalTaskMeta,
+          });
           try {
             const result = await collectDouyinComments({
               maxTotal,
@@ -339,6 +430,8 @@ export function createContentMessageHandlers({
               commentDepthMode,
               collectionRunId: remoteRun?.collectionRunId || '',
               manageCollectionRun: !remoteRun?.collectionRunId,
+              shouldStop: controlBinding.control.shouldStop,
+              waitIfPaused: controlBinding.control.waitIfPaused,
             });
             await finalizeRemoteRun(
               remoteRun,
@@ -364,6 +457,8 @@ export function createContentMessageHandlers({
               itemsFailed: 1,
             });
             throw error;
+          } finally {
+            controlBinding.release();
           }
         };
 
@@ -418,12 +513,18 @@ export function createContentMessageHandlers({
         },
       });
       const runImageDownload = async (remoteRun = null) => {
+        const controlBinding = bindRemoteControl({
+          remoteRun,
+          remoteTaskMeta: msg.externalTaskMeta,
+        });
         try {
           const result = await downloadDouyinCommentImages({
             maxTotal,
             maxSubComments,
             commentDepthMode,
             collectionRunId: remoteRun?.collectionRunId || '',
+            shouldStop: controlBinding.control.shouldStop,
+            waitIfPaused: controlBinding.control.waitIfPaused,
           });
           const hasUsefulResult = Boolean(result?.success) || Number(result?.downloaded || 0) > 0 || Number(result?.total || 0) === 0;
           if (!hasUsefulResult && !result?.stopped) {
@@ -461,6 +562,8 @@ export function createContentMessageHandlers({
             itemsFailed: 1,
           });
           throw error;
+        } finally {
+          controlBinding.release();
         }
       };
 
@@ -727,6 +830,25 @@ export function createContentMessageHandlers({
       success: true,
       context: typeof getPageContext === 'function' ? await getPageContext() : null,
     }),
+
+    [MSG.WORKBENCH_TASK_CONTROL]: async (msg = {}) => {
+      const taskControl = msg.taskControl || {};
+      const action = String(taskControl.action || msg.command || '').trim();
+      const control = findRemoteControl(msg);
+      if (!control) {
+        return {
+          success: false,
+          accepted: false,
+          error: 'no_active_remote_control_task',
+        };
+      }
+
+      return {
+        ...control.apply(action),
+        taskId: String(taskControl.taskId || msg.taskId || '').trim(),
+        controlAction: action,
+      };
+    },
 
     [MSG.WORKBENCH_GET_RESULT_PACKAGE]: async (msg = {}) => {
       const collectionRunId = String(msg.collectionRunId || '').trim();

@@ -65,3 +65,25 @@ test('floating inject button groups can be dragged and remember position without
   assert.match(douyinSource, /floatingKey:\s*'douyin\.search'/);
   assert.match(douyinSource, /floatingKey:\s*'douyin\.profile'/);
 });
+
+test('douyin floating action buttons are cleared when platform verification is visible', () => {
+  const douyinSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/uiInjector.js'), 'utf8');
+  const douyinAdapterSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/index.js'), 'utf8');
+
+  assert.match(douyinSource, /from '\.\/securityChallenge\.js'/);
+  assert.match(
+    douyinSource,
+    /document\.querySelectorAll\('\.lgboom-dy-btn-group'\)[\s\S]*detectDouyinSecurityChallenge\(\{ root: document, href: window\.location\.href \}\)/,
+    'douyin UI injection should clear old action buttons before returning on verification pages',
+  );
+  assert.match(
+    douyinAdapterSource,
+    /currentSecurityChallenge !== lastSecurityChallenge/,
+    'douyin route observer should notice verification overlays even when the URL does not change',
+  );
+  assert.match(
+    douyinAdapterSource,
+    /securityChallenge \|\| \(page\.type !== DY_PAGE_TYPE\.UNKNOWN && page\.type !== DY_PAGE_TYPE\.HOME\)/,
+    'douyin injection should run once to remove stale buttons when verification is detected',
+  );
+});

@@ -184,7 +184,7 @@ function extractProfileIdentity(url = '') {
 function extractDetailIdentity(url = '') {
   const text = String(url || '').trim();
   const match = text.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
-    || text.match(/douyin\.com\/video\/([^/?#]+)/i);
+    || text.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
   return String(match?.[1] || '').trim().toLowerCase();
 }
 

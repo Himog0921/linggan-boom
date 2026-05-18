@@ -14,8 +14,17 @@ import { createCollectionRunHeartbeatReporter } from '../../workbench/runtime/he
 import { buildDouyinSurfaceNoteRecords } from '../../workbench/runtime/monitorTask.js';
 import { pauseForDouyinSecurityChallenge } from './securityChallenge.js';
 import { MONITOR_RECORD_MODE, MONITOR_TASK_STRATEGY } from '../../workbench/protocol/schema.js';
+import {
+  buildDouyinBatchCommentsRunPatch,
+  buildDouyinBatchVideosRunPatch,
+} from '../../workbench/runtime/douyinBatchRunHelper.js';
 
 const reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
+
+export function emitDouyinBatchProgress(onProgress, payload = {}) {
+  if (typeof onProgress !== 'function') return;
+  void Promise.resolve(onProgress(payload)).catch(() => {});
+}
 
 function normalizeTargetIdentity(value = '') {
   return String(value || '').trim().toLowerCase();
@@ -524,7 +533,7 @@ export async function batchCollectDouyinProfileVideos({
     const stopped = shouldStop();
     const firstError = results.find((item) => !item.ok && item.error)?.error || '';
     const summary = {
-      itemsPlanned: targets.length,
+      ...buildDouyinBatchVideosRunPatch({ targets, results }),
       itemsSucceeded: success,
       itemsFailed: failed,
       results,
@@ -539,13 +548,13 @@ export async function batchCollectDouyinProfileVideos({
     }
 
     const finalLabel = stopped ? '已停止' : (success > 0 ? '已完成' : '失败');
-    onProgress?.({
+    emitDouyinBatchProgress(onProgress, {
       taskState: stopped ? 'idle' : 'done',
       stage: 'done',
       current: targets.length,
       total: targets.length,
       message: `${finalLabel}：成功 ${success} 条，失败 ${failed} 条（共 ${targets.length} 条）`,
-    }).catch(() => {});
+    });
 
     return {
       ok: success > 0,
@@ -834,7 +843,7 @@ export async function batchCollectDouyinProfileComments({
     const stopped = shouldStop();
     const firstError = results.find((item) => !item.ok && item.error)?.error || '';
     const summary = {
-      itemsPlanned: targets.length,
+      ...buildDouyinBatchCommentsRunPatch({ targets, results, totalComments }),
       itemsSucceeded: success,
       itemsFailed: failed,
       totalComments,
@@ -850,13 +859,13 @@ export async function batchCollectDouyinProfileComments({
     }
 
     const commentFinalLabel = stopped ? '已停止' : (success > 0 ? '已完成' : '失败');
-    onProgress?.({
+    emitDouyinBatchProgress(onProgress, {
       taskState: stopped ? 'idle' : 'done',
       stage: 'done',
       current: targets.length,
       total: targets.length,
       message: `${commentFinalLabel}：成功 ${success} 条，评论 ${totalComments} 条（共 ${targets.length} 个视频）`,
-    }).catch(() => {});
+    });
 
     return {
       ok: success > 0,

@@ -189,7 +189,7 @@ if (isContextValid()) {
     if (!isContextValid()) return; // 扩展已重载，忽略消息
 
     // 工作台任务控制消息（停止/暂停）——直接处理，不经过 runtime messageHandlers
-    if (message.action === MSG.WORKBENCH_TASK_CONTROL) {
+    if (message.action === MSG.WORKBENCH_TASK_CONTROL && !message.taskControl) {
       const batchNoteCtrl = xhsPageController.getBatchNoteCtrl?.();
       const batchCommentCtrl = xhsPageController.getBatchCommentCtrl?.();
       if (message.command === 'stop') {

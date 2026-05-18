@@ -1,12 +1,15 @@
 import React, { useState, useCallback, useEffect } from 'react';
 
-export default function AddAccountModal({ open, onClose, onConfirm, onExtractCookie, onCookieResult }) {
+export default function AddAccountModal({ open, onClose, onConfirm, onExtractCookie, onCookieResult, currentPlatform = 'xhs' }) {
   const [name, setName] = useState('');
   const [cookieJson, setCookieJson] = useState('');
   const [quota, setQuota] = useState('');
   const [extracting, setExtracting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formNotice, setFormNotice] = useState({ message: '', type: 'info', visible: false });
+  const currentPlatformKey = currentPlatform === 'douyin' ? 'douyin' : 'xhs';
+  const platformLabel = currentPlatformKey === 'douyin' ? '抖音' : '小红书';
+  const cookieDomain = currentPlatformKey === 'douyin' ? '.douyin.com' : '.xiaohongshu.com';
 
   useEffect(() => {
     if (!open) {
@@ -30,13 +33,13 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
           onCookieResult(result.allResults);
         }
         if (!name.trim()) {
-          setName(`小红书账号-${new Date().toLocaleDateString('zh-CN')}`);
+          setName(`${platformLabel}账号-${new Date().toLocaleDateString('zh-CN')}`);
         }
         setFormNotice({ message: 'Cookie 已提取完成，可以直接确认添加。', type: 'success', visible: true });
       } else {
         setCookieJson('');
         setFormNotice({
-          message: (result.error || '未检测到小红书 Cookie。') + ' 请先确认当前浏览器已登录小红书，再重试提取。',
+          message: (result.error || `未检测到${platformLabel} Cookie。`) + ` 请先确认当前浏览器已登录${platformLabel}，再重试提取。`,
           type: 'warning',
           visible: true,
         });
@@ -47,7 +50,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
     } finally {
       setExtracting(false);
     }
-  }, [name, onExtractCookie, onCookieResult]);
+  }, [name, onExtractCookie, onCookieResult, platformLabel]);
 
   const handleConfirm = useCallback(async () => {
     const trimmedName = (name || '').trim();
@@ -71,7 +74,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
           return {
             name: p.slice(0, eqIdx).trim(),
             value: p.slice(eqIdx + 1).trim(),
-            domain: '.xiaohongshu.com',
+            domain: cookieDomain,
             path: '/',
             secure: true,
             httpOnly: false,
@@ -99,7 +102,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
       const result = await onConfirm({
         name: trimmedName,
         cookieJson: JSON.stringify(parsedCookieJson),
-        platform: 'xhs',
+        platform: currentPlatformKey,
         dailyQuotaLimit,
       });
       if (result?.success) {
@@ -112,7 +115,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
     } finally {
       setSaving(false);
     }
-  }, [name, cookieJson, quota, onConfirm, onClose]);
+  }, [name, cookieJson, quota, onConfirm, onClose, currentPlatformKey, cookieDomain]);
 
   if (!open) return null;
 
@@ -120,7 +123,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
     <div id="addAccountOverlay" className="batch-settings-overlay" style={{ display: 'flex' }} aria-hidden="false">
       <div className="batch-settings-dialog add-account-dialog" role="dialog" aria-modal="true">
         <h2>添加采集账号</h2>
-        <p className="batch-settings-subtitle">手动添加或一键提取 Cookie 作为采集账号</p>
+        <p className="batch-settings-subtitle">手动添加或一键提取 {platformLabel} Cookie 作为采集账号</p>
         {formNotice.visible && (
           <div className={`modal-inline-notice ${formNotice.type}`}>
             {formNotice.message}
@@ -132,7 +135,7 @@ export default function AddAccountModal({ open, onClose, onConfirm, onExtractCoo
           id="accountNameInput"
           type="text"
           className="add-account-input"
-          placeholder="例如：小红书账号-1"
+          placeholder={`例如：${platformLabel}账号-1`}
           value={name}
           onChange={(e) => setName(e.target.value)}
           autoFocus

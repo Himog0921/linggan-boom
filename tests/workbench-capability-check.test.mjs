@@ -44,6 +44,26 @@ test('canDispatchTaskFromCapabilityReport forwards readiness failures', () => {
   assert.equal(result.reasonCode, 'search_list_unstable');
 });
 
+test('canDispatchTaskFromCapabilityReport prioritizes platform security verification over unsupported task type', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    readiness: {
+      ready: false,
+      reasonCode: 'platform_security_challenge',
+      reasonMessage: '检测到抖音安全验证，请先完成验证后继续操作',
+    },
+    contextSnapshot: {
+      platformBlocked: true,
+    },
+    capabilities: {
+      canRunTaskTypes: [],
+    },
+  }, 'douyin.singleComments', { pageType: 'detail' });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'platform_security_challenge');
+  assert.match(result.reasonMessage, /安全验证/);
+});
+
 test('canDispatchTaskFromCapabilityReport rejects page type mismatches for remote detail tasks', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'profile',
@@ -102,6 +122,40 @@ test('canDispatchTaskFromCapabilityReport accepts matching detail targets across
   }, 'xhs.batchNotes', {
     pageType: 'detail',
     url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=target',
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.reasonCode, '');
+});
+
+test('canDispatchTaskFromCapabilityReport validates douyin note detail targets', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.douyin.com/note/7321309610927770930',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['douyin.singleComments'],
+    },
+  }, 'douyin.singleComments', {
+    pageType: 'detail',
+    url: 'https://www.douyin.com/note/7321309610927770931',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'page_target_mismatch');
+});
+
+test('canDispatchTaskFromCapabilityReport accepts matching douyin note detail targets', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.douyin.com/note/7321309610927770930?previous_page=app_code_link',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['douyin.singleComments'],
+    },
+  }, 'douyin.singleComments', {
+    pageType: 'detail',
+    url: 'https://www.douyin.com/note/7321309610927770930',
   });
 
   assert.equal(result.accepted, true);

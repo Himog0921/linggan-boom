@@ -17,11 +17,13 @@ import { collectDouyinAuthor } from './authorCollector.js';
 import { batchCollectDouyinProfileVideos, batchCollectDouyinProfileComments } from './batchController.js';
 import { collectDouyinComments, downloadDouyinCommentImages } from './commentCollector.js';
 import { resolveDouyinSingleCommentUiTotal } from './commentTaskSupport.js';
+import { detectDouyinSecurityChallenge } from './securityChallenge.js';
 import { consumeSelectorHealthAlertMessage } from '../../shared/selectorHealth.js';
 import {
   runDouyinSelectorBootstrapProbe,
   runDouyinSelectorPreflight,
 } from './selectorHealth.js';
+import { resolveDouyinTaskbarRenderState } from './taskbarRenderState.js';
 import { createManagedTaskController } from '../../shared/managedTaskController.js';
 import { assertActivePluginAuthorization } from '../../workbench/runtime/pluginAuthorization.js';
 
@@ -77,13 +79,16 @@ const DouyinAdapter = {
 
     // SPA 路由变化监听（抖音是 React SPA，URL 会变但不触发 load 事件）
     let lastUrl = window.location.href;
+    let lastSecurityChallenge = detectDouyinSecurityChallenge({ root: document, href: window.location.href });
     let reinjectTimer = null;
     const urlObserver = new MutationObserver(() => {
       if (window.__lgboom_dy_injecting) return;
       const currentUrl = window.location.href;
-      if (currentUrl !== lastUrl) {
+      const currentSecurityChallenge = detectDouyinSecurityChallenge({ root: document, href: currentUrl });
+      if (currentUrl !== lastUrl || currentSecurityChallenge !== lastSecurityChallenge) {
         lastUrl = currentUrl;
-        console.log('[灵感爆爆爆] 抖音 URL 变化，重新注入 UI:', currentUrl);
+        lastSecurityChallenge = currentSecurityChallenge;
+        console.log('[灵感爆爆爆] 抖音页面状态变化，重新注入 UI:', currentUrl);
         if (reinjectTimer) clearTimeout(reinjectTimer);
         reinjectTimer = setTimeout(() => {
           reinjectTimer = null;
@@ -244,20 +249,21 @@ const DouyinAdapter = {
     this._batchTaskState.taskType = taskType || this._batchTaskState.taskType;
     this._batchTaskState.current = current;
     this._batchTaskState.total = total;
-    this._batchTaskState.paused = taskState === 'paused';
+    const renderState = resolveDouyinTaskbarRenderState({ taskState, message });
+    this._batchTaskState.paused = renderState.taskState === 'paused';
     ensureDouyinTaskControlBar();
     updateDouyinTaskControlBar({
-      visible: !['done', 'idle', 'error'].includes(taskState),
+      visible: renderState.visible,
       taskType: this._batchTaskState.taskType,
-      taskState,
+      taskState: renderState.taskState,
       current,
       total,
-      message,
+      message: renderState.message,
     });
 
-    if (['done', 'idle', 'error'].includes(taskState)) {
+    if (renderState.shouldHideAfterRender) {
       hideDouyinProgressBar();
-      hideDouyinTaskControlBar();
+      hideDouyinTaskControlBar({ immediate: renderState.hideImmediate });
       this._clearBatchIndicator();
       return;
     }
@@ -592,7 +598,8 @@ const DouyinAdapter = {
 
   _tryInject() {
     const page = detectDouyinPageType();
-    if (page.type !== DY_PAGE_TYPE.UNKNOWN && page.type !== DY_PAGE_TYPE.HOME) {
+    const securityChallenge = detectDouyinSecurityChallenge({ root: document, href: window.location.href });
+    if (securityChallenge || (page.type !== DY_PAGE_TYPE.UNKNOWN && page.type !== DY_PAGE_TYPE.HOME)) {
       injectDouyinUI();
     }
   },

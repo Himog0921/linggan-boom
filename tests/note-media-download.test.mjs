@@ -68,6 +68,7 @@ function installBrowserMocks() {
   return {
     downloads,
     objectUrls,
+    listeners,
   };
 }
 
@@ -352,6 +353,82 @@ test('downloadNoteMediaFromRecord accepts object-shaped xhs image candidates fro
     assert.equal(summary.zipped, true);
     assert.equal(bgCalls.length, 1);
     assert.equal(browser.downloads.length, 1);
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
+test('downloadNoteMediaFromRecord downloads douyin image notes through page-context fallback', async () => {
+  const browser = installBrowserMocks();
+  globalThis.window.location = {
+    href: 'https://www.douyin.com/note/7590027857632480512',
+    host: 'www.douyin.com',
+    protocol: 'https:',
+    origin: 'https://www.douyin.com',
+  };
+  globalThis.window.dispatchEvent = (event) => {
+    if (event?.type === '__lgboom_page_download_req__') {
+      const request = event.detail || {};
+      setTimeout(() => {
+        const responseHandler = browser.listeners.get('__lgboom_page_download_res__');
+        responseHandler?.({
+          detail: {
+            requestId: request.requestId,
+            ok: true,
+            url: request.urls?.[0] || '',
+          },
+        });
+      }, 0);
+    }
+    const handler = browser.listeners.get(event?.type);
+    if (handler) handler(event);
+    return true;
+  };
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  mediaAssetStore.bulkUpsert = async () => {};
+
+  const bgCalls = [];
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: {
+        DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
+        FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+      },
+      noteStore: {
+        async updateById() {},
+      },
+      sendToBackground: async (action, payload) => {
+        bgCalls.push({ action, payload });
+        return { success: false, error: 'should_not_use_chrome_download_for_douyin' };
+      },
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({
+        extractDouyinContentId: () => '',
+        collectDouyinVideo: async () => null,
+        refreshDouyinNoteMediaById: async () => null,
+      }),
+      extractNoteId: () => '',
+    });
+
+    const summary = await service.downloadNoteMediaFromRecord({
+      platform: 'douyin',
+      noteId: 'dy_7590027857632480512',
+      contentId: 'dy_7590027857632480512',
+      platformContentId: '7590027857632480512',
+      title: '抖音图文',
+      imageCandidates: [
+        ['https://p3-sign.douyinpic.com/high.webp?x=1'],
+      ],
+    });
+
+    assert.equal(summary.total, 1);
+    assert.equal(summary.success, 1);
+    assert.equal(summary.failed, 0);
+    assert.equal(summary.details[0].result.via, 'page-context');
+    assert.equal(summary.details[0].result.sourceUrl, 'https://p3-sign.douyinpic.com/high.webp?x=1');
+    assert.equal(bgCalls.length, 0);
   } finally {
     mediaAssetStore.bulkUpsert = originalBulkUpsert;
     uninstallBrowserMocks();

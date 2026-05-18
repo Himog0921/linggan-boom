@@ -5,6 +5,7 @@ import {
   queryAny,
 } from '../../shared/selectorHealth.js';
 import { detectDouyinSearchBatchContext } from './pageDetector.js';
+import { detectDouyinSecurityChallenge } from './securityChallenge.js';
 
 const PLATFORM = 'douyin';
 const SELECTOR_VERIFIED_AT = '2026-04-28T00:00:00+08:00';
@@ -215,11 +216,37 @@ function runBatchPreflight(action, { document, win, pageType }) {
   });
 }
 
+function buildSecurityChallengeCheck(documentRef, win) {
+  return buildSelectorCheck({
+    name: 'securityChallenge',
+    ok: !detectDouyinSecurityChallenge({
+      root: documentRef,
+      href: win?.location?.href || '',
+    }),
+    selector: 'captcha | verify | safety challenge',
+    detail: String(win?.location?.href || '').trim(),
+    verifiedAt: SELECTOR_VERIFIED_AT,
+  });
+}
+
+function createSecurityChallengeResult(action, win, documentRef) {
+  return finalizeAndPublish(action, win, {
+    ok: false,
+    code: 'security_challenge',
+    message: '检测到抖音安全验证，请先完成验证后继续操作',
+    checks: [buildSecurityChallengeCheck(documentRef, win)],
+  });
+}
+
 export function runDouyinSelectorPreflight(
   action,
   { params = {}, document = window.document, win = window } = {},
 ) {
   const normalizedAction = String(action || '').trim();
+  if (detectDouyinSecurityChallenge({ root: document, href: win?.location?.href || '' })) {
+    return createSecurityChallengeResult(normalizedAction, win, document);
+  }
+
   const pageType = detectLocalDouyinPageType(win);
 
   if (DETAIL_ACTIONS.has(normalizedAction)) {
@@ -245,6 +272,10 @@ export function runDouyinSelectorBootstrapProbe(
 ) {
   const pageType = detectLocalDouyinPageType(win);
   const action = 'bootstrap';
+
+  if (detectDouyinSecurityChallenge({ root: document, href: win?.location?.href || '' })) {
+    return createSecurityChallengeResult(action, win, document);
+  }
 
   if (pageType === 'detail') {
     const pageCheck = createPageTypeCheck('detail', pageType);
