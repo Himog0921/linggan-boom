@@ -41,6 +41,11 @@ import {
   scheduleWorkbenchTaskPollAlarm,
   shouldRunWorkbenchTaskPollAfterHeartbeat,
 } from '../workbench/runtime/taskPollSchedule.js';
+import {
+  parseWorkbenchPushPayload,
+  registerWorkbenchPushSubscription,
+  shouldWakeForWorkbenchPush,
+} from '../workbench/runtime/workbenchPushSubscription.js';
 import { createTaskDeltaReporter } from '../workbench/runtime/taskDeltaReporter.js';
 import {
   normalizeNavigatedTaskTabsSnapshot,
@@ -97,10 +102,14 @@ const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
 const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
+const WORKBENCH_PUSH_SUBSCRIPTION_REFRESH_MS = 6 * 60 * 60 * 1000;
+const WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS = 15 * 60 * 1000;
+const WORKBENCH_PUSH_SUBSCRIPTION_UNREGISTERED_RETRY_MS = 30 * 1000;
 
 let consecutiveEmptyPolls = 0;
 let nextExecutionStationHeartbeatAtMs = 0;
 let nextWorkbenchTaskPollAtMs = 0;
+let nextWorkbenchPushSubscriptionAtMs = 0;
 
 function navigatedTaskTabStorageArea() {
   return chrome.storage?.session || chrome.storage?.local || null;
@@ -1345,6 +1354,7 @@ const bgHandlers = {
         browserLabel: String(msg.browserLabel || '').trim(),
       });
       const heartbeat = await sendExecutionStationHeartbeat('online');
+      void registerWorkbenchPushSubscriptionTick();
       const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
       return {
         success: true,
@@ -2131,6 +2141,7 @@ async function runExecutionStationHeartbeatTick() {
   }
   nextExecutionStationHeartbeatAtMs = 0;
   await clearHeartbeatAuthorizationBackoff();
+  void registerWorkbenchPushSubscriptionTick();
   if (shouldRunWorkbenchTaskPollAfterHeartbeat({
     activeTask: taskPoller?.getState?.()?.activeTask,
     nextPollAtMs: nextWorkbenchTaskPollAtMs,
@@ -2155,6 +2166,50 @@ async function runPackagedInstallBootstrapTick() {
     console.warn('[灵感爆爆爆] packaged install bootstrap skipped', error);
     return { applied: false, reason: 'bootstrap_failed' };
   }
+}
+
+async function registerWorkbenchPushSubscriptionTick({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && nextWorkbenchPushSubscriptionAtMs > now) {
+    return { registered: false, reason: 'push_subscription_waiting' };
+  }
+  try {
+    const config = await getAuthorizedFlywheelConfig();
+    if (!shouldPollWorkbenchTasks(config)) {
+      nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
+      return { registered: false, reason: 'workbench_disabled' };
+    }
+    const result = await registerWorkbenchPushSubscription({
+      registration: globalThis.registration || globalThis.self?.registration,
+      executionStationClient: {
+        fetchVapidPublicKey: () => executionStationClient.fetchVapidPublicKey(),
+        registerPushSubscription: ({ subscription }) => executionStationClient.registerPushSubscription({
+          subscription,
+          pluginVersion: getPluginVersion(),
+          browserLabel: globalThis.navigator?.userAgent || '',
+        }),
+      },
+    });
+    if (result?.registered) {
+      nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_REFRESH_MS;
+    } else if (result?.reason === 'station_not_registered') {
+      nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_UNREGISTERED_RETRY_MS;
+    } else {
+      nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
+    }
+    return result;
+  } catch (error) {
+    console.warn('[灵感爆爆爆] workbench push subscription skipped', error);
+    nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
+    return { registered: false, reason: 'push_subscription_failed' };
+  }
+}
+
+async function handleWorkbenchPushEvent(event) {
+  const payload = parseWorkbenchPushPayload(event?.data || null);
+  if (!shouldWakeForWorkbenchPush(payload)) return;
+  nextWorkbenchTaskPollAtMs = 0;
+  await runWorkbenchTaskPollTick();
 }
 
 // ========== 采集完成时清除 badge ==========
@@ -2186,6 +2241,7 @@ chrome.runtime.onStartup?.addListener(() => {
   chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
   chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });
   void runPackagedInstallBootstrapTick().finally(() => {
+    void registerWorkbenchPushSubscriptionTick();
     void runWorkbenchTaskPollTick();
     void runExecutionStationHeartbeatTick();
   });
@@ -2195,9 +2251,14 @@ chrome.runtime.onInstalled?.addListener(() => {
   chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
   chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });
   void runPackagedInstallBootstrapTick().finally(() => {
+    void registerWorkbenchPushSubscriptionTick();
     void taskDeltaReporter.flush();
     void runExecutionStationHeartbeatTick();
   });
+});
+
+globalThis.self?.addEventListener?.('push', (event) => {
+  event.waitUntil(handleWorkbenchPushEvent(event));
 });
 
 chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
@@ -2207,5 +2268,6 @@ chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 })
 chrome.alarms?.create('daily-quota-reset', { periodInMinutes: 60 });
 
 void runPackagedInstallBootstrapTick();
+void registerWorkbenchPushSubscriptionTick();
 
 console.log('[灵感爆爆爆] Background Service Worker 已启动');

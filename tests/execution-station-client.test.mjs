@@ -121,3 +121,71 @@ test('execution station heartbeat respects server retry-after backpressure', asy
   assert.equal(heartbeat.nextRetryAfterMs, 120_000);
   assert.equal(heartbeat.nextRetryAt, 121_000);
 });
+
+test('execution station client fetches VAPID public key and registers push subscription', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchExecutionStation: {
+      stationKey: 'station-key-1',
+      stationId: 'station-1',
+      stationToken: 'token-1',
+    },
+  });
+  const requests = [];
+  const client = createExecutionStationClient({
+    storageArea,
+    now: () => 2_000,
+    resolveServerUrl: async () => 'http://localhost:3000',
+    resolveAuthorization: async () => ({
+      authorizationId: 'auth_1',
+      authorizationToken: 'auth_token_1',
+    }),
+    fetchFn: async (url, options = {}) => {
+      requests.push([url, options]);
+      if (url.endsWith('/api/push/vapid-public-key')) {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return { enabled: true, publicKey: 'AQIDBA' };
+          },
+        };
+      }
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return { ok: true };
+        },
+      };
+    },
+  });
+
+  const key = await client.fetchVapidPublicKey();
+  const registration = await client.registerPushSubscription({
+    subscription: {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/sub-1',
+      keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+    },
+    pluginVersion: '2.0.15',
+    browserLabel: 'Chrome',
+  });
+  const stored = await client.getStoredStationIdentity();
+
+  assert.deepEqual(key, { enabled: true, publicKey: 'AQIDBA' });
+  assert.equal(registration.ok, true);
+  assert.equal(requests[0][1].method, 'GET');
+  assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
+  assert.deepEqual(JSON.parse(requests[1][1].body), {
+    stationId: 'station-1',
+    stationToken: 'token-1',
+    authorizationId: 'auth_1',
+    pluginVersion: '2.0.15',
+    browserLabel: 'Chrome',
+    subscription: {
+      endpoint: 'https://fcm.googleapis.com/fcm/send/sub-1',
+      keys: { p256dh: 'p256dh-key', auth: 'auth-key' },
+    },
+  });
+  assert.equal(stored.pushSubscriptionEndpoint, 'https://fcm.googleapis.com/fcm/send/sub-1');
+  assert.equal(stored.pushSubscriptionRegisteredAt, 2_000);
+});

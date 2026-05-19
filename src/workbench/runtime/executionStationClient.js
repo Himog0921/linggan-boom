@@ -140,6 +140,25 @@ export function createExecutionStationClient({
     return response.json().catch(() => ({}));
   }
 
+  async function getJson(path) {
+    if (typeof fetchFn !== 'function') {
+      throw createHttpError('fetch unavailable', { retryable: true });
+    }
+    const baseUrl = normalizeServerUrl(await resolveServerUrl(), DEFAULT_SERVER_URL);
+    const response = await fetchFn(`${baseUrl}${path}`, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) {
+      const text = await readErrorText(response);
+      throw createHttpError(errorMessageFromResponseText(text, `HTTP ${response.status}`), {
+        status: response.status,
+        retryable: isRetryableStatus(response.status),
+      });
+    }
+    return response.json().catch(() => ({}));
+  }
+
   async function registerWithPairingCode({
     pairingCode = '',
     capabilities = [],
@@ -213,6 +232,45 @@ export function createExecutionStationClient({
     }
   }
 
+  async function fetchVapidPublicKey() {
+    try {
+      return await getJson('/api/push/vapid-public-key');
+    } catch (error) {
+      return {
+        enabled: false,
+        error: String(error?.message || error || 'vapid_public_key_failed'),
+      };
+    }
+  }
+
+  async function registerPushSubscription({
+    subscription = null,
+    pluginVersion = '',
+    browserLabel = '',
+  } = {}) {
+    const identity = await getStoredStationIdentity();
+    const authorization = await resolveAuthorization();
+    const stationId = normalizeString(identity.stationId);
+    const stationToken = normalizeString(identity.stationToken);
+    if (!stationId || !stationToken) {
+      return { ok: false, skipped: true, reason: 'station_not_registered' };
+    }
+
+    const data = await postJson('/api/execution-stations/push-subscription', {
+      stationId,
+      stationToken,
+      authorizationId: normalizeString(authorization?.authorizationId),
+      pluginVersion: normalizeString(pluginVersion),
+      browserLabel: normalizeString(browserLabel),
+      subscription,
+    });
+    await saveStationIdentity({
+      pushSubscriptionEndpoint: normalizeString(subscription?.endpoint),
+      pushSubscriptionRegisteredAt: now(),
+    });
+    return { ok: true, ...data };
+  }
+
   async function clearStationIdentity({ preserveStationKey = true } = {}) {
     const existing = await getStoredStationIdentity();
     if (!preserveStationKey || !normalizeString(existing.stationKey)) {
@@ -235,5 +293,7 @@ export function createExecutionStationClient({
     clearStationIdentity,
     registerWithPairingCode,
     sendHeartbeat,
+    fetchVapidPublicKey,
+    registerPushSubscription,
   };
 }

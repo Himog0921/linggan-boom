@@ -13,6 +13,7 @@
 | Content ↔ Injected Script | `window.postMessage` / `CustomEvent` / `postMessage` |
 | Content ↔ Dashboard | iframe `postMessage` |
 | Background ↔ 内容工作台 | HTTP JSON 轮询 / PATCH / ingest | 待执行任务查询、控制请求拉取、状态快照回写、事件/记录增量写入 |
+| 内容工作台 → Background | Chrome Web Push | 有新任务或任务控制变化时叫醒插件，插件随后走原有 HTTP 接单链路 |
 
 > 说明：抖音链路除了 Content Script 自己的逻辑，还包含页面桥接、页面侧 fetch 和 API capture，不应再假设所有能力都只靠 Content 直接完成。
 > Dashboard 由 Content 以 iframe 打开时，会生成一次性 `nonce`，同时写入 `chrome.storage.session` 并放入 `dashboard.html?nonce=...`。Dashboard 读取数据时优先使用 URL 中的 `nonce` 发起 `postMessage`，避免首次加载时 storage 尚未同步而被外层拒收。
@@ -85,7 +86,7 @@
 | `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 在已授权前提下，使用内容工作台生成的配对码绑定执行工位 |
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
-> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 通过执行工位协议和内容工作台对账，再按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。
+> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 通过执行工位协议和内容工作台对账，再按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
 >
 > 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
 
@@ -113,6 +114,25 @@ POST /api/execution-stations/reconcile
 POST /api/collection-tasks/claim
 POST /api/collection-tasks/:taskId/lease
 ```
+
+Web Push 唤醒：
+
+```text
+GET  /api/push/vapid-public-key
+POST /api/execution-stations/push-subscription
+```
+
+推送消息类型：
+
+```text
+collection_task_available
+collection_task_control
+```
+
+说明：
+- 插件注册 push 订阅时仍要携带执行工位身份和插件授权，工作台会校验 station token 与授权归属。
+- `collection_task_available` / `collection_task_control` 只用于叫醒 Background；收到后插件立即运行既有任务检查，真正的任务内容仍从 `claim` 和后续租约接口读取。
+- 如果工作台未配置 VAPID、浏览器不支持 push、订阅过期或 push 发送失败，插件继续按 v2 低频轮询兜底。
 
 授权与配对说明：
 
