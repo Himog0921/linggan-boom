@@ -1,0 +1,41 @@
+2026-05-19
+- 工作台空闲接单降频与插件 v2.0.14 完成：内容工作台在无待处理任务时会让插件约 2 分钟后再检查，能力不匹配同样按约 2 分钟等待；账号需要重新登录、受限、达到日上限或不可用时按约 5 分钟等待。插件后台新增“心跳不绕过接单等待”保护：空闲心跳只维持工位在线，不会立刻触发 claim；已有活跃任务时仍继续短周期续约、控制同步和结果回写。验证：node --test tests/workbench-task-poll-schedule.test.mjs 通过 8 个用例；node --test tests/workbench-task-poller.test.mjs tests/workbench-task-lease.test.mjs tests/workbench-control-sync.test.mjs tests/execution-station-client.test.mjs 通过 47 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning；npm run release:verify -- --version 2.0.14 --zip releases/linggan-boom-v2.0.14.zip 通过。
+
+2026-05-18
+- 抖音发布数据同步写回缺内容修复完成，版本提升到 v2.0.13：抖音远程单篇评论任务现在会把当前视频记录重新绑定到本次工作台任务的 `collectionRunId`，结果包能带回视频标题、正文、封面、点赞、收藏、评论数等主记录，不再只上传评论汇总导致工作台“任务完成但数据管理看不到内容写回”。这次只调整抖音远程任务的数据归属，不改变普通采集、媒体下载或任务调度协议。验证：node --test tests/workbench-result-packager.test.mjs tests/workbench-task-poller.test.mjs tests/workbench-douyin-remote-long-tail.test.mjs 通过 39 个用例；npm run test:douyin 通过 167 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+- 小红书媒体下载失败修复与弹窗分项选择完成：对标 `iszhouhua/social-media-copilot` 后确认其核心做法是保留媒体类型选项并直接交给浏览器下载，本轮将小红书图片笔记从后台 ZIP 拉取改为浏览器逐个下载，失败时再走页面内 fetch 兜底，避免采集后出现“成功 0/N、失败 N”。采集后媒体弹窗支持封面、所有图片、Live、视频分项勾选；视频选项只在存在视频候选时出现。小红书采集新增 `livePhotoStreams`，并补齐 `h_265 / h_264 / master_url / backup_urls` 这类平台字段。Dashboard “媒体”按钮复用同一下载队列，可识别保存记录里的对象型图片候选并逐个下载。验证：node --test tests/note-media-download.test.mjs tests/xhs-video-stream-selection.test.mjs tests/xhs-note-collector.test.mjs tests/xhs-page-controller-summary.test.mjs 通过 22 个用例。
+
+2026-05-15
+- 二次测试反馈收口完成：链接已足够，已对标克隆 `/tmp/social-media-copilot` 核查竞品源码。小红书媒体弹窗改成可点击的分项选择卡片，支持封面、静态图、Live 动图、视频任意多选，并支持“只下此项”；小红书评论数优先读取页面笔记结构数据里的 `interactInfo.commentCount`，再兜底读可见文字，避免弹窗拿不到当前评论量；抖音图文从悬浮面板点“下载视频”时会重新识别图文内容并下载图片 ZIP，且图集图片拉取失败时会走与数据面板一致的后台拉取兜底。验证：node --test tests/note-media-download.test.mjs tests/xhs-comment-api.test.mjs tests/content-message-handlers.test.mjs tests/douyin-video-security.test.mjs tests/xhs-note-collector.test.mjs 通过 31 个用例；node --test tests/*.test.mjs 通过 325 个用例；npm run build 通过，保留既有 package type warning 和 webpack bundle 体积 warning。
+- 测试反馈的采集能力补强完成，保持插件授权、工作台接单和同步架构不变：媒体下载弹窗从“下载全部”升级为可选封面、静态图、Live 动图、视频；小红书 Live 图按图片序号合并成一个 ZIP，避免 Chrome 弹出多条失败下载记录；抖音图文内容会按图片打包，不再把黑色视频当媒体下载；Dashboard 增加单独“封面”下载按钮。评论采集弹窗现在会在能读取到页面数据时显示当前评论数，并提供“采集子评论”开关，小红书、抖音、单篇、批量和工作台派单路径都同步尊重该选择。数据面板会动态显示新增媒体/文字/音乐字段，导出和手动同步也保留这些字段。验证：node --test tests/note-media-download.test.mjs tests/xhs-comment-api.test.mjs tests/content-message-handlers.test.mjs 通过 21 个用例；相关面板/远程任务/抖音回归 30 个用例通过；node --test tests/*.test.mjs 通过 325 个用例；npm run build 通过，保留既有 package type warning 和 webpack bundle 体积 warning。
+
+2026-05-14
+- 竞品采集能力对标后的第一批补强完成，保持现有插件授权、工作台接单、同步架构不变，只补全采集字段和媒体候选：小红书新增图片 trace/file 元数据、高质量图片候选和 live photo 视频流，live photo 会进入媒体下载队列并登记为 `live_photo` 资产；抖音新增图文媒体、封面候选、视频变体、OCR 画面文字、音乐链接、章节/合集信息和 admire 互动计数。工作台任务回传只在字段非空时携带这些增强数据，避免污染旧 payload。验证：node --test tests/xhs-note-collector.test.mjs tests/note-media-download.test.mjs tests/douyin-video-security.test.mjs 通过 16 个用例；node --test tests/flywheel-sync-quality.test.mjs tests/dashboard-workbench-sync.test.mjs tests/workbench-task-poller.test.mjs 通过 32 个用例；node --test tests/*.test.mjs 通过 321 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+
+2026-05-13
+- 数据面板“媒体”按钮下载失败修复完成：根因是部分小红书保存记录里的图片候选是 `{ url: ... }` 这类对象，媒体下载队列之前会把它误当成普通文本，导致后台拿不到真实图片地址并显示失败。修复后候选链接归一化会识别保存记录对象、数组和备用链接字段，数据面板下载能拿到真实媒体链接并继续打包 ZIP；Dashboard 验收清单已补小红书图片笔记二次下载项。验证：node --test tests/note-media-download.test.mjs 通过 5 个用例；node --test tests/note-media-download.test.mjs tests/dashboard-response-envelope.test.mjs tests/dashboard-bridge-sync.test.mjs 通过 11 个用例；node --test tests/*.test.mjs 通过 318 个用例；npm run build 通过，保留既有 package type warning 和 webpack bundle 体积 warning。
+
+2026-05-12
+- 工作台任务空轮询错峰修复完成，版本提升到 v2.0.9：普通空任务等待现在先遵守服务端 nextPollAfterMs，再增加 5-15 秒随机错峰，避免多个插件同时进入固定轮询节奏；明确的账号冷却、工作台限流、插件协议限流仍保持服务端给定的精确等待时间。验证：node --test tests/workbench-task-poll-schedule.test.mjs 通过 6 个用例；相关工作台任务测试 54 个用例通过；npm run build 通过，保留既有 webpack bundle 体积 warning。
+
+2026-05-09
+- 小红书视频笔记下载失败修复完成：根因是视频大文件走“后台拉取为 dataUrl → 发回内容脚本 → ZIP 打包”的路径，容易因大文件消息搬运失败；同时小红书旧视频直链过期后没有刷新重试，且 h266 / 备用视频链接没有完整进入候选队列。修复后图片笔记仍打包 ZIP，视频笔记直接下载视频文件；失败时会刷新当前笔记媒体链接后重试；视频候选流补齐 h266、backupUrls、urlList 等备用来源。验证：node --test tests/note-media-download.test.mjs tests/xhs-video-stream-selection.test.mjs 通过 5 个用例；相关回归 18 个用例通过；node --test tests/*.test.mjs 通过 298 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+- Dashboard 首次打开后误判空数据修复完成：根因是数据面板 iframe 首次加载时只从 storage 读取本次打开的通行码，storage 尚未同步时会发空通行码，外层页面拒收后等待超时，表现为转圈数秒再显示“还没有采集数据”。修复后打开 Dashboard 时会把通行码同时放入 iframe URL，面板优先读 URL 通行码，并等待通行码落库后再完成打开响应。验证：node --test tests/dashboard-response-envelope.test.mjs tests/dashboard-bridge-sync.test.mjs tests/workbench-response-envelope.test.mjs 通过 10 个用例；node --test tests/*.test.mjs 通过 296 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+
+2026-05-06
+- 普通同步使用者归属修复完成：插件授权只作为使用资格，不再直接决定数据写入账号；同步前会向内容工作台刷新“当前使用者数据身份”，批量同步和封面上传都会带上该身份，避免所有者发授权码后普通使用者的数据落到所有者账号。验证：node --test tests/flywheel-cover-asset-upload.test.mjs tests/flywheel-sync-quality.test.mjs 通过 8 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+
+2026-05-04
+- 工作台任务页自动回收增强完成：插件会持久记录自己为工作台任务打开的采集页，后台服务休眠恢复后仍能在任务结束时关闭对应页面；用户原本打开并被复用的页面不会被误关。验证：node --test tests/workbench-task-execution-cleanup.test.mjs tests/navigation-orchestrator.test.mjs 通过 9 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning。
+
+2026-05-07
+- detail-probe 数据采集竞态修复完成：
+  根因：_waitForNoteDataStable() 在 AJAX 填充 commentCount/imageList 前就判定数据稳定，
+        导致评论、收藏、封面等字段采集为空。
+  修复三层防御：
+  ① 插件 isCollectedNoteUsable() 增加严格模式（要求完整统计数据+有效媒体）
+  ② 插件 _waitForNoteDataStable() 增加 _isNoteDataComplete() 检查，超时延长至 6s
+  ③ 工作台 buildObservationDraft() 增加 rawPayload 兜底提取（comments/coverImage）
+  提交：插件 main c7e68db（2 files）；工作台修复恢复至 codex/bug 工作区待合并。
+  验证：npm test 72/72 通过；npm run build 通过。
+  待办：重载插件并触发监控轮次进行实机验证。

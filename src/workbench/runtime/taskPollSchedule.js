@@ -76,6 +76,17 @@ export function resolveWorkbenchTaskPollAlarmConfig(result = null, consecutiveEm
   };
 }
 
+export function shouldRunWorkbenchTaskPollAfterHeartbeat({
+  activeTask = null,
+  nextPollAtMs = 0,
+  nowMs = Date.now(),
+} = {}) {
+  if (activeTask) return true;
+  const normalizedNextPollAtMs = Number(nextPollAtMs);
+  if (!Number.isFinite(normalizedNextPollAtMs) || normalizedNextPollAtMs <= 0) return true;
+  return normalizedNextPollAtMs <= Number(nowMs);
+}
+
 export function scheduleWorkbenchTaskPollAlarm({
   alarmsApi = globalThis.chrome?.alarms,
   alarmName = 'workbench-task-poll',

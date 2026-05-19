@@ -85,7 +85,7 @@
 | `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 在已授权前提下，使用内容工作台生成的配对码绑定执行工位 |
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
-> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 同时还会通过 HTTP 轮询内容工作台的 `pending` 任务，并把 `pluginRunId / resultSummary / errorMessage / progress` patch 回工作台任务记录。
+> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Background 通过执行工位协议和内容工作台对账，再按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。
 >
 > 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
 
@@ -109,6 +109,7 @@ GET /api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after
 POST /api/plugin-authorizations/activate
 POST /api/execution-stations/register
 POST /api/execution-stations/heartbeat
+POST /api/execution-stations/reconcile
 POST /api/collection-tasks/claim
 POST /api/collection-tasks/:taskId/lease
 ```

@@ -37,7 +37,10 @@ import {
   MONITOR_STATION_CAPABILITIES,
 } from '../workbench/runtime/executionStationRuntime.js';
 import { createTaskPoller } from '../workbench/runtime/taskPoller.js';
-import { scheduleWorkbenchTaskPollAlarm } from '../workbench/runtime/taskPollSchedule.js';
+import {
+  scheduleWorkbenchTaskPollAlarm,
+  shouldRunWorkbenchTaskPollAfterHeartbeat,
+} from '../workbench/runtime/taskPollSchedule.js';
 import { createTaskDeltaReporter } from '../workbench/runtime/taskDeltaReporter.js';
 import {
   normalizeNavigatedTaskTabsSnapshot,
@@ -97,6 +100,7 @@ const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
 
 let consecutiveEmptyPolls = 0;
 let nextExecutionStationHeartbeatAtMs = 0;
+let nextWorkbenchTaskPollAtMs = 0;
 
 function navigatedTaskTabStorageArea() {
   return chrome.storage?.session || chrome.storage?.local || null;
@@ -2071,12 +2075,13 @@ async function runWorkbenchTaskPollTick() {
       consecutiveEmptyPolls = 0;
     }
 
-    scheduleWorkbenchTaskPollAlarm({
+    const alarmConfig = scheduleWorkbenchTaskPollAlarm({
       alarmsApi: chrome.alarms,
       alarmName: WORKBENCH_TASK_POLL_ALARM,
       result,
       consecutiveEmptyPolls,
     });
+    nextWorkbenchTaskPollAtMs = Date.now() + alarmConfig.intervalMs;
   } catch (error) {
     console.error('[灵感爆爆爆] workbench task poll tick failed', error);
   }
@@ -2126,7 +2131,13 @@ async function runExecutionStationHeartbeatTick() {
   }
   nextExecutionStationHeartbeatAtMs = 0;
   await clearHeartbeatAuthorizationBackoff();
-  await runWorkbenchTaskPollTick();
+  if (shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: taskPoller?.getState?.()?.activeTask,
+    nextPollAtMs: nextWorkbenchTaskPollAtMs,
+    nowMs: Date.now(),
+  })) {
+    await runWorkbenchTaskPollTick();
+  }
 }
 
 async function runPackagedInstallBootstrapTick() {

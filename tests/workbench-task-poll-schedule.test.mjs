@@ -8,6 +8,7 @@ import {
   POST_TASK_COOLDOWN_MAX_MS,
   SLOW_TASK_POLL_INTERVAL_MS,
   scheduleWorkbenchTaskPollAlarm,
+  shouldRunWorkbenchTaskPollAfterHeartbeat,
 } from '../src/workbench/runtime/taskPollSchedule.js';
 
 test('task poll scheduler uses claim idle wait time for the next alarm', async () => {
@@ -172,4 +173,26 @@ test('task poll scheduler applies a short cooldown after task completion', async
     'workbench-task-poll',
     { periodInMinutes: POST_TASK_COOLDOWN_MAX_MS / 60_000 },
   ]]);
+});
+
+test('heartbeat-triggered task polling waits for the scheduled idle poll time', async () => {
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: null,
+    nextPollAtMs: 120_000,
+    nowMs: 60_000,
+  }), false);
+
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: null,
+    nextPollAtMs: 120_000,
+    nowMs: 120_000,
+  }), true);
+});
+
+test('heartbeat-triggered task polling still runs while a task is active', async () => {
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: { taskId: 'task-1' },
+    nextPollAtMs: 120_000,
+    nowMs: 60_000,
+  }), true);
 });
