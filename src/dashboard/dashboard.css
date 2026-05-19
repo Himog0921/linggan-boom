@@ -420,8 +420,7 @@ select:focus-visible {
 }
 
 .data-table-comments {
-  min-width: 1180px;
-  table-layout: fixed;
+  min-width: 1600px;
 }
 
 .data-table th {
@@ -487,6 +486,18 @@ select:focus-visible {
 
 .data-table-comments .col-comment-text {
   width: 360px;
+}
+
+.data-table-comments .col-comment-quality {
+  width: 90px;
+}
+
+.data-table-comments .col-comment-quality-reason {
+  width: 140px;
+}
+
+.data-table-comments .col-comment-source-tier {
+  width: 90px;
 }
 
 .data-table-comments td.col-comment-text {
@@ -757,6 +768,36 @@ select:focus-visible {
   font-size: 16px;
   font-weight: 800;
   cursor: pointer;
+}
+
+.loading-more-bar {
+  padding: 6px 12px;
+  background: #c8f0fa;
+  border-bottom: 2px solid #121212;
+  font-size: 12px;
+  font-weight: 700;
+  color: #3f3f3f;
+  font-family: 'Segoe UI', sans-serif;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.page-size-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #3f3f3f;
+}
+
+.page-size-selector .filter-select {
+  min-height: 30px;
+  padding: 3px 6px;
+  font-size: 12px;
+  margin: 0 2px;
 }
 
 .empty-state {

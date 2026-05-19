@@ -21,8 +21,8 @@ const TABS = [
   { key: 'authors', label: '博主' },
 ];
 
-const PAGE_SIZE = 50;
 const DASHBOARD_LOAD_CHUNK_SIZE = 200;
+const PAGE_SIZE_OPTIONS = [50, 200, 500];
 const LINK_ACTION_TEXT = {
   url: '打开',
   noteUrl: '打开',
@@ -149,15 +149,23 @@ export default function App() {
   const [idleClaimSnapshot, setIdleClaimSnapshot] = useState(null);
   const [busyActions, setBusyActions] = useState({});
   const [rowBusyActions, setRowBusyActions] = useState({});
+  const [pageSize, setPageSize] = useState(() => {
+    try {
+      const v = Number(localStorage.getItem('lgboom_page_size'));
+      return PAGE_SIZE_OPTIONS.includes(v) ? v : 50;
+    } catch { return 50; }
+  });
 
   const tableWrapperRef = useRef(null);
   const noticeTimerRef = useRef(null);
   const busyActionsRef = useRef({});
   const rowBusyActionsRef = useRef({});
+  const loadGenRef = useRef(0);
 
   // ===== 加载数据 =====
   const loadData = useCallback(async (tab) => {
     const targetTab = tab || currentTab;
+    const gen = ++loadGenRef.current;
     setAllData([]);
     setSelectedIds((prev) => ({ ...prev, [targetTab]: new Set() }));
     setLoading(true);
@@ -168,20 +176,22 @@ export default function App() {
       let hasMore = true;
       let accumulated = [];
       while (hasMore) {
+        if (gen !== loadGenRef.current) return;
         const response = await sendToParent(action, {
           offset,
           limit: DASHBOARD_LOAD_CHUNK_SIZE,
-        });
+        }, { timeoutMs: 30000 });
         const data = unwrapParentResponseData(response, []) || [];
         accumulated = accumulated.concat(data);
+        if (gen !== loadGenRef.current) return;
         setAllData(sortByCreatedAt(accumulated, sortByTime));
         offset += data.length;
         hasMore = Boolean(response?.hasMore) && data.length > 0;
       }
     } catch (e) {
-      setAllData([]);
+      if (gen === loadGenRef.current) setAllData([]);
     } finally {
-      setLoading(false);
+      if (gen === loadGenRef.current) setLoading(false);
     }
   }, [currentTab, sortByTime]);
 
@@ -237,13 +247,20 @@ export default function App() {
 
   // ===== 分页 =====
   const totalCount = filteredData.length;
-  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
   const safePage = Math.min(currentPage, totalPages);
   const pageData = useMemo(() => {
     const page = Math.min(currentPage, totalPages);
-    const start = (page - 1) * PAGE_SIZE;
-    return filteredData.slice(start, start + PAGE_SIZE);
-  }, [filteredData, currentPage, totalPages]);
+    const start = (page - 1) * pageSize;
+    return filteredData.slice(start, start + pageSize);
+  }, [filteredData, currentPage, totalPages, pageSize]);
+
+  const handlePageSizeChange = useCallback((e) => {
+    const v = Number(e.target.value);
+    setPageSize(v);
+    setCurrentPage(1);
+    try { localStorage.setItem('lgboom_page_size', String(v)); } catch {}
+  }, []);
 
   useEffect(() => {
     if (currentPage > totalPages && totalPages > 0) {
@@ -742,7 +759,7 @@ export default function App() {
   }, []);
 
   const emptyState = useMemo(() => {
-    if (loading) {
+    if (loading && allData.length === 0) {
       return {
         title: '正在加载数据',
         hint: '正在从插件本地数据库读取当前标签页的数据，请稍候。',
@@ -883,7 +900,10 @@ export default function App() {
       </div>
 
       <div className="data-table-wrapper" ref={tableWrapperRef}>
-        {loading || totalCount === 0 ? (
+        {loading && allData.length > 0 && (
+          <div className="loading-more-bar">正在加载更多数据...</div>
+        )}
+        {totalCount === 0 ? (
           <div className="empty-state">
             <span
               className={`empty-state-icon tone-${emptyState.tone}`}
@@ -1008,9 +1028,20 @@ export default function App() {
         )}
       </div>
 
-      {totalCount > PAGE_SIZE && (
+      {totalCount > 0 && (
         <div className="pagination-bar">
-          <div className="pagination-info">共 {totalCount} 条 · 第 {safePage}/{totalPages} 页</div>
+          <div className="pagination-info">
+            <span>共 {totalCount} 条 · 第 {safePage}/{totalPages} 页</span>
+            <label className="page-size-selector">
+              每页
+              <select className="filter-select" value={pageSize} onChange={handlePageSizeChange}>
+                {PAGE_SIZE_OPTIONS.map((opt) => (
+                  <option key={opt} value={opt}>{opt}</option>
+                ))}
+              </select>
+              条
+            </label>
+          </div>
           <div className="pagination-controls">
             <button disabled={safePage <= 1} onClick={() => goToPage(safePage - 1)}>上一页</button>
             {Array.from({ length: totalPages }, (_, i) => i + 1)
