@@ -245,6 +245,70 @@ test('task poller marks task running immediately when dispatch already returns a
   assert.equal(patches[1][1].pluginRunId, 'run_started_1');
 });
 
+test('task poller attaches runtime observability to terminal workbench events', async () => {
+  let now = 1_000;
+  const events = [];
+  const poller = createTaskPoller({
+    now: () => now,
+    claimTaskLease: claimTask([
+      {
+        id: 'task_runtime_1',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'author_baseline',
+      },
+    ]),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_runtime_1',
+      collectionRunId: 'run_runtime_1',
+      resultLookup: {
+        externalTaskId: 'task_runtime_1',
+        collectionRunId: 'run_runtime_1',
+      },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_runtime_1',
+        status: 'done',
+        resultSummary: {
+          itemsPlanned: 4,
+          itemsSucceeded: 3,
+          failedItems: 1,
+        },
+        records: {
+          notes: [],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+  });
+
+  await poller.tick();
+  now = 3_500;
+  await poller.tick();
+
+  const terminalEvent = events.find((event) => event.eventType === 'task.completed');
+  assert.equal(terminalEvent.payload.observability.taskType, 'xhs.batchNotes');
+  assert.equal(terminalEvent.payload.observability.source, 'monitor');
+  assert.equal(terminalEvent.payload.observability.taskStrategy, 'author_baseline');
+  assert.equal(terminalEvent.payload.observability.durationMs, 2500);
+  assert.equal(terminalEvent.payload.observability.itemAttemptCount, 4);
+  assert.equal(terminalEvent.payload.observability.itemFailureCount, 1);
+  assert.equal(terminalEvent.payload.observability.report, true);
+});
+
 test('task poller exposes lease credentials and page fingerprint for server ingest', async () => {
   const poller = createTaskPoller({
     claimTaskLease: async () => ({

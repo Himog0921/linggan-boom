@@ -54,6 +54,7 @@ import {
   taskExecutionCleanupKeys,
 } from '../workbench/runtime/taskExecutionCleanup.js';
 import { normalizeProgressEvent } from '../workbench/runtime/progressEvent.js';
+import { attachTaskRuntimeObservability } from '../workbench/runtime/taskRuntimeObservability.js';
 import { navigateToTask, closeTab } from '../workbench/runtime/navigationOrchestrator.js';
 import { getPersistentExecutorInstanceId } from '../workbench/runtime/executorIdentity.js';
 import {
@@ -834,7 +835,12 @@ async function enqueueWorkbenchProgressEvent(message = {}, sender = {}) {
     eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS,
     source: WORKBENCH_EVENT_SOURCE.CONTENT,
     sequence: progressEvent.heartbeatAt || Date.now(),
-    payload: progressEvent,
+    payload: attachTaskRuntimeObservability({
+      task: activeTask,
+      payload: progressEvent,
+      eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS,
+      now: progressEvent.heartbeatAt || Date.now(),
+    }),
     snapshot: {
       status: progressEvent.status,
       progress: progressEvent.total > 0

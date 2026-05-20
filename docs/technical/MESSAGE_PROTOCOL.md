@@ -198,6 +198,27 @@ task.completed
 task.failed
 ```
 
+运行指标：
+
+`task.progress`、`task.completed`、`task.failed` 等事件的 `payload.observability` 会携带插件侧运行摘要，用于工作台统一日志与告警排查。该字段只放计数和阶段信息，不放目标链接、正文或完整页面数据。
+
+```json
+{
+  "durationMs": 12500,
+  "taskType": "xhs.batchNotes",
+  "taskStrategy": "author_baseline",
+  "status": "failed",
+  "stage": "collecting",
+  "parseAttemptCount": 20,
+  "parseFailureCount": 2,
+  "parseFailureRate": 0.1,
+  "itemAttemptCount": 50,
+  "itemFailureCount": 3,
+  "reasonCode": "page_data_not_ready",
+  "report": true
+}
+```
+
 记录类型：
 
 ```text

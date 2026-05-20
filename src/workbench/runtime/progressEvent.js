@@ -1,4 +1,5 @@
 import { REMOTE_EXECUTION_STAGE, REMOTE_EXECUTION_STATUS } from '../protocol/schema.js';
+import { normalizeRuntimeObservability } from './taskRuntimeObservability.js';
 
 function normalizeText(value = '') {
   return String(value || '').trim();
@@ -67,6 +68,7 @@ export function normalizeProgressEvent(input = {}) {
     message: statusText,
     taskType: normalizeText(input.taskType),
     metrics: normalizeMetrics(input.metrics),
+    observability: normalizeRuntimeObservability(input.observability),
     heartbeatAt: normalizeCount(input.heartbeatAt, Date.now()),
     error: input.error || null,
   };
@@ -83,6 +85,7 @@ export function toLegacyProgressMessage(event = {}) {
     stage: normalizedEvent.stage,
     message: normalizedEvent.message,
     metrics: normalizedEvent.metrics,
+    observability: normalizedEvent.observability,
     heartbeatAt: normalizedEvent.heartbeatAt,
     error: normalizedEvent.error,
     taskType: normalizedEvent.taskType,

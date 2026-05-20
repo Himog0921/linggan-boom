@@ -5,6 +5,7 @@ import {
   WORKBENCH_TASK_EVENT_TYPE,
 } from '../protocol/schema.js';
 import { createTaskLeaseIdleSnapshot } from './taskLeaseClient.js';
+import { attachTaskRuntimeObservability } from './taskRuntimeObservability.js';
 
 function deepClone(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -1018,14 +1019,21 @@ export function createTaskPoller(deps = {}) {
 
   async function enqueueTaskEvent(activeTask, eventType, payload = {}, options = {}) {
     if (!activeTask || typeof deps.enqueueEvent !== 'function') return null;
+    const sequence = options.sequence || getNow();
     return deps.enqueueEvent({
       taskId: activeTask.taskId,
       pluginRunId: getPluginRunId(activeTask),
       eventType,
       source: options.source || WORKBENCH_EVENT_SOURCE.PLUGIN,
-      sequence: options.sequence || Date.now(),
+      sequence,
       controlRequestId: options.controlRequestId || '',
-      payload,
+      payload: attachTaskRuntimeObservability({
+        task: activeTask,
+        payload,
+        eventType,
+        now: sequence,
+        report: options.reportRuntime,
+      }),
       snapshot: options.snapshot || null,
     });
   }

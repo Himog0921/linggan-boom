@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import { normalizeProgressEvent, toLegacyProgressMessage } from '../src/workbench/runtime/progressEvent.js';
 import { mapErrorToProtocolError } from '../src/workbench/runtime/errorMapper.js';
+import { attachTaskRuntimeObservability } from '../src/workbench/runtime/taskRuntimeObservability.js';
 
 test('normalizeProgressEvent structures progress with explicit stage and heartbeat', () => {
   const event = normalizeProgressEvent({
@@ -26,6 +27,59 @@ test('normalizeProgressEvent structures progress with explicit stage and heartbe
   assert.equal(event.metrics.discovered, 10);
   assert.equal(event.heartbeatAt, 123456);
   assert.equal(event.message, '正在采集第 3 条');
+});
+
+test('normalizeProgressEvent preserves plugin observability counters', () => {
+  const event = normalizeProgressEvent({
+    current: 5,
+    total: 10,
+    status: '正在解析页面',
+    observability: {
+      durationMs: 2500,
+      parseAttemptCount: 10,
+      parseFailureCount: 1,
+      domParseFailed: true,
+    },
+  });
+
+  assert.equal(event.observability.durationMs, 2500);
+  assert.equal(event.observability.parseAttemptCount, 10);
+  assert.equal(event.observability.parseFailureCount, 1);
+  assert.equal(event.observability.parseFailureRate, 0.1);
+  assert.equal(event.observability.domParseFailed, true);
+});
+
+test('attachTaskRuntimeObservability adds duration and report flag for failed events', () => {
+  const payload = attachTaskRuntimeObservability({
+    task: {
+      taskType: 'xhs.batchNotes',
+      source: 'monitor',
+      taskStrategy: 'author_baseline',
+      dispatchedAtMs: 1000,
+    },
+    eventType: 'task.failed',
+    now: 3500,
+    payload: {
+      status: 'failed',
+      stage: 'collecting',
+      latestSummary: {
+        itemsPlanned: 4,
+        failedItems: 2,
+      },
+      diagnostic: {
+        reasonCode: 'page_data_not_ready',
+      },
+    },
+  });
+
+  assert.equal(payload.observability.taskType, 'xhs.batchNotes');
+  assert.equal(payload.observability.source, 'monitor');
+  assert.equal(payload.observability.taskStrategy, 'author_baseline');
+  assert.equal(payload.observability.durationMs, 2500);
+  assert.equal(payload.observability.itemAttemptCount, 4);
+  assert.equal(payload.observability.itemFailureCount, 2);
+  assert.equal(payload.observability.reasonCode, 'page_data_not_ready');
+  assert.equal(payload.observability.report, true);
 });
 
 test('toLegacyProgressMessage keeps popup-compatible status text', () => {
