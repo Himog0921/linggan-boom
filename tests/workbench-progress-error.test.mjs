@@ -128,6 +128,28 @@ test('mapErrorToProtocolError maps platform verification to platform block', () 
   assert.match(mapped.userMessage, /安全验证/);
 });
 
+test('mapErrorToProtocolError separates permission, login, page, and missing-content failures', () => {
+  const permission = mapErrorToProtocolError('浏览器缺少页面权限，无法打开小红书');
+  assert.equal(permission.code, 'page_permission_denied');
+  assert.equal(permission.category, 'auth');
+  assert.equal(permission.retryable, false);
+
+  const login = mapErrorToProtocolError('登录已失效，请重新登录');
+  assert.equal(login.code, 'login_expired');
+  assert.equal(login.category, 'auth');
+  assert.equal(login.retryable, false);
+
+  const page = mapErrorToProtocolError('目标页面错误页，无法继续采集');
+  assert.equal(page.code, 'error_page');
+  assert.equal(page.category, 'context');
+  assert.equal(page.retryable, true);
+
+  const missing = mapErrorToProtocolError('作品不存在或已删除');
+  assert.equal(missing.code, 'content_not_found');
+  assert.equal(missing.category, 'context');
+  assert.equal(missing.retryable, false);
+});
+
 test('mapErrorToProtocolError keeps explicit code and category overrides', () => {
   const mapped = mapErrorToProtocolError(new Error('用户主动停止任务'), {
     code: 'task_stopped_by_user',

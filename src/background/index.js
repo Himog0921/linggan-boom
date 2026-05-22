@@ -33,8 +33,10 @@ import {
   renewCollectionTaskLease,
 } from '../workbench/runtime/taskLeaseClient.js';
 import {
+  collectStationRuntimeStates,
   collectStationPlatformAccounts,
   MONITOR_STATION_CAPABILITIES,
+  stationCapabilitiesForRuntimeStates,
 } from '../workbench/runtime/executionStationRuntime.js';
 import { createTaskPoller } from '../workbench/runtime/taskPoller.js';
 import {
@@ -1261,7 +1263,7 @@ const bgHandlers = {
   [MSG.GET_EXECUTION_STATION_STATUS]: async () => {
     const authorizationStatus = await getPluginAuthorizationSnapshot();
     const identity = await executionStationClient.getStoredStationIdentity();
-    const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
     return {
       success: true,
       authorized: authorizationStatus.authorized,
@@ -1269,8 +1271,8 @@ const bgHandlers = {
       authorizationMessage: authorizationStatus.authorizationMessage,
       registered: Boolean(identity?.stationId && identity?.stationToken),
       identity,
-      capabilities: stationCapabilitiesForRole(normalizeStationRole(identity?.role)),
-      platformAccounts,
+      capabilities: runtimeSnapshot.capabilities,
+      platformAccounts: runtimeSnapshot.platformAccounts,
     };
   },
 
@@ -1361,7 +1363,7 @@ const bgHandlers = {
       });
       const heartbeat = await sendExecutionStationHeartbeat('online');
       void registerWorkbenchPushSubscriptionTick();
-      const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+      const { platformAccounts } = await collectExecutionStationRuntimeSnapshot(identity);
       return {
         success: true,
         identity,
@@ -1819,8 +1821,8 @@ function normalizeStationRole(value = '') {
   return 'execution';
 }
 
-function stationCapabilitiesForRole() {
-  return MONITOR_STATION_CAPABILITIES;
+function stationCapabilitiesForRole(_role = 'execution', runtimeStates = []) {
+  return stationCapabilitiesForRuntimeStates(runtimeStates, MONITOR_STATION_CAPABILITIES);
 }
 
 async function getPluginAuthorizationSnapshot() {
@@ -1847,18 +1849,33 @@ async function collectStationPlatformAccountsForIdentity(identity = null) {
   return collectStationPlatformAccounts(accountStore, { purpose: role });
 }
 
+async function collectExecutionStationRuntimeSnapshot(identity = null) {
+  const role = normalizeStationRole(identity?.role);
+  const runtimeStates = await collectStationRuntimeStates();
+  const platformAccounts = await collectStationPlatformAccounts(accountStore, {
+    purpose: role,
+    runtimeStates,
+  });
+  return {
+    role,
+    runtimeStates,
+    platformAccounts,
+    capabilities: stationCapabilitiesForRole(role, runtimeStates),
+  };
+}
+
 async function sendExecutionStationHeartbeat(status = 'online') {
   const config = await getAuthorizedFlywheelConfig();
   if (!shouldPollWorkbenchTasks(config)) {
     return { success: false, retryable: false, reason: 'workbench_not_configured' };
   }
   const identity = await executionStationClient.getStoredStationIdentity();
-  const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+  const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
   return executionStationClient.sendHeartbeat({
     status,
-    capabilities: stationCapabilitiesForRole(normalizeStationRole(identity?.role)),
+    capabilities: runtimeSnapshot.capabilities,
     pluginVersion: getPluginVersion(),
-    platformAccounts,
+    platformAccounts: runtimeSnapshot.platformAccounts,
   });
 }
 
@@ -1919,16 +1936,15 @@ const taskPoller = createTaskPoller({
         },
       };
     }
-    const role = normalizeStationRole(identity?.role);
-    const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
     return claimCollectionTaskLease({
       serverUrl: config.serverUrl,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
       authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
-      capabilities: stationCapabilitiesForRole(role),
-      platformAccounts,
+      capabilities: runtimeSnapshot.capabilities,
+      platformAccounts: runtimeSnapshot.platformAccounts,
       store: taskLeaseStore,
     });
   },
@@ -1961,8 +1977,7 @@ const taskPoller = createTaskPoller({
     if (!shouldPollWorkbenchTasks(config) || !identity?.stationId || !identity?.stationToken) {
       return { success: false, skipped: true, reason: 'station_not_registered' };
     }
-    const role = normalizeStationRole(identity?.role);
-    const platformAccounts = await collectStationPlatformAccountsForIdentity(identity);
+    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
     return reconcileExecutionStationLease({
       serverUrl: config.serverUrl,
       stationId: identity.stationId,
@@ -1970,8 +1985,8 @@ const taskPoller = createTaskPoller({
       authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       localLease,
-      capabilities: stationCapabilitiesForRole(role),
-      platformAccounts,
+      capabilities: runtimeSnapshot.capabilities,
+      platformAccounts: runtimeSnapshot.platformAccounts,
       pluginVersion: getPluginVersion(),
       store: taskLeaseStore,
     });

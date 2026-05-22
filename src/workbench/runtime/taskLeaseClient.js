@@ -364,6 +364,7 @@ export async function reconcileExecutionStationLease({
 
   const body = {
     authorizationId: normalizeString(authorizationId),
+    pluginAuthorizationId: normalizeString(authorizationId),
     stationId: normalizeString(stationId),
     stationToken: normalizeString(stationToken),
     localLease: normalizedLocalLease,

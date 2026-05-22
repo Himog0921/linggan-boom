@@ -18,8 +18,26 @@ function normalizeMessage(error = '') {
 
 function inferErrorCode(message = '') {
   const text = normalizeMessage(message);
+  if (/页面权限|缺少权限|host.?permission|permission.?denied/i.test(text)) {
+    return REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED;
+  }
+  if (/内容不存在|作品不存在|笔记不存在|已删除|404|not.?found/i.test(text)) {
+    return REMOTE_ERROR_CODE.CONTENT_NOT_FOUND;
+  }
+  if (/错误页|页面错误|error.?page/i.test(text)) {
+    return REMOTE_ERROR_CODE.ERROR_PAGE;
+  }
+  if (/登录已失效|login.?expired|登录态失效/i.test(text)) {
+    return REMOTE_ERROR_CODE.LOGIN_EXPIRED;
+  }
   if (/安全验证|验证码|滑块|请完成验证|security.?challenge|captcha|verify/i.test(text)) {
     return REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE;
+  }
+  if (/平台拦截|风控|platform.?blocked/i.test(text)) {
+    return REMOTE_ERROR_CODE.PLATFORM_BLOCKED;
+  }
+  if (/只有心跳|没有新数据|heartbeat.?only/i.test(text)) {
+    return REMOTE_ERROR_CODE.HEARTBEAT_ONLY_STALL;
   }
   if (/搜索结果列表|稳定搜索列表/.test(text)) return REMOTE_ERROR_CODE.SEARCH_LIST_UNSTABLE;
   if (/当前页面|可执行上下文|页面未形成/.test(text)) return REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE;
@@ -33,15 +51,27 @@ function inferErrorCode(message = '') {
 
 function inferErrorCategory(code = '', message = '') {
   if (code === 'rate_limited') return REMOTE_ERROR_CATEGORY.RATE_LIMIT;
-  if (code === REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE) {
+  if (
+    code === REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE ||
+    code === REMOTE_ERROR_CODE.PLATFORM_BLOCKED
+  ) {
     return REMOTE_ERROR_CATEGORY.PLATFORM_BLOCK;
   }
-  if (code === REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE || code === REMOTE_ERROR_CODE.SEARCH_LIST_UNSTABLE) {
+  if (
+    code === REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE ||
+    code === REMOTE_ERROR_CODE.SEARCH_LIST_UNSTABLE ||
+    code === REMOTE_ERROR_CODE.ERROR_PAGE
+  ) {
     return REMOTE_ERROR_CATEGORY.CONTEXT;
   }
-  if (code === REMOTE_ERROR_CODE.LOGIN_REQUIRED) {
+  if (
+    code === REMOTE_ERROR_CODE.LOGIN_REQUIRED ||
+    code === REMOTE_ERROR_CODE.LOGIN_EXPIRED
+  ) {
     return REMOTE_ERROR_CATEGORY.AUTH;
   }
+  if (code === REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED) return REMOTE_ERROR_CATEGORY.AUTH;
+  if (code === REMOTE_ERROR_CODE.CONTENT_NOT_FOUND) return REMOTE_ERROR_CATEGORY.CONTEXT;
   if (code === REMOTE_ERROR_CODE.DOWNLOAD_FAILED) {
     return REMOTE_ERROR_CATEGORY.DOWNLOAD;
   }
@@ -56,6 +86,13 @@ function inferErrorCategory(code = '', message = '') {
 
 function inferRetryable(code = '', category = '') {
   if (category === REMOTE_ERROR_CATEGORY.USER_CANCEL) return false;
+  if (
+    code === REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED ||
+    code === REMOTE_ERROR_CODE.LOGIN_EXPIRED ||
+    code === REMOTE_ERROR_CODE.CONTENT_NOT_FOUND
+  ) {
+    return false;
+  }
   if (category === REMOTE_ERROR_CATEGORY.RATE_LIMIT) return true;
   if (code === REMOTE_ERROR_CODE.TASK_STOPPED_BY_USER) return false;
   return true;
