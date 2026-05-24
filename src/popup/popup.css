@@ -724,6 +724,53 @@ main {
   font-weight: 700;
 }
 
+.station-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.station-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.station-diagnostic-item,
+.station-runtime-row {
+  min-width: 0;
+  border: 1px solid rgba(23, 23, 23, 0.16);
+  border-radius: 8px;
+  background: #fbfaf6;
+  padding: 7px 8px;
+}
+
+.station-diagnostic-item span,
+.station-runtime-row span {
+  display: block;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1.3;
+}
+
+.station-diagnostic-item strong,
+.station-runtime-row strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ink);
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.station-runtime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* ===== Cookie ===== */
 .cookie-bottom-section {
   display: flex;

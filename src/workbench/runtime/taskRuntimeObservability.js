@@ -49,9 +49,12 @@ export function normalizeRuntimeObservability(value = {}) {
   const input = normalizeObject(value);
   const parseAttemptCount = firstNumber(input.parseAttemptCount, input.domParseAttemptCount);
   const parseFailureCount = firstNumber(input.parseFailureCount, input.domParseFailureCount);
+  const schemaValidationAttemptCount = firstNumber(input.schemaValidationAttemptCount);
+  const schemaValidationFailureCount = firstNumber(input.schemaValidationFailureCount);
   return compactObject({
     operation: firstText(input.operation),
     taskType: firstText(input.taskType),
+    recordType: firstText(input.recordType),
     taskStrategy: firstText(input.taskStrategy),
     source: firstText(input.source),
     status: firstText(input.status),
@@ -64,9 +67,17 @@ export function normalizeRuntimeObservability(value = {}) {
     parseAttemptCount,
     parseFailureCount,
     parseFailureRate: firstNumber(input.parseFailureRate, rate(parseFailureCount, parseAttemptCount)),
+    schemaValidationAttemptCount,
+    schemaValidationFailureCount,
+    schemaValidationFailureRate: firstNumber(
+      input.schemaValidationFailureRate,
+      rate(schemaValidationFailureCount, schemaValidationAttemptCount),
+    ),
     itemAttemptCount: firstNumber(input.itemAttemptCount),
     itemFailureCount: firstNumber(input.itemFailureCount),
     domParseFailed: normalizeBoolean(input.domParseFailed),
+    recordSchemaFailed: normalizeBoolean(input.recordSchemaFailed),
+    invalidRecordField: firstText(input.invalidRecordField),
     report: normalizeBoolean(input.report),
   });
 }
@@ -75,13 +86,18 @@ function shouldReportRuntimeEvent(eventType = '', observability = {}) {
   const type = normalizeText(eventType);
   const status = normalizeText(observability.status).toLowerCase();
   if (observability.report === true) return true;
-  if (['task.completed', 'task.failed', 'task.stopped'].includes(type)) return true;
+  if (['task.completed', 'task.succeeded', 'task.failed', 'task.stopped', 'task.released'].includes(type)) return true;
   if (['done', 'completed', 'failed', 'stopped', 'canceled', 'rejected'].includes(status)) return true;
   if (Number(observability.parseFailureCount || 0) > 0) return true;
+  if (Number(observability.schemaValidationFailureCount || 0) > 0) return true;
   if (observability.domParseFailed === true) return true;
+  if (observability.recordSchemaFailed === true) return true;
   return false;
 }
 
+/**
+ * @param {{task?: Record<string, any>, payload?: Record<string, any>, eventType?: string, now?: number, report?: boolean}} [options]
+ */
 export function buildTaskRuntimeObservability({
   task = {},
   payload = {},
@@ -121,6 +137,14 @@ export function buildTaskRuntimeObservability({
     metrics.parseFailureCount,
     metrics.domParseFailureCount,
   );
+  const schemaValidationAttemptCount = firstNumber(
+    existing.schemaValidationAttemptCount,
+    metrics.schemaValidationAttemptCount,
+  );
+  const schemaValidationFailureCount = firstNumber(
+    existing.schemaValidationFailureCount,
+    metrics.schemaValidationFailureCount,
+  );
   const itemAttemptCount = firstNumber(
     existing.itemAttemptCount,
     latestSummary.itemsPlanned,
@@ -137,6 +161,7 @@ export function buildTaskRuntimeObservability({
     ...existing,
     operation: firstText(existing.operation, safePayload.taskType, task.taskType),
     taskType: firstText(existing.taskType, safePayload.taskType, task.taskType),
+    recordType: firstText(existing.recordType, safePayload.recordType),
     taskStrategy: firstText(existing.taskStrategy, task.taskStrategy, taskPayload.taskStrategy),
     source: firstText(existing.source, task.source),
     status: firstText(existing.status, safePayload.status),
@@ -148,9 +173,13 @@ export function buildTaskRuntimeObservability({
     durationMs,
     parseAttemptCount,
     parseFailureCount,
+    schemaValidationAttemptCount,
+    schemaValidationFailureCount,
     itemAttemptCount,
     itemFailureCount,
     domParseFailed: existing.domParseFailed,
+    recordSchemaFailed: existing.recordSchemaFailed,
+    invalidRecordField: existing.invalidRecordField,
   });
 
   return {
@@ -159,6 +188,9 @@ export function buildTaskRuntimeObservability({
   };
 }
 
+/**
+ * @param {{task?: Record<string, any>, payload?: Record<string, any>, eventType?: string, now?: number, report?: boolean}} [options]
+ */
 export function attachTaskRuntimeObservability({
   task = {},
   payload = {},

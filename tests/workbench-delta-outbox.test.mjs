@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import { createDeltaOutbox } from '../src/workbench/runtime/deltaOutbox.js';
 import {
   WORKBENCH_EVENT_SOURCE,
+  WORKBENCH_RECORD_TYPE,
   WORKBENCH_TASK_EVENT_TYPE,
 } from '../src/workbench/protocol/schema.js';
 
@@ -207,6 +208,45 @@ test('delta outbox attaches lease credentials and page fingerprint to ingest env
   });
 });
 
+test('delta outbox preserves explicit event execution identity fields', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  const outbox = createDeltaOutbox({
+    store,
+    ingestDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_release_identity',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_RELEASED,
+    sequence: 5,
+    attemptId: 'attempt-release-1',
+    leaseId: 'lease-release-1',
+    stationId: 'station-release-1',
+    accountId: 'account-release-1',
+    platform: 'xhs',
+    payload: { reasonCode: 'page_context_unavailable' },
+  });
+
+  await outbox.flush();
+
+  const event = envelopes[0][1].events[0];
+  assert.equal(event.attemptId, 'attempt-release-1');
+  assert.equal(event.leaseId, 'lease-release-1');
+  assert.equal(event.stationId, 'station-release-1');
+  assert.equal(event.accountId, 'account-release-1');
+  assert.equal(event.platform, 'xhs');
+});
+
 test('delta outbox prepares record payloads before storing them', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
@@ -247,6 +287,36 @@ test('delta outbox prepares record payloads before storing them', async () => {
   await outbox.flush();
 
   assert.equal(envelopes[0][1].records[0].payload.coverUrl, 'https://blob.example.com/stable-cover.webp');
+});
+
+test('delta outbox rejects invalid extractor records before they enter the queue', async () => {
+  const store = createMemoryOutboxStore();
+  const outbox = createDeltaOutbox({
+    store,
+    ingestDelta: async () => ({ success: true }),
+    autoFlush: false,
+  });
+
+  await assert.rejects(
+    outbox.enqueueRecord({
+      taskId: 'task_1',
+      pluginRunId: 'run_1',
+      recordType: WORKBENCH_RECORD_TYPE.COMMENT,
+      externalRecordId: 'comment_1',
+      payload: {
+        commentId: 'comment_1',
+        text: '没有父级作品',
+      },
+    }),
+    (error) => {
+      assert.equal(error.retryable, false);
+      assert.equal(error.code, 'missing_comment_parent');
+      assert.equal(error.observability.recordType, WORKBENCH_RECORD_TYPE.COMMENT);
+      assert.equal(error.observability.schemaValidationFailureCount, 1);
+      return true;
+    },
+  );
+  assert.equal(store.rows.size, 0);
 });
 
 test('delta outbox schedules retry on network failure then accepts duplicate ack', async () => {

@@ -13,9 +13,15 @@ export function buildHeartbeatPatchForRun(existingRun = {}, patch = {}, timestam
     return null;
   }
 
+  const heartbeatPatch = patch && typeof patch === 'object' && !Array.isArray(patch)
+    ? { ...patch }
+    : {};
+  delete heartbeatPatch.current;
+  delete heartbeatPatch.total;
+
   const normalizedTimestamp = Number.isFinite(Number(timestamp)) ? Number(timestamp) : Date.now();
   return {
-    ...patch,
+    ...heartbeatPatch,
     lastHeartbeatAt: normalizedTimestamp,
   };
 }

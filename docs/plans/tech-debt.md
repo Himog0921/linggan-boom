@@ -8,7 +8,7 @@
 |------|------|------|------|
 | T1 | Popup / Dashboard / DouyinAdapter 过胖 | 当前 `popup.js` 约 1171 行、`dashboard.js` 约 1174 行、`src/platforms/douyin/index.js` 约 774 行，新的复杂度中心已经转移到交互与编排层 | 待处理 |
 | T2 | 长任务语义仍未完全统一 | 单条评论、批量评论、评论图片区仍存在”阶段文案相近但停止/暂停语义不完全一致”的风险 | 待处理 |
-| T3 | 实机验收闭环仍不完整 | 数据面板二次消费仍以手工回归为主，缺稳定验收记录；`douyin.collectAuthor / douyin.singleComments / douyin.commentImageDownload` 均已完成实机验证，其中评论图片区已验证”空结果正常结束”路径；`xhs.batchNotes` 过早关闭 bug 已实机修复并复测通过，`xhs.batchComments` 已完成长任务心跳与性能改进实测 | 待处理 |
+| T3 | 实机验收闭环仍不完整 | 2026-05-24 已新增执行故障演练记录，覆盖 Service Worker 恢复、tab 关闭、页面刷新重注入、同账号互斥、辅助页清理和控制指令；剩余主要是真实登录账号安装态冒烟采集，不再把代码级执行链路验收混在这里 | 持续监控 |
 | T4 | 飞轮同步支线只有止血，没有完整产品化 | 当前已修复构建错配，但后台无法直接读取页面 IndexedDB，同步路径仍主要依赖 Popup 从页面上下文发起 | 待处理 |
 | T13 | 代码审查发现的安全与效率问题（2026-04-20） | 见下方「2026-04-20 代码审查发现」章节 | 部分已修复 |
 
@@ -17,10 +17,10 @@
 | 编号 | 问题 | 说明 | 状态 |
 |------|------|------|------|
 | T5 | 加载边界需要按“稳定优先级”治理，而不是一刀切异步化 | 2026-05-17 已确认 Chrome 内容脚本不适合继续拆运行时异步 chunk，`contentDataRuntime / douyinRuntime` 保持 `webpackMode:"eager"`；`content.js` 约 `581 KiB`，后续减包需采用内容脚本安全方案 | 持续监控 |
-| T6 | 消息协议 envelope 未统一 | Workbench runtime listener、Dashboard/content bridge、popup/content 数据消息已补兼容 `{ success, data }` envelope，但仓内其余接口仍同时存在 `{ success, data }`、裸数组、裸对象等返回格式 | 待处理 |
+| T6 | 消息协议 envelope 未统一 | Workbench execution contract 边界已补 `eventId / attemptId / leaseId / eventSeq`、记录结构校验和 `check:contracts`；仓内非执行链路接口仍同时存在 `{ success, data }`、裸数组、裸对象等返回格式 | 持续监控 |
 | T12 | 工作台协议适配层已落地，但仍需继续收口 | `src/workbench/*` 已建立，第一批远程任务也已接入；但 `background` 网关、消息 envelope 和长任务语义仍未完全统一，后续若继续直接把逻辑塞进胖文件，复杂度仍会快速回升 | 持续监控 |
 | T7 | BaseBatchController 尚未抽象 | XHS / 抖音批量链路仍有重复生命周期控制逻辑 | 待处理 |
-| T8 | `contentRouter` 抽象尚未完全落地 | 第一阶段已把 `hostname -> platform -> init` 收到 `contentRouter/contentPlatformRegistry`，但更深层平台能力注入和 `isDouyinPage()` 分流仍未完全收口 | 待处理 |
+| T8 | `contentRouter` 抽象尚未完全落地 | `hostname -> platform -> init` 已收进 `contentRouter/contentPlatformRegistry`；2026-05-24 又补了 `platforms/registry.js` 与 XHS / Douyin adapter，页面能力判断已走统一接口。剩余主要是按钮动作和采集控制仍有平台分支，后续随瘦身继续收口 | 持续监控 |
 | T9 | 文档仍需持续防漂移 | `ARCHITECTURE / TECH_STACK / BACKEND_STRUCTURE / active plans` 必须跟着每轮结构变化同步，否则很容易再次落后 | 持续监控 |
 
 ## 低优先级

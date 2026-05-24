@@ -1,4 +1,5 @@
 import {
+  REMOTE_ERROR_CODE,
   REMOTE_TASK_CONTROL_ACTION,
   WORKBENCH_EVENT_SOURCE,
   WORKBENCH_RECORD_TYPE,
@@ -6,6 +7,7 @@ import {
 } from '../protocol/schema.js';
 import { createTaskLeaseIdleSnapshot } from './taskLeaseClient.js';
 import { attachTaskRuntimeObservability } from './taskRuntimeObservability.js';
+import { parseTargetIdentity } from '../../shared/targetIdentity.js';
 
 function deepClone(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -52,6 +54,23 @@ function isAuthorizationFailureError(error) {
 
 function isMissingServerTaskError(error) {
   return Number(error?.status || 0) === 404;
+}
+
+function isRecordSchemaValidationError(error) {
+  return (
+    error?.retryable === false
+    && Array.isArray(error?.validationErrors)
+    && error?.observability?.recordSchemaFailed === true
+  );
+}
+
+function buildRecordSchemaFailureMessage(error) {
+  const firstError = Array.isArray(error?.validationErrors) ? error.validationErrors[0] : null;
+  return String(
+    firstError?.message
+    || error?.message
+    || '采集结果结构不合格，已停止本轮同步。',
+  ).trim();
 }
 
 function isMonitorTask(task = {}) {
@@ -122,9 +141,9 @@ function mapRunStatusToWorkbenchStatus(status = '') {
 function mapWorkbenchStatusToEventType(status = '') {
   switch (String(status || '').trim()) {
     case 'completed':
-      return WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED;
+      return WORKBENCH_TASK_EVENT_TYPE.TASK_SUCCEEDED;
     case 'stopped':
-      return WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPED;
+      return WORKBENCH_TASK_EVENT_TYPE.TASK_RELEASED;
     case 'failed':
       return WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED;
     case 'paused':
@@ -174,19 +193,105 @@ function normalizeLeaseSnapshot(lease = {}) {
   return snapshot;
 }
 
-function extractProfileIdentity(url = '') {
-  const text = String(url || '').trim();
-  const match = text.match(/xiaohongshu\.com\/user\/profile\/([^/?#]+)/i)
-    || text.match(/douyin\.com\/user\/([^/?#]+)/i)
-    || text.match(/douyin\.com\/@([^/?#]+)/i);
-  return String(match?.[1] || '').trim().toLowerCase();
+function normalizeCapabilityRejection(capability = {}) {
+  const reasonCode = String(capability?.reasonCode || capability?.error || 'capability_rejected').trim()
+    || 'capability_rejected';
+  const reasonMessage = firstNonEmptyText(
+    capability?.reasonMessage,
+    capability?.error,
+    '当前页面暂时不能执行这个任务',
+  );
+  const payload = {
+    status: 'pending',
+    reason: 'capability_rejected',
+    reasonCode,
+    errorMessage: reasonMessage,
+    userMessage: reasonMessage,
+    taskType: String(capability?.taskType || '').trim(),
+  };
+  if (capability?.recommendedAction) {
+    payload.recommendedAction = String(capability.recommendedAction || '').trim();
+  }
+  if (reasonCode === REMOTE_ERROR_CODE.PAGE_TARGET_MISMATCH || /target_mismatch/i.test(reasonCode)) {
+    payload.errorCode = 'TARGET_MISMATCH';
+  }
+  return {
+    reasonCode,
+    reasonMessage,
+    payload,
+  };
 }
 
-function extractDetailIdentity(url = '') {
-  const text = String(url || '').trim();
-  const match = text.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
-    || text.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
-  return String(match?.[1] || '').trim().toLowerCase();
+function buildLeaseEventFields({ task = {}, lease = null, executorInstanceId = '', accountId = '' } = {}) {
+  const fields = {
+    attemptId: String(lease?.attemptId || task?.currentAttemptId || task?.attemptId || '').trim(),
+    leaseId: String(lease?.leaseToken || '').trim(),
+    stationId: String(executorInstanceId || task?.executorInstanceId || '').trim(),
+    accountId: String(accountId || task?.accountId || '').trim(),
+    platform: String(task?.platform || '').trim(),
+  };
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value));
+}
+
+function buildDispatchFailurePayload({
+  reason = 'dispatch_failed',
+  errorMessage = '',
+  reasonCode = '',
+  message = '',
+} = {}) {
+  const resolvedMessage = firstNonEmptyText(errorMessage, message, '派发任务失败');
+  const payload = {
+    status: 'failed',
+    reason,
+    errorMessage: resolvedMessage,
+    userMessage: firstNonEmptyText(message, resolvedMessage),
+  };
+  const normalizedReasonCode = String(reasonCode || '').trim();
+  if (normalizedReasonCode) payload.reasonCode = normalizedReasonCode;
+  return payload;
+}
+
+function normalizeExecutionLockResult(result = {}) {
+  const acquired = result?.acquired !== false && result?.success !== false;
+  const reasonCode = String(result?.reasonCode || result?.code || 'account_busy').trim() || 'account_busy';
+  const reasonMessage = firstNonEmptyText(
+    result?.reasonMessage,
+    result?.message,
+    '同一账号正在执行另一个采集任务',
+  );
+  const retryAfterMs = toFiniteNumber(result?.retryAfterMs, 0);
+  return {
+    acquired,
+    reasonCode,
+    reasonMessage,
+    retryAfterMs,
+  };
+}
+
+function buildExecutionLockSnapshot({ task = {}, lease = null, accountId = '' } = {}) {
+  const lock = {
+    platform: String(task?.platform || '').trim(),
+    accountId: String(accountId || task?.accountId || '').trim(),
+    taskId: String(task?.id || task?.taskId || '').trim(),
+    leaseToken: String(lease?.leaseToken || '').trim(),
+    attemptId: String(lease?.attemptId || task?.currentAttemptId || task?.attemptId || '').trim(),
+  };
+  return Object.fromEntries(Object.entries(lock).filter(([, value]) => value));
+}
+
+function buildAccountBusyPayload({ accountId = '', platform = '', lockResult = {} } = {}) {
+  const normalized = normalizeExecutionLockResult(lockResult);
+  const payload = {
+    status: 'pending',
+    reason: normalized.reasonCode,
+    reasonCode: normalized.reasonCode,
+    errorMessage: normalized.reasonMessage,
+    userMessage: normalized.reasonMessage,
+    accountId: String(accountId || '').trim(),
+    platform: String(platform || '').trim(),
+  };
+  if (normalized.retryAfterMs > 0) payload.retryAfterMs = normalized.retryAfterMs;
+  return payload;
 }
 
 function normalizePageMode(report = {}) {
@@ -204,8 +309,9 @@ function buildPageFingerprint(report = {}) {
   const url = String(report.url || '').trim();
   const pageType = normalizePageMode(report);
   if (!url && !pageType && !report.platform) return null;
-  const profileId = extractProfileIdentity(url);
-  const contentId = extractDetailIdentity(url);
+  const identity = parseTargetIdentity(url);
+  const profileId = identity.profileId;
+  const contentId = identity.contentId;
   const fingerprint = {
     platform: String(report.platform || '').trim(),
     pageType,
@@ -248,6 +354,35 @@ function firstNonEmptyText(...values) {
 
 function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function normalizePersistedActiveTaskContext(value = {}) {
+  const source = normalizeObject(value);
+  const taskId = String(source.taskId || source.id || '').trim();
+  if (!taskId) return null;
+  return {
+    ...source,
+    taskId,
+    externalTaskId: String(source.externalTaskId || source.taskId || '').trim(),
+    pluginRunId: String(source.pluginRunId || source.collectionRunId || '').trim(),
+    platform: String(source.platform || '').trim(),
+    source: String(source.source || '').trim(),
+    taskStrategy: String(source.taskStrategy || '').trim(),
+    accountId: String(source.accountId || '').trim(),
+    tabId: toOptionalInteger(source.tabId) || null,
+    workbenchStatus: String(source.workbenchStatus || source.status || '').trim(),
+    resultFingerprint: String(source.resultFingerprint || '').trim(),
+    controlCursor: String(source.controlCursor || '').trim(),
+    errorMessage: String(source.errorMessage || '').trim(),
+    attemptId: String(source.attemptId || source.lease?.attemptId || '').trim(),
+    leaseEpoch: toOptionalInteger(source.leaseEpoch ?? source.lease?.leaseEpoch),
+    executionPhase: String(source.executionPhase || '').trim(),
+    pageFingerprint: normalizeObject(source.pageFingerprint),
+    dispatchedAtMs: toFiniteNumber(source.dispatchedAtMs, 0),
+    pendingAccountUsageId: String(source.pendingAccountUsageId || '').trim(),
+    firstRecordSeen: Boolean(source.firstRecordSeen),
+    lease: normalizeObject(source.lease),
+  };
 }
 
 function normalizeRunDiagnostic(run = {}, errorMessage = '') {
@@ -574,34 +709,41 @@ function resolveDispatchCollectionRunId(dispatch = {}) {
   ).trim();
 }
 
-function hydrateTrackedTask(task = {}, now = Date.now()) {
+function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null) {
   const taskId = String(task?.id || '').trim();
   if (!taskId) return null;
+  const persisted = normalizePersistedActiveTaskContext(persistedContext);
+  const matchingPersisted = persisted?.taskId === taskId ? persisted : null;
   return {
     taskId,
-    externalTaskId: taskId,
+    externalTaskId: String(task?.externalTaskId || matchingPersisted?.externalTaskId || taskId).trim(),
     taskType: String(task?.taskType || '').trim(),
-    source: String(task?.source || '').trim(),
-    taskStrategy: String(task?.taskStrategy || '').trim(),
+    platform: String(task?.platform || matchingPersisted?.platform || '').trim(),
+    source: String(task?.source || matchingPersisted?.source || '').trim(),
+    taskStrategy: String(task?.taskStrategy || matchingPersisted?.taskStrategy || '').trim(),
     payload: task?.payload && typeof task.payload === 'object' ? task.payload : {},
-    pluginRunId: String(task?.pluginRunId || '').trim(),
-    executorInstanceId: String(task?.executorInstanceId || '').trim(),
-    accountId: String(task?.accountId || '').trim(),
-    workbenchStatus: String(task?.status || 'dispatched').trim() || 'dispatched',
-    resultFingerprint: '',
-    controlCursor: String(task?.controlCursor || '').trim(),
-    errorMessage: String(task?.errorMessage || '').trim(),
-    attemptId: String(task?.currentAttemptId || task?.attemptId || '').trim(),
-    leaseEpoch: toOptionalInteger(task?.leaseEpoch),
-    executionPhase: String(task?.executionPhase || '').trim(),
+    pluginRunId: String(task?.pluginRunId || matchingPersisted?.pluginRunId || '').trim(),
+    executorInstanceId: String(task?.executorInstanceId || matchingPersisted?.executorInstanceId || matchingPersisted?.stationId || '').trim(),
+    accountId: String(task?.accountId || matchingPersisted?.accountId || '').trim(),
+    tabId: toOptionalInteger(task?.tabId) || matchingPersisted?.tabId || null,
+    workbenchStatus: String(task?.status || matchingPersisted?.workbenchStatus || 'dispatched').trim() || 'dispatched',
+    resultFingerprint: String(matchingPersisted?.resultFingerprint || '').trim(),
+    controlCursor: String(task?.controlCursor || matchingPersisted?.controlCursor || '').trim(),
+    errorMessage: String(task?.errorMessage || matchingPersisted?.errorMessage || '').trim(),
+    attemptId: String(task?.currentAttemptId || task?.attemptId || matchingPersisted?.attemptId || '').trim(),
+    leaseEpoch: toOptionalInteger(task?.leaseEpoch ?? matchingPersisted?.leaseEpoch),
+    executionPhase: String(task?.executionPhase || matchingPersisted?.executionPhase || '').trim(),
     pageFingerprint: task?.pageFingerprint && typeof task.pageFingerprint === 'object' && !Array.isArray(task.pageFingerprint)
       ? { ...task.pageFingerprint }
-      : null,
+      : (matchingPersisted?.pageFingerprint && Object.keys(matchingPersisted.pageFingerprint).length > 0 ? { ...matchingPersisted.pageFingerprint } : null),
     dispatchedAtMs:
       parseTimestamp(task?.dispatchedAt)
       || parseTimestamp(task?.updatedAt)
       || parseTimestamp(task?.createdAt)
+      || toFiniteNumber(matchingPersisted?.dispatchedAtMs, 0)
       || now,
+    pendingAccountUsageId: String(matchingPersisted?.pendingAccountUsageId || '').trim(),
+    firstRecordSeen: Boolean(matchingPersisted?.firstRecordSeen),
   };
 }
 
@@ -782,11 +924,98 @@ export function createTaskPoller(deps = {}) {
     return String(await deps.getExecutorInstanceId() || '').trim();
   }
 
-  async function clearActiveLease() {
+  function buildActiveTaskContextSnapshot() {
+    if (!state.activeTask) return null;
+    return {
+      ...state.activeTask,
+      lease: state.activeLease ? normalizeLeaseSnapshot(state.activeLease) : {},
+      updatedAtMs: getNow(),
+    };
+  }
+
+  async function persistActiveTaskContext() {
+    if (typeof deps.writeActiveTaskContext !== 'function') return;
+    const snapshot = buildActiveTaskContextSnapshot();
+    if (!snapshot) return;
+    try {
+      await deps.writeActiveTaskContext(snapshot);
+    } catch {
+      // Persistence must not block task execution.
+    }
+  }
+
+  async function readActiveTaskContext(taskId = '') {
+    if (typeof deps.readActiveTaskContext !== 'function') return null;
+    try {
+      const snapshot = normalizePersistedActiveTaskContext(await deps.readActiveTaskContext(taskId));
+      if (!snapshot) return null;
+      const normalizedTaskId = String(taskId || '').trim();
+      return !normalizedTaskId || snapshot.taskId === normalizedTaskId ? snapshot : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function clearActiveTaskContext() {
+    if (typeof deps.clearActiveTaskContext !== 'function') return;
+    try {
+      await deps.clearActiveTaskContext();
+    } catch {
+      // Storage cleanup failure should not block lease cleanup.
+    }
+  }
+
+  async function releaseExecutionLock(activeTask = state.activeTask) {
+    if (typeof deps.releaseExecutionLock !== 'function') return;
+    const platform = String(activeTask?.platform || '').trim();
+    const accountId = String(activeTask?.accountId || '').trim();
+    const taskId = String(activeTask?.taskId || activeTask?.id || '').trim();
+    if (!platform || !accountId || !taskId) return;
+    try {
+      await deps.releaseExecutionLock({ platform, accountId, taskId });
+    } catch {
+      // A stale local lock should not block remote task cleanup.
+    }
+  }
+
+  async function clearActiveLease(activeTaskForCleanup = state.activeTask) {
+    await releaseExecutionLock(activeTaskForCleanup);
     state.activeLease = null;
+    await clearActiveTaskContext();
     if (typeof deps.clearTaskLease === 'function') {
       await deps.clearTaskLease();
     }
+  }
+
+  async function acquireExecutionLock(task = {}, preCheck = null, lease = null) {
+    const accountId = String(preCheck?.accountId || task?.accountId || '').trim();
+    const platform = String(task?.platform || '').trim();
+    if (!accountId || !platform || typeof deps.acquireExecutionLock !== 'function') {
+      return { acquired: true, lock: null };
+    }
+    const lock = buildExecutionLockSnapshot({ task, lease, accountId });
+    try {
+      const result = normalizeExecutionLockResult(await deps.acquireExecutionLock(lock));
+      return { ...result, lock };
+    } catch (error) {
+      return {
+        acquired: false,
+        reasonCode: 'account_lock_error',
+        reasonMessage: String(error?.message || error || '账号执行锁检查失败'),
+        retryAfterMs: 60000,
+        lock,
+      };
+    }
+  }
+
+  async function refreshExecutionLock(activeTask = state.activeTask) {
+    if (!activeTask || typeof deps.acquireExecutionLock !== 'function') return;
+    await acquireExecutionLock({
+      id: activeTask.taskId,
+      platform: activeTask.platform,
+      accountId: activeTask.accountId,
+      currentAttemptId: activeTask.attemptId,
+    }, { accountId: activeTask.accountId }, state.activeLease);
   }
 
   function updateActiveTask(patch = {}) {
@@ -801,6 +1030,7 @@ export function createTaskPoller(deps = {}) {
       ...state.activeTask,
       ...nextPatch,
     });
+    void persistActiveTaskContext();
     return { ...state.activeTask };
   }
 
@@ -877,20 +1107,50 @@ export function createTaskPoller(deps = {}) {
     }
 
     if (!capability?.accepted) {
+      const rejection = normalizeCapabilityRejection({
+        ...capability,
+        taskType: task.taskType,
+      });
+      const executorInstanceId = await resolveExecutorInstanceId();
+      const eventFields = buildLeaseEventFields({
+        task,
+        lease,
+        executorInstanceId,
+        accountId: preCheck?.accountId,
+      });
+      if (lease) {
+        await patchTask(task.id, {
+          status: 'pending',
+          progress: 0,
+          errorMessage: rejection.reasonMessage,
+        });
+      }
       if (typeof deps.enqueueEvent === 'function' && task?.id) {
         await deps.enqueueEvent({
           taskId: task.id,
           pluginRunId: '',
-          eventType: 'task.capability_mismatch',
+          eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_CAPABILITY_MISMATCH,
           source: WORKBENCH_EVENT_SOURCE.PLUGIN,
           sequence: Date.now(),
+          ...eventFields,
           payload: {
             taskType: String(task.taskType || '').trim(),
-            reasonCode: capability?.reasonCode || '',
-            reasonMessage: capability?.reasonMessage || capability?.error || 'capability_rejected',
+            reasonCode: rejection.reasonCode,
+            reasonMessage: rejection.reasonMessage,
             recommendedAction: capability?.recommendedAction || '',
           },
         });
+        if (lease) {
+          await deps.enqueueEvent({
+            taskId: task.id,
+            pluginRunId: '',
+            eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_RELEASED,
+            source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+            sequence: Date.now() + 1,
+            ...eventFields,
+            payload: rejection.payload,
+          });
+        }
         if (typeof deps.flushDeltas === 'function') {
           await deps.flushDeltas();
         }
@@ -899,7 +1159,50 @@ export function createTaskPoller(deps = {}) {
       return {
         success: true,
         skipped: true,
-        reason: capability?.error || capability?.reasonMessage || 'capability_rejected',
+        reason: rejection.reasonMessage,
+        cleanupTask: cleanupTaskSnapshot(task),
+      };
+    }
+
+    const executionLock = await acquireExecutionLock(task, preCheck, lease);
+    if (!executionLock.acquired) {
+      const lockAccountId = String(preCheck?.accountId || task?.accountId || '').trim();
+      const lockPlatform = String(task?.platform || '').trim();
+      const payload = buildAccountBusyPayload({
+        accountId: lockAccountId,
+        platform: lockPlatform,
+        lockResult: executionLock,
+      });
+      if (lease) {
+        await patchTask(task.id, {
+          status: 'pending',
+          progress: 0,
+          errorMessage: payload.errorMessage,
+        });
+      }
+      if (typeof deps.enqueueEvent === 'function' && task?.id) {
+        const executorInstanceId = await resolveExecutorInstanceId();
+        await deps.enqueueEvent({
+          taskId: task.id,
+          pluginRunId: '',
+          eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_RELEASED,
+          source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+          sequence: Date.now(),
+          ...buildLeaseEventFields({
+            task,
+            lease,
+            executorInstanceId,
+            accountId: lockAccountId,
+          }),
+          payload,
+        });
+        if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
+      }
+      if (lease) await clearActiveLease();
+      return {
+        success: true,
+        skipped: true,
+        reason: payload.reasonCode,
         cleanupTask: cleanupTaskSnapshot(task),
       };
     }
@@ -914,47 +1217,88 @@ export function createTaskPoller(deps = {}) {
       const recoveryStatus = isRecoverable
         ? recoverableConnectionStatusForTask(task)
         : { status: 'failed', progress: 100, eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, message: '派发任务失败' };
+      const errorMessage = String(error?.message || error || 'dispatch_failed');
       await patchTask(task.id, {
         status: recoveryStatus.status,
         progress: recoveryStatus.progress,
-        errorMessage: String(error?.message || error || 'dispatch_failed'),
+        errorMessage,
       });
-      if (isRecoverable && typeof deps.enqueueEvent === 'function') {
+      if (typeof deps.enqueueEvent === 'function') {
+        const executorInstanceId = await resolveExecutorInstanceId();
+        const eventFields = buildLeaseEventFields({
+          task,
+          lease,
+          executorInstanceId,
+          accountId: preCheck?.accountId,
+        });
         await deps.enqueueEvent({
           taskId: task.id,
           pluginRunId: '',
           eventType: recoveryStatus.eventType,
           source: WORKBENCH_EVENT_SOURCE.PLUGIN,
           sequence: Date.now(),
-          payload: {
-            reason: 'connection_interrupted',
-            message: recoveryStatus.message,
-            status: recoveryStatus.status,
-            errorMessage: String(error?.message || error || 'dispatch_failed'),
-          },
+          ...eventFields,
+          payload: isRecoverable
+            ? {
+                reason: 'connection_interrupted',
+                message: recoveryStatus.message,
+                status: recoveryStatus.status,
+                errorMessage,
+              }
+            : buildDispatchFailurePayload({
+                reason: 'dispatch_failed',
+                errorMessage,
+                message: recoveryStatus.message,
+              }),
         });
         if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
       }
+      await releaseExecutionLock(executionLock.lock);
       if (lease) await clearActiveLease();
       return {
         success: false,
         skipped: false,
-        reason: String(error?.message || error || 'dispatch_failed'),
+        reason: errorMessage,
         cleanupTask: cleanupTaskSnapshot(task),
       };
     }
 
     if (!dispatch?.accepted) {
+      const errorMessage = String(dispatch?.error || 'dispatch_failed');
       await patchTask(task.id, {
         status: 'failed',
         progress: 100,
-        errorMessage: String(dispatch?.error || 'dispatch_failed'),
+        errorMessage,
       });
+      if (typeof deps.enqueueEvent === 'function') {
+        const executorInstanceId = await resolveExecutorInstanceId();
+        await deps.enqueueEvent({
+          taskId: task.id,
+          pluginRunId: '',
+          eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED,
+          source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+          sequence: Date.now(),
+          ...buildLeaseEventFields({
+            task,
+            lease,
+            executorInstanceId,
+            accountId: preCheck?.accountId,
+          }),
+          payload: buildDispatchFailurePayload({
+            reason: 'dispatch_rejected',
+            errorMessage,
+            reasonCode: dispatch?.reasonCode || dispatch?.errorCode || '',
+            message: dispatch?.reasonMessage || '页面拒绝执行任务',
+          }),
+        });
+        if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
+      }
+      await releaseExecutionLock(executionLock.lock);
       if (lease) await clearActiveLease();
       return {
         success: false,
         skipped: false,
-        reason: 'dispatch_failed',
+        reason: errorMessage,
         cleanupTask: cleanupTaskSnapshot(task),
       };
     }
@@ -981,6 +1325,7 @@ export function createTaskPoller(deps = {}) {
       taskId: task.id,
       externalTaskId: String(dispatch?.resultLookup?.externalTaskId || dispatch?.taskId || task.id).trim(),
       taskType: String(task?.taskType || '').trim(),
+      platform: String(task?.platform || '').trim(),
       source: String(task?.source || '').trim(),
       taskStrategy: String(task?.taskStrategy || task?.payload?.taskStrategy || '').trim(),
       payload: task?.payload && typeof task.payload === 'object' ? task.payload : {},
@@ -998,6 +1343,7 @@ export function createTaskPoller(deps = {}) {
       pageFingerprint,
       dispatchedAtMs: getNow(),
       pendingAccountUsageId: '',
+      firstRecordSeen: false,
     };
     state.activeLease = lease
       ? normalizeLeaseSnapshot(lease)
@@ -1009,6 +1355,19 @@ export function createTaskPoller(deps = {}) {
         collectionRunId: dispatchCollectionRunId || undefined,
       });
     }
+    if (dispatchCollectionRunId) {
+      await enqueueTaskEvent(state.activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_PAGE_OPENED, {
+        status: 'dispatched',
+        message: '采集页已打开，等待执行确认',
+        collectionRunId: dispatchCollectionRunId,
+      });
+      await enqueueTaskEvent(state.activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_RUNNING, {
+        status: 'running',
+        message: '采集页已开始执行',
+        collectionRunId: dispatchCollectionRunId,
+      });
+    }
+    await persistActiveTaskContext();
     state.lastIdleReason = null;
     return { success: true, accepted: true };
   }
@@ -1148,7 +1507,7 @@ export function createTaskPoller(deps = {}) {
       });
       state.activeTask = null;
       state.seenControlIds.clear();
-      await clearActiveLease();
+      await clearActiveLease(activeTask);
       return {
         success: true,
         released: true,
@@ -1185,7 +1544,7 @@ export function createTaskPoller(deps = {}) {
           });
           state.activeTask = null;
           state.seenControlIds.clear();
-          await clearActiveLease();
+          await clearActiveLease(activeTask);
           return {
             success: true,
             released: true,
@@ -1199,12 +1558,13 @@ export function createTaskPoller(deps = {}) {
         });
       }
     }
+    await refreshExecutionLock(activeTask);
     const controlResult = await consumeControlRequests(activeTask);
     if (controlResult?.missingActiveTask) {
       const cleanupTask = cleanupTaskSnapshot(activeTask);
       state.activeTask = null;
       state.seenControlIds.clear();
-      await clearActiveLease();
+      await clearActiveLease(activeTask);
       return {
         success: true,
         released: true,
@@ -1239,7 +1599,7 @@ export function createTaskPoller(deps = {}) {
             errorMessage: startupErrorMessage,
             notBeforeAt,
           });
-          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_PAGE_OPEN_FAILED, {
             status: 'pending',
             errorMessage: startupErrorMessage,
             userMessage: startupErrorMessage,
@@ -1249,7 +1609,7 @@ export function createTaskPoller(deps = {}) {
           });
           state.activeTask = null;
           state.seenControlIds.clear();
-          await clearActiveLease();
+          await clearActiveLease(activeTask);
           return {
             success: true,
             released: true,
@@ -1277,7 +1637,7 @@ export function createTaskPoller(deps = {}) {
         if (recoveryStatus.status === 'failed') {
           await notifyContentScriptToStop(activeTask);
           state.activeTask = null;
-          await clearActiveLease();
+          await clearActiveLease(activeTask);
           return {
             success: false,
             failed: true,
@@ -1301,7 +1661,7 @@ export function createTaskPoller(deps = {}) {
       });
       await notifyContentScriptToStop(activeTask);
       state.activeTask = null;
-      await clearActiveLease();
+      await clearActiveLease(activeTask);
       return {
         success: false,
         failed: true,
@@ -1354,7 +1714,49 @@ export function createTaskPoller(deps = {}) {
         resultSummary,
       );
       if (recordDeltas.length && typeof deps.enqueueRecords === 'function') {
-        await deps.enqueueRecords(recordDeltas);
+        try {
+          await deps.enqueueRecords(recordDeltas);
+        } catch (error) {
+          if (!isRecordSchemaValidationError(error)) throw error;
+          const schemaErrorMessage = buildRecordSchemaFailureMessage(error);
+          await patchTask(activeTask.taskId, {
+            status: 'failed',
+            progress: 100,
+            pluginRunId: pluginRunId || null,
+            resultSummary,
+            errorMessage: schemaErrorMessage,
+          });
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+            status: 'failed',
+            progress: 100,
+            errorMessage: schemaErrorMessage,
+            userMessage: '采集结果不完整，已停止本轮同步并记录健康告警。',
+            reasonCode: error.reasonCode || error.code || 'record_payload_schema_invalid',
+            errorCode: error.code || error.reasonCode || 'record_payload_schema_invalid',
+            recordType: error.observability?.recordType || '',
+            observability: error.observability || {},
+            latestSummary: run?.resultSummary || {},
+          }, { reportRuntime: true });
+          await notifyContentScriptToStop(activeTask);
+          const cleanupTask = cleanupTaskSnapshot(activeTask);
+          state.activeTask = null;
+          state.seenControlIds.clear();
+          await clearActiveLease(activeTask);
+          return {
+            success: false,
+            failed: true,
+            reason: 'record_payload_schema_invalid',
+            cleanupTask,
+          };
+        }
+        if (!activeTask.firstRecordSeen) {
+          activeTask.firstRecordSeen = true;
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FIRST_RECORD_SEEN, {
+            status: mapped.status,
+            recordCount: recordDeltas.length,
+            collectionRunId: pluginRunId || getPluginRunId(activeTask),
+          });
+        }
       }
       await enqueueTaskEvent(activeTask, mapWorkbenchStatusToEventType(mapped.status), {
         ...(failurePayload || {
@@ -1371,13 +1773,14 @@ export function createTaskPoller(deps = {}) {
           latestHeartbeatAt: new Date().toISOString(),
         },
       });
+      await persistActiveTaskContext();
     }
 
     if (mapped.final) {
       const cleanupTask = cleanupTaskSnapshot(activeTask);
       state.activeTask = null;
       state.seenControlIds.clear();
-      await clearActiveLease();
+      await clearActiveLease(activeTask);
       return {
         success: true,
         final: true,
@@ -1419,9 +1822,10 @@ export function createTaskPoller(deps = {}) {
     if (!result?.success || result?.skipped) return null;
     const action = String(result.action || '').trim();
     if (['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)) {
+      const activeTask = state.activeTask;
       state.activeTask = null;
       state.seenControlIds.clear();
-      await clearActiveLease();
+      await clearActiveLease(activeTask);
       return null;
     }
 
@@ -1431,9 +1835,24 @@ export function createTaskPoller(deps = {}) {
     }
 
     if (result.task?.id) {
-      const hydrated = hydrateTrackedTask(result.task, now);
+      const persistedContext = await readActiveTaskContext(result.task.id);
+      const persistedAttemptId = String(persistedContext?.attemptId || '').trim();
+      const currentAttemptId = String(
+        state.activeLease?.attemptId
+        || result.task?.currentAttemptId
+        || result.task?.attemptId
+        || '',
+      ).trim();
+      const hydrated = hydrateTrackedTask(
+        result.task,
+        now,
+        persistedAttemptId && currentAttemptId && persistedAttemptId !== currentAttemptId
+          ? null
+          : persistedContext,
+      );
       if (hydrated) {
         state.activeTask = hydrated;
+        await persistActiveTaskContext();
         return { recoveredTask: hydrated };
       }
     }
@@ -1523,6 +1942,9 @@ export function createTaskPoller(deps = {}) {
       attemptId: String(state.activeLease?.attemptId || state.activeTask?.attemptId || '').trim(),
       leaseEpoch: toOptionalInteger(state.activeLease?.leaseEpoch ?? state.activeTask?.leaseEpoch),
       pageFingerprint: state.activeTask?.pageFingerprint || null,
+      stationId: String(state.activeTask?.executorInstanceId || '').trim(),
+      accountId: String(state.activeTask?.accountId || '').trim(),
+      platform: String(state.activeTask?.platform || '').trim(),
     };
   }
 

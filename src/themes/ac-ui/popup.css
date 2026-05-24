@@ -629,6 +629,53 @@ body[data-theme="ac-ui"] .station-hint {
   font-weight: 600;
 }
 
+body[data-theme="ac-ui"] .station-diagnostics {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+body[data-theme="ac-ui"] .station-diagnostic-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+body[data-theme="ac-ui"] .station-diagnostic-item,
+body[data-theme="ac-ui"] .station-runtime-row {
+  min-width: 0;
+  border: 1px solid #d7d7d7;
+  border-radius: var(--ac-radius);
+  background: #fff;
+  padding: 7px 8px;
+}
+
+body[data-theme="ac-ui"] .station-diagnostic-item span,
+body[data-theme="ac-ui"] .station-runtime-row span {
+  display: block;
+  color: #777;
+  font-size: 9px;
+  font-weight: 700;
+  line-height: 1.3;
+}
+
+body[data-theme="ac-ui"] .station-diagnostic-item strong,
+body[data-theme="ac-ui"] .station-runtime-row strong {
+  display: block;
+  margin-top: 2px;
+  color: var(--ac-text);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+body[data-theme="ac-ui"] .station-runtime-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 /* ===== Cookie ===== */
 body[data-theme="ac-ui"] .cookie-bottom-section {
   display: flex;

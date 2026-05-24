@@ -1,3 +1,6 @@
+2026-05-24
+- 执行可靠性补充收口完成，版本提升到 v2.0.19：批量任务新增断点续跑 checkpoint，XHS / Douyin 批量笔记与批量评论在页面刷新或后台恢复后从下一条继续；extractor 输出新增最小结构校验，坏记录不再进入同步队列并伪装成功；运行健康上报新增 schema 校验计数、失败字段和 reason code；页面能力判断改为统一 Platform Adapter；工作台能力不匹配事件已补进插件协议常量；协议边界新增 checkJs；发布包 `releases/linggan-boom-v2.0.19.zip` 已生成并同步工作台下载目录，SHA256 为 `3e1304635807e6d43e205a58591c5560b598d6d9c07db807a3da0d52a88e625b`，大小 `394011` 字节。验证：定向可靠性 / Adapter / schema / 故障演练测试通过；npm run check:contracts、npm run build、npm run release:verify -- --version 2.0.19 --zip releases/linggan-boom-v2.0.19.zip 通过。
+
 2026-05-22
 - 执行设备能力上报、失败分类与 v2.0.17 发布包收口完成：插件心跳、接单和租约对账会同时上报小红书 / 抖音页面权限、Cookie 可读性、登录态和平台拦截状态；如果浏览器没有平台页面权限、平台登录失效或触发拦截，服务端可以在派单前过滤掉这个设备，不再把任务派给跑不了的平台。远程任务错误码新增权限失败、页面错误、登录失效、平台拦截、内容不存在和只有心跳无数据分类，便于工作台按原因展示和重试。版本提升到 v2.0.17，本地发布包 `releases/linggan-boom-v2.0.17.zip` 已生成并通过 zip/dist 一致性校验。验证：node --test tests/execution-station-runtime.test.mjs tests/workbench-progress-error.test.mjs 通过 13 个用例；npm run test:douyin 通过 173 个用例；npm run build 通过，保留既有 webpack bundle 体积 warning；npm run release:verify -- --version 2.0.17 --zip releases/linggan-boom-v2.0.17.zip 通过。
 

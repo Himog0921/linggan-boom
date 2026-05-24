@@ -155,6 +155,15 @@ export function toFriendlyError(err) {
   if (isContextError(msg)) {
     return '插件刚更新或页面连接已断开，请刷新当前页面后再点一次，刷新后即可继续。';
   }
+  if (/account_busy|同一账号正在执行另一个采集任务/.test(msg)) {
+    return '这个平台账号正在执行另一条采集，请等当前任务结束后再试。';
+  }
+  if (/login_required|needs_login|login_expired|账号登录状态不可用|bad_cookie/.test(msg)) {
+    return '当前平台账号需要重新登录，请先在对应平台页面完成登录，再回到插件继续采集。';
+  }
+  if (/permission_denied|page_permission_denied|missing_permission|缺少.*权限|权限缺失/.test(msg)) {
+    return '浏览器助手缺少当前平台页面权限，请重新授权插件后再试。';
+  }
   if (/未找到笔记数据|笔记详情页/.test(msg)) {
     return '当前不是完整笔记详情页，请先打开笔记详情后再采集。';
   }

@@ -1,4 +1,8 @@
 import { REMOTE_ERROR_CODE } from '../protocol/schema.js';
+import {
+  extractContentIdentityFromUrl,
+  extractProfileIdentityFromUrl,
+} from '../../shared/targetIdentity.js';
 
 function normalizeCapabilityPageMode(report = {}) {
   const mode = String(report?.mode || '').trim();
@@ -11,29 +15,6 @@ function normalizeCapabilityPageMode(report = {}) {
   if (pageType === 'profile') return 'profile';
   if (pageType === 'search') return 'search';
   return '';
-}
-
-function normalizeUrl(value = '') {
-  return String(value || '').trim();
-}
-
-function extractProfileIdentity(url = '') {
-  const normalizedUrl = normalizeUrl(url);
-  if (!normalizedUrl) return '';
-
-  const match = normalizedUrl.match(/xiaohongshu\.com\/user\/profile\/([^/?#]+)/i)
-    || normalizedUrl.match(/douyin\.com\/user\/([^/?#]+)/i)
-    || normalizedUrl.match(/douyin\.com\/@([^/?#]+)/i);
-  return String(match?.[1] || '').trim().toLowerCase();
-}
-
-function extractDetailIdentity(url = '') {
-  const normalizedUrl = normalizeUrl(url);
-  if (!normalizedUrl) return '';
-
-  const match = normalizedUrl.match(/xiaohongshu\.com\/(?:explore|discovery\/item)\/([^/?#]+)/i)
-    || normalizedUrl.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
-  return String(match?.[1] || '').trim().toLowerCase();
 }
 
 export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', target = {}) {
@@ -71,8 +52,8 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
   }
 
   if (expectedPageType === 'profile') {
-    const targetProfileId = extractProfileIdentity(target?.url);
-    const currentProfileId = extractProfileIdentity(report?.url);
+    const targetProfileId = extractProfileIdentityFromUrl(target?.url);
+    const currentProfileId = extractProfileIdentityFromUrl(report?.url);
     if (targetProfileId && currentProfileId && targetProfileId !== currentProfileId) {
       return {
         accepted: false,
@@ -83,8 +64,8 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
   }
 
   if (expectedPageType === 'detail') {
-    const targetContentId = extractDetailIdentity(target?.url);
-    const currentContentId = extractDetailIdentity(report?.url);
+    const targetContentId = extractContentIdentityFromUrl(target?.url);
+    const currentContentId = extractContentIdentityFromUrl(report?.url);
     if (targetContentId && targetContentId !== currentContentId) {
       return {
         accepted: false,

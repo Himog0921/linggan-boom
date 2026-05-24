@@ -57,4 +57,4 @@ Recommended: Unlisted
 
 ## What's New
 
-Version 2.0.15 adds workbench push wakeup support. When the content workbench has a new task or task-control event, it can wake the extension to check the task queue sooner while preserving the existing polling fallback.
+Version 2.0.19 improves batch resume after refresh, extractor output validation, schema health reporting, platform adapter routing, and workbench task protocol consistency. Push wakeup remains the main task notification path, with low-frequency polling used only as a health check.

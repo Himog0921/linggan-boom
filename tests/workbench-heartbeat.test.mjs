@@ -53,8 +53,6 @@ test('collection run heartbeat reporter throttles repeated updates for the same 
     {
       status: 'running',
       stage: 'collecting',
-      current: 1,
-      total: 10,
       message: '正在采集第 1 条',
     },
   ]);
@@ -64,8 +62,6 @@ test('collection run heartbeat reporter throttles repeated updates for the same 
     {
       status: 'running',
       stage: 'collecting',
-      current: 3,
-      total: 10,
       message: '正在采集第 3 条',
     },
   ]);

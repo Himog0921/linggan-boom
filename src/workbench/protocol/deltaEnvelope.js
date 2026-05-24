@@ -20,6 +20,16 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+export function createEventId() {
+  if (globalThis.crypto?.randomUUID) {
+    return globalThis.crypto.randomUUID();
+  }
+  return '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, (char) => {
+    const random = Math.floor(Math.random() * 16);
+    return (Number(char) ^ (random & (15 >> (Number(char) / 4)))).toString(16);
+  });
+}
+
 export function createEventIdempotencyKey({
   taskId = '',
   pluginRunId = '',
@@ -62,24 +72,45 @@ export function buildTaskEvent({
   controlRequestId = '',
   occurredAt = '',
   idempotencyKey = '',
+  eventId = '',
+  attemptId = '',
+  leaseId = '',
+  stationId = '',
+  accountId = '',
+  platform = '',
 } = {}) {
   const normalizedSequence = normalizeSequence(sequence, Date.now());
+  const normalizedEventType = normalizeText(eventType);
   const event = {
+    eventId: normalizeText(eventId) || createEventId(),
+    taskId: normalizeText(taskId),
     idempotencyKey: normalizeText(idempotencyKey) || createEventIdempotencyKey({
       taskId,
       pluginRunId,
-      eventType,
+      eventType: normalizedEventType,
       controlRequestId,
       sequence: normalizedSequence,
     }),
-    eventType: normalizeText(eventType),
+    eventType: normalizedEventType,
+    type: normalizedEventType,
     source: normalizeText(source) || WORKBENCH_EVENT_SOURCE.PLUGIN,
     occurredAt: normalizeText(occurredAt) || nowIso(),
     sequence: normalizedSequence,
+    eventSeq: normalizedSequence,
     payload: normalizeObject(payload),
   };
+  const normalizedAttemptId = normalizeText(attemptId);
+  const normalizedLeaseId = normalizeText(leaseId);
+  const normalizedStationId = normalizeText(stationId);
+  const normalizedAccountId = normalizeText(accountId);
+  const normalizedPlatform = normalizeText(platform);
   const normalizedControlRequestId = normalizeText(controlRequestId);
   if (normalizedControlRequestId) event.controlRequestId = normalizedControlRequestId;
+  if (normalizedAttemptId) event.attemptId = normalizedAttemptId;
+  if (normalizedLeaseId) event.leaseId = normalizedLeaseId;
+  if (normalizedStationId) event.stationId = normalizedStationId;
+  if (normalizedAccountId) event.accountId = normalizedAccountId;
+  if (normalizedPlatform) event.platform = normalizedPlatform;
   return event;
 }
 
@@ -110,6 +141,9 @@ export function buildTaskRecord({
   };
 }
 
+/**
+ * @param {Record<string, any>} [options]
+ */
 export function buildIngestEnvelope({
   taskId = '',
   pluginRunId = '',
@@ -122,18 +156,41 @@ export function buildIngestEnvelope({
   leaseToken = '',
   leaseEpoch,
   pageFingerprint = null,
+  executionContext = {},
 } = {}) {
-  const envelope = {
-    protocolVersion: WORKBENCH_PROTOCOL_VERSION,
-    taskId: normalizeText(taskId),
-    pluginRunId: normalizeText(pluginRunId),
-    executorInstanceId: normalizeText(executorInstanceId),
-    cursor: normalizeText(cursor),
-    events: Array.isArray(events) ? events : [],
-    records: Array.isArray(records) ? records : [],
-  };
+  const normalizedTaskId = normalizeText(taskId);
+  const normalizedPluginRunId = normalizeText(pluginRunId);
+  const normalizedExecutorInstanceId = normalizeText(executorInstanceId);
   const normalizedAttemptId = normalizeText(attemptId);
   const normalizedLeaseToken = normalizeText(leaseToken);
+  const normalizedContext = normalizeObject(executionContext);
+  const normalizedAccountId = normalizeText(normalizedContext.accountId);
+  const normalizedPlatform = normalizeText(normalizedContext.platform);
+  const enrichEvent = (event = {}) => {
+    const normalizedEvent = normalizeObject(event);
+    return {
+      ...normalizedEvent,
+      eventId: normalizeText(normalizedEvent.eventId) || createEventId(),
+      taskId: normalizeText(normalizedEvent.taskId) || normalizedTaskId,
+      type: normalizeText(normalizedEvent.type) || normalizeText(normalizedEvent.eventType),
+      eventSeq: normalizeSequence(normalizedEvent.eventSeq ?? normalizedEvent.sequence, Date.now()),
+      attemptId: normalizeText(normalizedEvent.attemptId) || normalizedAttemptId || undefined,
+      leaseId: normalizeText(normalizedEvent.leaseId) || normalizedLeaseToken || undefined,
+      stationId: normalizeText(normalizedEvent.stationId) || normalizedExecutorInstanceId || undefined,
+      accountId: normalizeText(normalizedEvent.accountId) || normalizedAccountId || undefined,
+      platform: normalizeText(normalizedEvent.platform) || normalizedPlatform || undefined,
+    };
+  };
+  /** @type {Record<string, any>} */
+  const envelope = {
+    protocolVersion: WORKBENCH_PROTOCOL_VERSION,
+    taskId: normalizedTaskId,
+    pluginRunId: normalizedPluginRunId,
+    executorInstanceId: normalizedExecutorInstanceId,
+    cursor: normalizeText(cursor),
+    events: Array.isArray(events) ? events.map(enrichEvent) : [],
+    records: Array.isArray(records) ? records : [],
+  };
   const numericLeaseEpoch = Number(leaseEpoch);
   if (normalizedAttemptId) envelope.attemptId = normalizedAttemptId;
   if (normalizedLeaseToken) envelope.leaseToken = normalizedLeaseToken;

@@ -138,3 +138,40 @@ test('dashboard bridge forwards selected media types into note media download', 
     },
   });
 });
+
+test('dashboard bridge registers one window listener and can unregister it', () => {
+  const originalWindow = globalThis.window;
+  const added = [];
+  const removed = [];
+  globalThis.window = {
+    addEventListener(type, handler) {
+      added.push({ type, handler });
+    },
+    removeEventListener(type, handler) {
+      removed.push({ type, handler });
+    },
+  };
+
+  try {
+    const bridge = createDashboardBridge({
+      MSG: {},
+      noteStore: {},
+      commentStore: {},
+      authorStore: {},
+      downloadNoteMediaFromRecord: async () => ({}),
+      _testNonce: 'listener-test',
+    });
+
+    bridge.registerDashboardBridge();
+    bridge.registerDashboardBridge();
+    assert.equal(added.length, 1);
+    assert.equal(added[0].type, 'message');
+
+    bridge.unregisterDashboardBridge();
+    bridge.unregisterDashboardBridge();
+    assert.equal(removed.length, 1);
+    assert.deepEqual(removed[0], added[0]);
+  } finally {
+    globalThis.window = originalWindow;
+  }
+});

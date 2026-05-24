@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { toFriendlyError } from '../src/popup/utils.js';
+
 const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
 
 test('popup current-content section collapses duplicate disabled copy into a single empty-state hint', () => {
@@ -178,4 +180,47 @@ test('popup workbench config separates plugin authorization from station pairing
   assert.match(styleSource, /\.flywheel-preset-row/);
   assert.match(styleSource, /\.flywheel-preset-chip/);
   assert.match(styleSource, /\.flywheel-preset-chip\.active/);
+});
+
+test('popup execution station diagnostics expose local runtime state in user-facing copy', () => {
+  const componentSource = fs.readFileSync(path.join(projectRoot, 'src/popup/components/FlywheelSection.jsx'), 'utf8');
+  const backgroundSource = fs.readFileSync(path.join(projectRoot, 'src/background/index.js'), 'utf8');
+  const outboxSource = fs.readFileSync(path.join(projectRoot, 'src/db/workbenchOutboxStore.js'), 'utf8');
+  const styleSource = fs.readFileSync(path.join(projectRoot, 'src/popup/popup.css'), 'utf8');
+
+  assert.match(backgroundSource, /pluginVersion:\s*getPluginVersion\(\)/);
+  assert.match(backgroundSource, /identity:\s*summarizeStationIdentityForDiagnostics\(identity\)/);
+  assert.match(backgroundSource, /currentTask[,}]/);
+  assert.match(backgroundSource, /activeLockCount:\s*activeLocks\.length/);
+  assert.match(backgroundSource, /unsentOutboxCount/);
+  assert.match(outboxSource, /async countUnsent/);
+
+  assert.match(componentSource, /插件版本/);
+  assert.match(componentSource, /工位编号/);
+  assert.match(componentSource, /当前任务/);
+  assert.match(componentSource, /本机锁/);
+  assert.match(componentSource, /待发送事件/);
+  assert.match(componentSource, /执行设备诊断/);
+  assert.match(componentSource, /页面权限正常/);
+  assert.match(componentSource, /缺少页面权限/);
+  assert.match(componentSource, /需登录/);
+
+  assert.match(styleSource, /\.station-diagnostics/);
+  assert.match(styleSource, /\.station-diagnostic-grid/);
+  assert.match(styleSource, /\.station-runtime-row/);
+});
+
+test('popup maps manual collection blockers to clear user messages', () => {
+  assert.equal(
+    toFriendlyError(new Error('account_busy')),
+    '这个平台账号正在执行另一条采集，请等当前任务结束后再试。',
+  );
+  assert.equal(
+    toFriendlyError(new Error('账号登录状态不可用：bad_cookie')),
+    '当前平台账号需要重新登录，请先在对应平台页面完成登录，再回到插件继续采集。',
+  );
+  assert.equal(
+    toFriendlyError(new Error('permission_denied')),
+    '浏览器助手缺少当前平台页面权限，请重新授权插件后再试。',
+  );
 });

@@ -23,7 +23,7 @@
 | 层 | 技术 | 用途 |
 |---|---|---|
 | 构建 | Webpack 5 | 多入口打包（content / background / popup / dashboard） |
-| 存储 | Dexie (IndexedDB) | 本地数据持久化，9 次版本迁移 |
+| 存储 | Dexie (IndexedDB) | 本地数据持久化，13 次版本迁移 |
 | 打包下载 | JSZip | 评论图片批量打包下载（按需动态加载） |
 | 样式 | 纯 CSS | content.css, popup.css, dashboard.css |
 | 语言 | JavaScript (ES2020+) | 无 TypeScript |
@@ -185,6 +185,7 @@ idle → running ⇄ paused → stopping → done / error
 | 文件 | 职责 |
 |---|---|
 | **index.js** | 入口：平台检测 (xhs vs douyin)、适配器加载、消息路由、受控任务创建 |
+| contentRouter.js / contentPlatformRegistry.js | 域名 → 平台入口分发 |
 | contentDataRuntime.js | 延迟加载数据采集函数、Dashboard bridge、媒体下载服务 |
 | dashboardBridge.js | Dashboard iframe 通信桥接 |
 | messageHandlers.js | Popup/Background 消息分发 |
@@ -203,7 +204,7 @@ idle → running ⇄ paused → stopping → done / error
 
 ## 7. 数据层 (IndexedDB)
 
-### 7.1 数据库: LingganBoomDB (Dexie, 9 次版本迁移)
+### 7.1 数据库: LingganBoomDB (Dexie, 13 次版本迁移)
 
 | 表 | 主键 | 关键索引 | 说明 |
 |---|---|---|---|
@@ -296,7 +297,7 @@ linggan-boom 插件
 | executionStationRuntime.js | 监控工位能力清单、平台账号健康汇报 |
 | taskLeaseClient.js | 任务租约认领、续租、本地持久化 |
 | monitorTask.js | 监控任务策略翻译，生成 `monitorMeta`，把表层卡片转成雷达观察记录 |
-| taskPoller.js | 已配对时走租约认领；未配对时保留旧 pending 轮询回退 |
+| taskPoller.js | 已配对时走租约认领；未配对时不认领工作台远程任务 |
 
 ### 8.3 工作台协议 — src/workbench/protocol/
 
@@ -328,6 +329,7 @@ linggan-boom 插件
 | **能力检查** | capabilityCheck.js | 验证当前页面能否执行指定任务 |
 | **能力报告** | capabilityReportBuilder.js | 自描述：平台、页面类型、能力枚举、就绪状态、推荐下一步 |
 | **任务映射** | taskEnvelopeMapper.js | 协议信封 → 内部指令翻译 |
+| **记录结构校验** | protocol/recordPayloadValidator.js | 校验 `note/comment/author/media` 最小可用结构，缺关键字段时输出健康告警 |
 | **监控策略** | monitorTask.js | `author_baseline / author_patrol / keyword_patrol / detail_probe` → `surfaceOnly / monitorMode / monitorMeta` |
 | **增量上报** | taskDeltaReporter.js | 包装 deltaOutbox，上报工作台事件/记录 |
 | **增量发件箱** | deltaOutbox.js | 按任务批量、幂等去重、指数退避、确认/终态处理 |
@@ -470,7 +472,7 @@ Webpack 5 多入口打包到 dist/：
 
 > 供 AI agent 审查时关注。
 
-- [ ] 纯 JavaScript 无 TypeScript，类型安全靠运行时检查，大规模重构风险高
+- [ ] 纯 JavaScript 为主；协议 / 运行态 / Adapter 边界已接入 `npm run check:contracts`，但 UI 和采集器内部尚未纳入
 - [ ] XHS 评论采集走 DOM 解析，依赖页面 DOM 结构，小红书改版即失效（SELECTORS.md 应持续更新）
 - [ ] Douyin 数据三源融合逻辑复杂，fallback 路径多，测试覆盖是否充分
 - [ ] IndexedDB 单线程写入，大批量采集时可能卡顿
@@ -480,7 +482,7 @@ Webpack 5 多入口打包到 dist/：
 - [ ] antiDetect.js 反检测策略较基础（随机延迟），未覆盖指纹检测
 - [ ] popup.js 和 dashboard.js 中存在与 background 重复的业务逻辑
 - [ ] mediaDownloadUtils.js 中 getHighQualityImageCandidates() 硬编码了 URL 模板
-- [ ] 平台路由当前仍靠 content/index.js 手写分流，PlatformAdapter 抽象未完全落地
+- [ ] 平台路由和页面能力判断已走 contentRouter + PlatformAdapter；按钮动作和采集控制仍有平台分支，后续随瘦身继续收口
 
 ---
 

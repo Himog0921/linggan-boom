@@ -115,6 +115,15 @@ export const workbenchOutboxStore = {
     return recoverStaleInFlightRows(options);
   },
 
+  async countUnsent({ now: nowMs = now() } = {}) {
+    await recoverStaleInFlightRows({ now: nowMs, limit: 50 });
+    const statuses = ['pending', 'failed', 'in_flight', 'failed_terminal'];
+    const counts = await Promise.all(
+      statuses.map((status) => db.workbenchOutbox.where('status').equals(status).count())
+    );
+    return counts.reduce((sum, count) => sum + Number(count || 0), 0);
+  },
+
   async markInFlight(ids = [], { timeoutMs = IN_FLIGHT_TIMEOUT_MS } = {}) {
     const nowMs = now();
     const nextAttemptAt = nowMs + Math.max(1000, Number(timeoutMs || IN_FLIGHT_TIMEOUT_MS));

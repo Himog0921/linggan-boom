@@ -41,6 +41,8 @@ export function createDashboardBridge({
   let dashboardIframe = null;
   let dashboardOverlay = null;
   let currentNonce = _testNonce;
+  let dashboardMessageRegistered = false;
+  let dashboardOverlayClickHandler = null;
 
   function getTrustedDashboardWindow() {
     return dashboardIframe?.contentWindow || _testDashboardWindow || null;
@@ -80,12 +82,7 @@ export function createDashboardBridge({
 
   async function toggleDashboard() {
     if (dashboardIframe && document.body.contains(dashboardIframe)) {
-      dashboardIframe.remove();
-      dashboardOverlay?.remove();
-      dashboardIframe = null;
-      dashboardOverlay = null;
-      currentNonce = null;
-      await clearDashboardNonce();
+      await closeDashboard();
       return;
     }
 
@@ -99,9 +96,10 @@ export function createDashboardBridge({
       background: 'rgba(0,0,0,0.4)',
       zIndex: '2147483640',
     });
-    dashboardOverlay.addEventListener('click', () => {
+    dashboardOverlayClickHandler = () => {
       void toggleDashboard();
-    });
+    };
+    dashboardOverlay.addEventListener('click', dashboardOverlayClickHandler);
 
     dashboardIframe = document.createElement('iframe');
     const dashboardUrl = new URL(chrome.runtime.getURL('dashboard.html'));
@@ -121,6 +119,19 @@ export function createDashboardBridge({
 
     document.body.appendChild(dashboardOverlay);
     document.body.appendChild(dashboardIframe);
+  }
+
+  async function closeDashboard() {
+    if (dashboardOverlayClickHandler && dashboardOverlay?.removeEventListener) {
+      dashboardOverlay.removeEventListener('click', dashboardOverlayClickHandler);
+    }
+    dashboardIframe?.remove();
+    dashboardOverlay?.remove();
+    dashboardIframe = null;
+    dashboardOverlay = null;
+    dashboardOverlayClickHandler = null;
+    currentNonce = null;
+    await clearDashboardNonce();
   }
 
   const dashboardMessageHandlers = {
@@ -213,12 +224,27 @@ export function createDashboardBridge({
   }
 
   function registerDashboardBridge() {
+    if (dashboardMessageRegistered) return;
     window.addEventListener('message', handleDashboardMessageEvent);
+    dashboardMessageRegistered = true;
+  }
+
+  function unregisterDashboardBridge() {
+    if (!dashboardMessageRegistered) return;
+    window.removeEventListener('message', handleDashboardMessageEvent);
+    dashboardMessageRegistered = false;
+  }
+
+  async function destroyDashboardBridge() {
+    await closeDashboard();
+    unregisterDashboardBridge();
   }
 
   return {
     toggleDashboard,
     registerDashboardBridge,
+    unregisterDashboardBridge,
+    destroyDashboardBridge,
     handleDashboardMessageEvent,
   };
 }

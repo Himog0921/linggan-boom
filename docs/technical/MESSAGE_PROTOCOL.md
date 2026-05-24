@@ -132,7 +132,7 @@ collection_task_control
 说明：
 - 插件注册 push 订阅时仍要携带执行工位身份和插件授权，工作台会校验 station token 与授权归属。
 - `collection_task_available` / `collection_task_control` 只用于叫醒 Background；收到后插件立即运行既有任务检查，真正的任务内容仍从 `claim` 和后续租约接口读取。
-- 如果工作台未配置 VAPID、浏览器不支持 push、订阅过期或 push 发送失败，插件继续按 v2 低频轮询兜底。
+- 如果工作台未配置 VAPID、浏览器不支持 push、订阅过期或 push 发送失败，插件继续按低频对账节奏检查任务。
 
 授权与配对说明：
 
@@ -172,6 +172,13 @@ delta envelope：
   "taskId": "task_123",
   "pluginRunId": "run_123",
   "executorInstanceId": "plugin_profile_uuid",
+  "attemptId": "attempt_123",
+  "leaseToken": "lease_token",
+  "leaseEpoch": 3,
+  "pageFingerprint": {
+    "platform": "xhs",
+    "url": "https://www.xiaohongshu.com/user/profile/..."
+  },
   "cursor": "local-outbox-seq-42",
   "events": [],
   "records": [],
@@ -183,7 +190,14 @@ delta envelope：
 
 ```text
 task.claimed
+task.page_opened
+task.execution_started
+task.first_record_seen
+task.page_open_failed
+task.login_required
+task.platform_restricted
 task.started
+task.running
 task.heartbeat
 task.progress
 task.partial_result
@@ -195,12 +209,16 @@ task.resumed
 task.stopping
 task.stopped
 task.completed
+task.succeeded
+task.released
 task.failed
+task.deleted
+task.capability_mismatch
 ```
 
 运行指标：
 
-`task.progress`、`task.completed`、`task.failed` 等事件的 `payload.observability` 会携带插件侧运行摘要，用于工作台统一日志与告警排查。该字段只放计数和阶段信息，不放目标链接、正文或完整页面数据。
+`task.progress`、`task.completed`、`task.succeeded`、`task.failed`、`task.released` 等事件的 `payload.observability` 会携带插件侧运行摘要，用于工作台统一日志与告警排查。该字段只放计数和阶段信息，不放目标链接、正文或完整页面数据。
 
 ```json
 {
@@ -212,6 +230,12 @@ task.failed
   "parseAttemptCount": 20,
   "parseFailureCount": 2,
   "parseFailureRate": 0.1,
+  "schemaValidationAttemptCount": 20,
+  "schemaValidationFailureCount": 1,
+  "schemaValidationFailureRate": 0.05,
+  "recordSchemaFailed": true,
+  "recordType": "note",
+  "invalidRecordField": "payload",
   "itemAttemptCount": 50,
   "itemFailureCount": 3,
   "reasonCode": "page_data_not_ready",
@@ -224,6 +248,17 @@ task.failed
 ```text
 note | comment | author | media
 ```
+
+记录 payload 最小校验：
+
+| 类型 | 最小要求 |
+|------|----------|
+| `note` | 有稳定内容 ID 或 URL，且有可见正文、标题或媒体 |
+| `comment` | 有评论 ID、父级内容 ID、评论文本 |
+| `author` | 有稳定作者 ID 或主页 URL |
+| `media` | 有资产 ID、URL 或本地路径 |
+
+不满足最小结构的记录不会进入 outbox；插件会把任务转为失败，并通过 `observability` 上报 `recordSchemaFailed / invalidRecordField / reasonCode`。
 
 幂等键规则：
 
@@ -285,7 +320,7 @@ monitorMeta
 
 - 小红书批量内容/评论主要依赖页面扫描、DOM 交互与列表跳转。
 - 抖音批量视频已经转为“博主页作品列表 API 驱动”。
-- 抖音批量评论已经转为“作品列表 + 评论/回复接口 + 页面桥接兜底”。
+- 抖音批量评论已经转为“作品列表 + 评论/回复接口 + 页面桥接辅助通道”。
 - 抖音单条视频和评论链路存在页面桥接与页面侧 fetch，不应再假设所有能力都只靠 Content Script `fetch` 完成。
 - 工作台远程任务不会直接调用 `MSG.*`；外部任务先进入 `src/workbench/protocol/*`，再由 mapper 转成内部动作。
 
@@ -320,7 +355,7 @@ IDLE → RUNNING → PAUSED → RUNNING（循环）
 |--------|----------------|---------|------|
 | `GET_PLATFORM_COOKIES` | Popup → Background | `{}` | 提取小红书和抖音 Cookie，自动持久化到 `chrome.storage.local`，返回各平台 cookie 详情 |
 | `GET_STORED_PLATFORM_COOKIES` | Popup → Background | `{}` | 读取已保存的 Cookie 状态（不重新提取） |
-| `getDocumentCookie` | Background → Content | `{}` | Content script 返回 `document.cookie`，作为 cookies API 的 fallback |
+| `getDocumentCookie` | Background → Content | `{}` | Content script 返回 `document.cookie`，作为 cookies API 不可读时的页面侧读取通道 |
 
 ## 6. 错误处理规则
 

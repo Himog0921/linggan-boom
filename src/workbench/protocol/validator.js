@@ -7,6 +7,7 @@ import {
   WORKBENCH_PROTOCOL_VERSION,
   getSupportedRemoteTask,
 } from './schema.js';
+import { validateRecordPayload } from './recordPayloadValidator.js';
 
 function createValidationError(field, code, message) {
   return { field, code, message };
@@ -192,6 +193,8 @@ export function validateTaskRecord(input = {}) {
   }
   if (!record.payload || typeof record.payload !== 'object' || Array.isArray(record.payload)) {
     errors.push(createValidationError('payload', 'required', 'payload must be an object'));
+  } else if (recordType && Object.values(WORKBENCH_RECORD_TYPE).includes(recordType)) {
+    errors.push(...validateRecordPayload(recordType, record.payload).errors);
   }
   return { valid: errors.length === 0, errors };
 }

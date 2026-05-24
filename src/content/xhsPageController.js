@@ -42,6 +42,10 @@ export function createXhsPageController({
   let activeTaskType = null;
   let selectorProbeTimer = null;
   let lastTaskSnapshot = null;
+  let pageInitialized = false;
+  let pageObserver = null;
+  let reinjectTimer = null;
+  let reinjectPending = false;
 
   async function ensurePluginAuthorized() {
     if (typeof assertPluginAuthorized === 'function') {
@@ -170,6 +174,14 @@ export function createXhsPageController({
         showToast(alertMessage, 'warning');
       }
     }, delayMs);
+  }
+
+  function clearLifecycleTimers() {
+    clearTimeout(selectorProbeTimer);
+    clearTimeout(reinjectTimer);
+    selectorProbeTimer = null;
+    reinjectTimer = null;
+    reinjectPending = false;
   }
 
   async function handleButtonClick(e) {
@@ -364,14 +376,14 @@ export function createXhsPageController({
   }
 
   function initPage() {
+    if (pageInitialized) return;
+    pageInitialized = true;
     lastUrl = window.location.href;
     injectUI();
     ensureTaskControlBar();
     scheduleSelectorBootstrapProbe(420);
 
-    let reinjectTimer = null;
-    let reinjectPending = false;
-    const observer = new MutationObserver(() => {
+    pageObserver = new MutationObserver(() => {
       if (window.__lgboom_injecting) return;
       const urlChanged = window.location.href !== lastUrl;
       const uiMissing = !document.querySelector('.lgboom-btn-group');
@@ -387,13 +399,25 @@ export function createXhsPageController({
         scheduleSelectorBootstrapProbe(urlChanged ? 420 : 760);
       }, urlChanged ? 280 : 680);
     });
-    observer.observe(document.body, { childList: true, subtree: true });
+    pageObserver.observe(document.body, { childList: true, subtree: true });
 
     document.addEventListener('click', handleButtonClick);
   }
 
+  function cleanupPage() {
+    clearLifecycleTimers();
+    pageObserver?.disconnect();
+    pageObserver = null;
+    if (pageInitialized) {
+      document.removeEventListener('click', handleButtonClick);
+    }
+    pageInitialized = false;
+    lastUrl = '';
+  }
+
   return {
     initPage,
+    cleanupPage,
     handleButtonClick,
     syncTaskUI,
     startBatchTask,

@@ -2,24 +2,14 @@ function normalizeText(value = '') {
   return String(value || '').trim();
 }
 
-function normalizeCount(value) {
-  const num = Number(value);
-  if (!Number.isFinite(num) || num < 0) return undefined;
-  return Math.floor(num);
-}
-
 function buildHeartbeatPatch(patch = {}) {
   const next = {};
   const status = normalizeText(patch.taskState || patch.status);
   const stage = normalizeText(patch.stage || patch.phase);
-  const current = normalizeCount(patch.current);
-  const total = normalizeCount(patch.total);
   const message = normalizeText(patch.message);
 
   if (status) next.status = status;
   if (stage) next.stage = stage;
-  if (current !== undefined) next.current = current;
-  if (total !== undefined) next.total = total;
   if (message) next.message = message;
 
   return next;

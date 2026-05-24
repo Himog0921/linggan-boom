@@ -2,6 +2,7 @@ import { collectNote, discoverWithScroll, resolveExpectedNoteFromMap } from './n
 import { throttle, watchCaptcha, showCaptchaPauseOverlay } from './antiDetect.js';
 import { sendToBackground, reportProgress, reportDone, reportWorkbenchRecord } from '../../shared/messaging.js';
 import { BATCH_CONFIG, COLLECT_MODE, MSG, TASK_STATE } from '../../shared/constants.js';
+import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { randomDelay, parseCount } from '../../shared/utils.js';
 import { noteStore } from '../../db/noteStore.js';
 import { collectionRunStore } from '../../db/collectionRunStore.js';
@@ -13,6 +14,7 @@ import {
   buildXhsBatchNotesProgressPatch,
   buildXhsBatchNotesRunPatch,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import { resolveBatchResumeState } from '../../workbench/runtime/batchResume.js';
 import {
   CLOSE_SELECTORS,
   isNoteDetailReady,
@@ -146,20 +148,7 @@ function normalizeTargetIdentity(value = '') {
 }
 
 function extractXhsProfileUserId(url = '') {
-  try {
-    const parsed = new URL(url, window.location.origin);
-    const pathname = String(parsed.pathname || '');
-    const match = pathname.match(/\/user\/profile\/([^/?#]+)/i)
-      || pathname.match(/\/profile\/([^/?#]+)/i)
-      || pathname.match(/\/user\/([^/?#]+)/i);
-    return String(match?.[1] || '').trim();
-  } catch {
-    const raw = String(url || window.location.href || '');
-    const match = raw.match(/\/user\/profile\/([^/?#]+)/i)
-      || raw.match(/\/profile\/([^/?#]+)/i)
-      || raw.match(/\/user\/([^/?#]+)/i);
-    return String(match?.[1] || '').trim();
-  }
+  return extractProfileIdentityFromUrl(url, { baseUrl: window.location.origin });
 }
 
 function getXhsTargetProfileUrl(monitorMeta = {}) {
@@ -256,6 +245,36 @@ function createTargetMismatchError(check = {}) {
   error.targetAuthorId = check.targetAuthorId || '';
   error.currentAuthorId = check.currentAuthorId || '';
   return error;
+}
+
+async function resolveExistingBatchRun({ collectionRunId = '', externalTaskId = '', taskType = '' } = {}) {
+  const explicitRunId = String(collectionRunId || '').trim();
+  if (explicitRunId) {
+    return collectionRunStore.getById(explicitRunId).catch(() => null);
+  }
+  const taskId = String(externalTaskId || '').trim();
+  if (!taskId) return null;
+  if (typeof collectionRunStore.getLatestResumableByExternalTaskId === 'function') {
+    return collectionRunStore.getLatestResumableByExternalTaskId(taskId, { taskType }).catch(() => null);
+  }
+  return collectionRunStore.getLatestByExternalTaskId(taskId).catch(() => null);
+}
+
+function hydrateXhsNoteResumeState(runRecord = {}, completedTargetIds = []) {
+  const completedSet = new Set((Array.isArray(completedTargetIds) ? completedTargetIds : [])
+    .map((value) => String(value || '').trim().replace(/^xhs_/, ''))
+    .filter(Boolean));
+  const collected = (Array.isArray(runRecord.contentIds) ? runRecord.contentIds : [])
+    .map((contentId) => String(contentId || '').trim().replace(/^xhs_/, ''))
+    .filter((noteId) => noteId && completedSet.has(noteId))
+    .map((noteId) => ({ noteId, contentId: `xhs_${noteId}` }));
+  const failed = (Array.isArray(runRecord.failedTargets) ? runRecord.failedTargets : [])
+    .map((item) => ({
+      noteId: String(item?.noteId || item?.targetId || item?.contentId || '').trim().replace(/^xhs_/, ''),
+      error: String(item?.error || 'failed').trim() || 'failed',
+    }))
+    .filter((item) => item.noteId && completedSet.has(item.noteId));
+  return { collected, failed };
 }
 
 // 小红书弹窗/详情页相关选择器（兼容多版本）
@@ -360,7 +379,13 @@ export class BatchNoteController extends BaseBatchController {
       runConfig.monitorMeta = this.monitorMeta;
     }
     const existingCollectionRunId = String(settings.collectionRunId || '').trim();
+    let existingRun = await resolveExistingBatchRun({
+      collectionRunId: existingCollectionRunId,
+      externalTaskId: this.externalTaskId,
+      taskType: this.type,
+    });
     const runPayload = existingCollectionRunId
+      || existingRun?.collectionRunId
       ? null
       : buildRemoteRunCreatePayload({
         platform: 'xhs',
@@ -374,8 +399,9 @@ export class BatchNoteController extends BaseBatchController {
     if (runPayload) {
       const run = await collectionRunStore.createRun(runPayload);
       this.collectionRunId = run.collectionRunId;
-    } else if (existingCollectionRunId) {
-      this.collectionRunId = existingCollectionRunId;
+      existingRun = run;
+    } else if (existingCollectionRunId || existingRun?.collectionRunId) {
+      this.collectionRunId = existingCollectionRunId || existingRun.collectionRunId;
     } else {
       this.collectionRunId = '';
     }
@@ -428,6 +454,24 @@ export class BatchNoteController extends BaseBatchController {
     // TopN 只决定"选哪些笔记"，执行顺序按页面位置，减少来回滚动
     if (topByLikes) {
       this.noteList.sort((a, b) => Number(a._top || 0) - Number(b._top || 0));
+    }
+    const resumeState = resolveBatchResumeState({
+      runRecord: existingRun,
+      targets: this.noteList,
+      getTargetId: (item) => item.noteId,
+    });
+    this.noteList = resumeState.targets;
+    if (resumeState.resumed) {
+      this.currentIndex = resumeState.nextIndex;
+      const hydrated = hydrateXhsNoteResumeState(existingRun, resumeState.completedTargetIds);
+      this.collected = hydrated.collected;
+      this.failed = hydrated.failed;
+      this._emitProgress({
+        status: 'resuming',
+        total: this.noteList.length,
+        current: this.currentIndex,
+        message: `已从本地记录恢复，前 ${this.currentIndex}/${this.noteList.length} 篇不重复采集`,
+      });
     }
 
     const topLikeText = topByLikes && this.noteList.length > 0

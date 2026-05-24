@@ -73,7 +73,7 @@ test('douyin floating action buttons are cleared when platform verification is v
   assert.match(douyinSource, /from '\.\/securityChallenge\.js'/);
   assert.match(
     douyinSource,
-    /document\.querySelectorAll\('\.lgboom-dy-btn-group'\)[\s\S]*detectDouyinSecurityChallenge\(\{ root: document, href: window\.location\.href \}\)/,
+    /cleanupDouyinInjectedUI\(\{ includeTaskbar: false \}\);[\s\S]*detectDouyinSecurityChallenge\(\{ root: document, href: window\.location\.href \}\)/,
     'douyin UI injection should clear old action buttons before returning on verification pages',
   );
   assert.match(

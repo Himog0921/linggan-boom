@@ -1,3 +1,5 @@
+import { buildBatchResumeCheckpoint } from './batchResume.js';
+
 function normalizeText(value = '') {
   return String(value || '').trim();
 }
@@ -60,6 +62,32 @@ export function buildDouyinBatchVideosRunPatch({
   };
 }
 
+export function buildDouyinBatchVideosProgressPatch({
+  targets = [],
+  results = [],
+  processedCount = 0,
+} = {}) {
+  const targetIds = buildTargetIds(targets);
+  const processedIds = new Set(targetIds.slice(0, Math.max(0, Number(processedCount || 0) || 0)));
+  const scopedResults = (Array.isArray(results) ? results : [])
+    .filter((item) => processedIds.has(normalizeDouyinTargetId(item)));
+  return {
+    ...buildDouyinBatchVideosRunPatch({ targets, results: scopedResults }),
+    ...buildBatchResumeCheckpoint({
+      targetIds,
+      processedCount,
+      resultStatuses: scopedResults.map((item) => ({
+        targetId: normalizeDouyinTargetId(item),
+        ok: item?.ok !== false,
+        contentId: normalizeDouyinContentId(item),
+        error: normalizeText(item?.error),
+      })),
+    }),
+    itemsPlanned: targetIds.length,
+    targetIds,
+  };
+}
+
 export function buildDouyinBatchCommentsRunPatch({
   targets = [],
   results = [],
@@ -76,5 +104,33 @@ export function buildDouyinBatchCommentsRunPatch({
     targetIds,
     contentIds: buildContentIds(results),
     failedTargets,
+  };
+}
+
+export function buildDouyinBatchCommentsProgressPatch({
+  targets = [],
+  results = [],
+  totalComments = 0,
+  processedCount = 0,
+} = {}) {
+  const targetIds = buildTargetIds(targets);
+  const processedIds = new Set(targetIds.slice(0, Math.max(0, Number(processedCount || 0) || 0)));
+  const scopedResults = (Array.isArray(results) ? results : [])
+    .filter((item) => processedIds.has(normalizeDouyinTargetId(item)));
+  return {
+    ...buildDouyinBatchCommentsRunPatch({ targets, results: scopedResults, totalComments }),
+    ...buildBatchResumeCheckpoint({
+      targetIds,
+      processedCount,
+      resultStatuses: scopedResults.map((item) => ({
+        targetId: normalizeDouyinTargetId(item),
+        ok: item?.ok !== false,
+        contentId: normalizeDouyinContentId(item),
+        totalComments: Number(item?.totalComments || 0) || 0,
+        error: normalizeText(item?.error),
+      })),
+    }),
+    itemsPlanned: targetIds.length,
+    targetIds,
   };
 }

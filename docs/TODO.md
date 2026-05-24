@@ -1,9 +1,11 @@
 # 当前待办总表
 
-> 更新日期：2026-05-04
+> 更新日期：2026-05-24
 > 目的：把当前真正仍活跃的待办从验收报告、活跃计划、`progress.txt` 和技术债清单里收拢到同一处，避免状态漂移。
 
 ## 0. 最近完成
+
+- [x] 执行可靠性中期补充收口完成：批量任务新增断点续跑 checkpoint，XHS / Douyin 批量笔记与批量评论在页面刷新或后台恢复后会从下一条继续；extractor 输出新增强结构校验，`note / comment / author / media` 不满足最小可用结构时会被同步队列拦下，并转成任务失败和健康计数；平台能力判断新增统一 Adapter contract，`contentDataRuntime` 不再手写两套能力报告；协议边界新增 `npm run check:contracts`，只对协议、运行态、目标身份和 adapter 文件做 `checkJs`；工作台能力不匹配事件已补进插件协议常量，避免严格校验时误判非法事件；新增 `docs/ACCEPTANCE_REPORT_2026-05-24_EXECUTION_FAULT_DRILL.md`，记录 Service Worker 恢复、tab 关闭、页面刷新重注入、同账号互斥、辅助页清理和控制指令演练；发布包已升到 `2.0.19` 并同步工作台下载目录，SHA256 为 `3e1304635807e6d43e205a58591c5560b598d6d9c07db807a3da0d52a88e625b`，大小 `394011` 字节。验证：本轮定向可靠性 / Adapter / schema / 故障演练测试均通过，`npm run check:contracts`、`npm run build`、`npm run release:verify -- --version 2.0.19 --zip releases/linggan-boom-v2.0.19.zip` 通过。
 
 - [x] 工作台任务页自动回收增强完成：插件自己为工作台任务打开的采集页，现在会把“任务 id → 标签页 id”的归属关系写入浏览器会话存储。这样即使 Chrome MV3 后台服务临时休眠、下一轮闹钟再恢复，任务成功、失败、停止或旧租约释放后仍能找到并关闭插件打开的采集页，避免小红书/抖音页面长时间占用内存。已有用户自己打开并被复用的页面不进入这张回收表，不会被误关。验证：`node --test tests/workbench-task-execution-cleanup.test.mjs tests/navigation-orchestrator.test.mjs` 通过 `9` 个用例；`npm run build` 通过，保留既有 webpack bundle 体积 warning。
 

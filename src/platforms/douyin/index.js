@@ -10,6 +10,7 @@ import {
   ensureDouyinTaskControlBar,
   updateDouyinTaskControlBar,
   hideDouyinTaskControlBar,
+  cleanupDouyinInjectedUI,
 } from './uiInjector.js';
 import { detectDouyinPageType, DY_PAGE_TYPE, isStrictDouyinDetailPage } from './pageDetector.js';
 import { collectDouyinVideo, downloadDouyinVideo } from './videoCollector.js';
@@ -49,6 +50,12 @@ const DouyinAdapter = {
     cleanupIndicator: null,
   },
   _selectorProbeTimer: null,
+  _initialized: false,
+  _urlObserver: null,
+  _reinjectTimer: null,
+  _fallbackReinjectTimer: null,
+  _nativeShareClickHandler: null,
+  _apiBridgeCleanup: null,
 
   async _ensurePluginAuthorized() {
     try {
@@ -63,6 +70,12 @@ const DouyinAdapter = {
    * 初始化：设置 SPA 路由监听 + MutationObserver
    */
   init() {
+    if (this._initialized) {
+      this._tryInject();
+      this._scheduleSelectorBootstrapProbe(420);
+      return;
+    }
+
     // 建立主世界 API 捕获数据到 content script 的桥接
     this._bindApiBridge();
 
@@ -80,8 +93,7 @@ const DouyinAdapter = {
     // SPA 路由变化监听（抖音是 React SPA，URL 会变但不触发 load 事件）
     let lastUrl = window.location.href;
     let lastSecurityChallenge = detectDouyinSecurityChallenge({ root: document, href: window.location.href });
-    let reinjectTimer = null;
-    const urlObserver = new MutationObserver(() => {
+    this._urlObserver = new MutationObserver(() => {
       if (window.__lgboom_dy_injecting) return;
       const currentUrl = window.location.href;
       const currentSecurityChallenge = detectDouyinSecurityChallenge({ root: document, href: currentUrl });
@@ -89,23 +101,52 @@ const DouyinAdapter = {
         lastUrl = currentUrl;
         lastSecurityChallenge = currentSecurityChallenge;
         console.log('[灵感爆爆爆] 抖音页面状态变化，重新注入 UI:', currentUrl);
-        if (reinjectTimer) clearTimeout(reinjectTimer);
-        reinjectTimer = setTimeout(() => {
-          reinjectTimer = null;
+        if (this._reinjectTimer) clearTimeout(this._reinjectTimer);
+        this._reinjectTimer = setTimeout(() => {
+          this._reinjectTimer = null;
           this._tryInject();
           this._scheduleSelectorBootstrapProbe(420);
         }, 200);
         // 二次兜底：200ms 后首次注入，600ms 后再补一次防止漏掉
-        setTimeout(() => {
+        if (this._fallbackReinjectTimer) clearTimeout(this._fallbackReinjectTimer);
+        this._fallbackReinjectTimer = setTimeout(() => {
+          this._fallbackReinjectTimer = null;
           this._tryInject();
           this._scheduleSelectorBootstrapProbe(220);
         }, 600);
       }
     });
 
-    urlObserver.observe(document.body, { childList: true, subtree: true });
+    this._urlObserver.observe(document.body, { childList: true, subtree: true });
 
+    this._initialized = true;
     console.log('[灵感爆爆爆] 抖音平台适配器已初始化');
+  },
+
+  cleanupLifecycleListeners() {
+    if (this._selectorProbeTimer) clearTimeout(this._selectorProbeTimer);
+    if (this._reinjectTimer) clearTimeout(this._reinjectTimer);
+    if (this._fallbackReinjectTimer) clearTimeout(this._fallbackReinjectTimer);
+    this._selectorProbeTimer = null;
+    this._reinjectTimer = null;
+    this._fallbackReinjectTimer = null;
+
+    this._urlObserver?.disconnect();
+    this._urlObserver = null;
+
+    if (this._nativeShareClickHandler) {
+      document.removeEventListener('click', this._nativeShareClickHandler, true);
+      this._nativeShareClickHandler = null;
+      window.__lgboom_dy_native_share_bound = false;
+    }
+
+    if (typeof this._apiBridgeCleanup === 'function') {
+      this._apiBridgeCleanup();
+      this._apiBridgeCleanup = null;
+    }
+
+    cleanupDouyinInjectedUI();
+    this._initialized = false;
   },
 
   async _readClipboardShareText() {
@@ -188,10 +229,10 @@ const DouyinAdapter = {
   },
 
   _bindNativeShareCapture() {
-    if (window.__lgboom_dy_native_share_bound) return;
+    if (this._nativeShareClickHandler || window.__lgboom_dy_native_share_bound) return;
     window.__lgboom_dy_native_share_bound = true;
 
-    document.addEventListener('click', async (event) => {
+    this._nativeShareClickHandler = async (event) => {
       if (!this._isNativeShareTrigger(event.target)) return;
 
       const page = detectDouyinPageType();
@@ -228,7 +269,8 @@ const DouyinAdapter = {
       } finally {
         this._shareCaptureState.collecting = false;
       }
-    }, true);
+    };
+    document.addEventListener('click', this._nativeShareClickHandler, true);
   },
 
   _clearBatchIndicator() {
@@ -437,7 +479,7 @@ const DouyinAdapter = {
   },
 
   _bindApiBridge() {
-    if (window.__lgboom_dy_bridge_bound) return;
+    if (this._apiBridgeCleanup || window.__lgboom_dy_bridge_bound) return;
     window.__lgboom_dy_bridge_bound = true;
 
     const BRIDGE_EVENT = '__lgboom_dy_api_data__';
@@ -540,31 +582,31 @@ const DouyinAdapter = {
       }
     };
 
-    window.addEventListener(BRIDGE_EVENT, (event) => {
+    const handleWindowBridgeEvent = (event) => {
       window.__lgboom_dy_bridge_stats.eventCount += 1;
       const detail = event?.detail || {};
       mergeItems(detail.items, detail.sourceUrl || '__event_window__');
-    });
+    };
 
-    window.addEventListener(SEARCH_BRIDGE_EVENT, (event) => {
+    const handleWindowSearchBridgeEvent = (event) => {
       window.__lgboom_dy_bridge_stats.searchEventCount += 1;
       const detail = event?.detail || {};
       mergeSearchPages(detail.pages, detail.sourceUrl || '__search_event_window__');
-    });
+    };
 
-    document.addEventListener(BRIDGE_EVENT, (event) => {
+    const handleDocumentBridgeEvent = (event) => {
       window.__lgboom_dy_bridge_stats.eventCount += 1;
       const detail = event?.detail || {};
       mergeItems(detail.items, detail.sourceUrl || '__event_document__');
-    });
+    };
 
-    document.addEventListener(SEARCH_BRIDGE_EVENT, (event) => {
+    const handleDocumentSearchBridgeEvent = (event) => {
       window.__lgboom_dy_bridge_stats.searchEventCount += 1;
       const detail = event?.detail || {};
       mergeSearchPages(detail.pages, detail.sourceUrl || '__search_event_document__');
-    });
+    };
 
-    window.addEventListener('message', (event) => {
+    const handleWindowMessage = (event) => {
       try {
         if (event.source !== window) return;
         const data = event.data || {};
@@ -581,7 +623,13 @@ const DouyinAdapter = {
       } catch {
         // ignore
       }
-    });
+    };
+
+    window.addEventListener(BRIDGE_EVENT, handleWindowBridgeEvent);
+    window.addEventListener(SEARCH_BRIDGE_EVENT, handleWindowSearchBridgeEvent);
+    document.addEventListener(BRIDGE_EVENT, handleDocumentBridgeEvent);
+    document.addEventListener(SEARCH_BRIDGE_EVENT, handleDocumentSearchBridgeEvent);
+    window.addEventListener('message', handleWindowMessage);
 
     const requestSnapshotSync = () => {
       try {
@@ -592,8 +640,19 @@ const DouyinAdapter = {
     };
 
     requestSnapshotSync();
-    setTimeout(requestSnapshotSync, 500);
-    setTimeout(requestSnapshotSync, 1500);
+    const requestTimers = [
+      setTimeout(requestSnapshotSync, 500),
+      setTimeout(requestSnapshotSync, 1500),
+    ];
+    this._apiBridgeCleanup = () => {
+      window.removeEventListener(BRIDGE_EVENT, handleWindowBridgeEvent);
+      window.removeEventListener(SEARCH_BRIDGE_EVENT, handleWindowSearchBridgeEvent);
+      document.removeEventListener(BRIDGE_EVENT, handleDocumentBridgeEvent);
+      document.removeEventListener(SEARCH_BRIDGE_EVENT, handleDocumentSearchBridgeEvent);
+      window.removeEventListener('message', handleWindowMessage);
+      requestTimers.forEach((timerId) => clearTimeout(timerId));
+      window.__lgboom_dy_bridge_bound = false;
+    };
   },
 
   _tryInject() {

@@ -232,6 +232,10 @@ test('task poller marks task running immediately when dispatch already returns a
   assert.equal(events[0].eventType, 'task.claimed');
   assert.equal(events[0].payload.status, 'running');
   assert.equal(events[0].payload.collectionRunId, 'run_started_1');
+  assert.equal(events[1].eventType, 'task.page_opened');
+  assert.equal(events[1].payload.collectionRunId, 'run_started_1');
+  assert.equal(events[2].eventType, 'task.running');
+  assert.equal(events[2].payload.status, 'running');
   assert.equal(poller.getState().activeTask?.workbenchStatus, 'running');
   assert.equal(poller.getState().activeTask?.pluginRunId, 'run_started_1');
 
@@ -299,7 +303,7 @@ test('task poller attaches runtime observability to terminal workbench events', 
   now = 3_500;
   await poller.tick();
 
-  const terminalEvent = events.find((event) => event.eventType === 'task.completed');
+  const terminalEvent = events.find((event) => event.eventType === 'task.succeeded');
   assert.equal(terminalEvent.payload.observability.taskType, 'xhs.batchNotes');
   assert.equal(terminalEvent.payload.observability.source, 'monitor');
   assert.equal(terminalEvent.payload.observability.taskStrategy, 'author_baseline');
@@ -307,6 +311,86 @@ test('task poller attaches runtime observability to terminal workbench events', 
   assert.equal(terminalEvent.payload.observability.itemAttemptCount, 4);
   assert.equal(terminalEvent.payload.observability.itemFailureCount, 1);
   assert.equal(terminalEvent.payload.observability.report, true);
+});
+
+test('task poller fails the task with schema health when extractor records are invalid', async () => {
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: claimTask([
+      {
+        id: 'task_schema_1',
+        taskType: 'xhs.batchComments',
+        platform: 'xhs',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_schema_1',
+      collectionRunId: 'run_schema_1',
+      resultLookup: {
+        externalTaskId: 'task_schema_1',
+        collectionRunId: 'run_schema_1',
+      },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_schema_1',
+        status: 'done',
+        resultSummary: { itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
+        records: {
+          notes: [],
+          comments: [{ commentId: 'c1', text: '缺少父级作品' }],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueRecords: async () => {
+      const error = new Error('comment payload must include the parent note or video id');
+      error.code = 'missing_comment_parent';
+      error.reasonCode = 'missing_comment_parent';
+      error.retryable = false;
+      error.validationErrors = [{
+        field: 'payload.noteId',
+        code: 'missing_comment_parent',
+        message: 'comment payload must include the parent note or video id',
+      }];
+      error.observability = {
+        recordType: 'comment',
+        schemaValidationAttemptCount: 1,
+        schemaValidationFailureCount: 1,
+        schemaValidationFailureRate: 1,
+        recordSchemaFailed: true,
+        invalidRecordField: 'payload.noteId',
+        reasonCode: 'missing_comment_parent',
+      };
+      throw error;
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+  });
+
+  await poller.tick();
+  const result = await poller.tick();
+
+  assert.equal(result.failed, true);
+  assert.equal(patches.at(-1)[1].status, 'failed');
+  assert.equal(patches.at(-1)[1].errorMessage, 'comment payload must include the parent note or video id');
+  const failedEvent = events.find((event) => event.eventType === 'task.failed');
+  assert.equal(failedEvent.payload.reasonCode, 'missing_comment_parent');
+  assert.equal(failedEvent.payload.observability.recordType, 'comment');
+  assert.equal(failedEvent.payload.observability.schemaValidationFailureCount, 1);
+  assert.equal(failedEvent.payload.observability.recordSchemaFailed, true);
 });
 
 test('task poller exposes lease credentials and page fingerprint for server ingest', async () => {
@@ -363,6 +447,156 @@ test('task poller exposes lease credentials and page fingerprint for server inge
     ready: true,
     readinessReasonCode: '',
   });
+});
+
+test('task poller persists active task context after dispatch starts', async () => {
+  const persisted = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_persist_context',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        tabId: 789,
+      },
+      lease: {
+        leaseToken: 'lease-persist-context',
+        attemptId: 'attempt-persist-context',
+        leaseEpoch: 3,
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_persist_context',
+      collectionRunId: 'run_persist_context',
+      resultLookup: {
+        externalTaskId: 'task_persist_context',
+        collectionRunId: 'run_persist_context',
+      },
+    }),
+    writeActiveTaskContext: async (snapshot) => {
+      persisted.push(snapshot);
+    },
+  });
+
+  await poller.tick();
+
+  assert.equal(persisted.length, 1);
+  assert.equal(persisted[0].taskId, 'task_persist_context');
+  assert.equal(persisted[0].pluginRunId, 'run_persist_context');
+  assert.equal(persisted[0].platform, 'xhs');
+  assert.equal(persisted[0].tabId, 789);
+  assert.equal(persisted[0].lease.leaseToken, 'lease-persist-context');
+  assert.equal(persisted[0].lease.attemptId, 'attempt-persist-context');
+});
+
+test('task poller recovers persisted context after worker restart', async () => {
+  const lookups = [];
+  const poller = createTaskPoller({
+    readTaskLease: async () => ({
+      taskId: 'task_recover_context',
+      leaseToken: 'lease-recover-context',
+      attemptId: 'attempt-recover-context',
+    }),
+    readActiveTaskContext: async () => ({
+      taskId: 'task_recover_context',
+      externalTaskId: 'task_recover_context',
+      pluginRunId: 'run_recover_context',
+      platform: 'douyin',
+      accountId: 'douyin_account_1',
+      tabId: 456,
+      workbenchStatus: 'running',
+      dispatchedAtMs: 1000,
+    }),
+    reconcileTaskLease: async () => ({
+      success: true,
+      action: 'resume',
+      lease: {
+        taskId: 'task_recover_context',
+        leaseToken: 'lease-recover-context',
+        attemptId: 'attempt-recover-context',
+      },
+      task: {
+        id: 'task_recover_context',
+        taskType: 'douyin.batchNotes',
+        platform: 'douyin',
+        status: 'running',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-17T12:05:00.000Z' }),
+    getResultPackage: async (lookup) => {
+      lookups.push(lookup);
+      return {
+        success: true,
+        result: {
+          collectionRunId: 'run_recover_context',
+          status: 'running',
+          resultSummary: { itemsPlanned: 2, itemsSucceeded: 1, failedItems: 0 },
+          records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+        },
+      };
+    },
+    patchTask: async () => ({ success: true }),
+  });
+
+  await poller.tick();
+
+  assert.deepEqual(lookups[0], {
+    collectionRunId: 'run_recover_context',
+    externalTaskId: 'task_recover_context',
+  });
+  assert.equal(poller.getState().activeTask.tabId, 456);
+  assert.equal(poller.getState().activeTask.accountId, 'douyin_account_1');
+});
+
+test('task poller ignores persisted context from a stale attempt', async () => {
+  const lookups = [];
+  const poller = createTaskPoller({
+    readTaskLease: async () => ({
+      taskId: 'task_stale_context',
+      leaseToken: 'lease-new-context',
+      attemptId: 'attempt-new-context',
+    }),
+    readActiveTaskContext: async () => ({
+      taskId: 'task_stale_context',
+      externalTaskId: 'task_stale_context',
+      pluginRunId: 'run_old_context',
+      attemptId: 'attempt-old-context',
+      workbenchStatus: 'running',
+    }),
+    reconcileTaskLease: async () => ({
+      success: true,
+      action: 'resume',
+      lease: {
+        taskId: 'task_stale_context',
+        leaseToken: 'lease-new-context',
+        attemptId: 'attempt-new-context',
+      },
+      task: {
+        id: 'task_stale_context',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        status: 'running',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-17T12:05:00.000Z' }),
+    getResultPackage: async (lookup) => {
+      lookups.push(lookup);
+      return { success: false, error: 'collectionRun not found for externalTaskId: task_stale_context' };
+    },
+    patchTask: async () => ({ success: true }),
+  });
+
+  await poller.tick();
+
+  assert.deepEqual(lookups[0], {
+    collectionRunId: '',
+    externalTaskId: 'task_stale_context',
+  });
+  assert.equal(poller.getState().activeTask.pluginRunId, '');
 });
 
 test('task poller surfaces idle claim reason details from the lease endpoint', async () => {
@@ -869,6 +1103,190 @@ test('task poller leaves task pending when no executable context is available', 
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller releases a leased task when the content script is unavailable', async () => {
+  const patches = [];
+  const events = [];
+  const leases = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_missing_content_script',
+        taskType: 'douyin.batchComments',
+        platform: 'douyin',
+        target: 'https://www.douyin.com/search/%E5%92%96%E5%95%A1',
+      },
+      lease: {
+        leaseToken: 'lease-missing-content',
+        attemptId: 'attempt-missing-content',
+        leaseEpoch: 2,
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: false,
+      reasonCode: 'page_context_unavailable',
+      reasonMessage: '当前页面没有加载插件内容脚本',
+      recommendedAction: 'reload_supported_page_with_plugin',
+    }),
+    dispatchTask: async () => {
+      throw new Error('dispatch should not run');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      leases.push('cleared');
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, '当前页面没有加载插件内容脚本');
+  assert.deepEqual(patches[0], [
+    'task_missing_content_script',
+    {
+      status: 'pending',
+      progress: 0,
+      errorMessage: '当前页面没有加载插件内容脚本',
+    },
+  ]);
+  assert.equal(events.at(-1).eventType, 'task.released');
+  assert.equal(events.at(-1).attemptId, 'attempt-missing-content');
+  assert.equal(events.at(-1).leaseId, 'lease-missing-content');
+  assert.equal(events.at(-1).platform, 'douyin');
+  assert.equal(events.at(-1).payload.reasonCode, 'page_context_unavailable');
+  assert.equal(events.at(-1).payload.recommendedAction, 'reload_supported_page_with_plugin');
+  assert.equal(leases.length, 1);
+  assert.equal(poller.getState().activeTask, null);
+});
+
+test('task poller releases target mismatch with an explicit target mismatch code', async () => {
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_target_mismatch',
+        taskType: 'xhs.collectAuthor',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/user/profile/expected_author',
+      },
+      lease: {
+        leaseToken: 'lease-target-mismatch',
+        attemptId: 'attempt-target-mismatch',
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: false,
+      reasonCode: 'page_target_mismatch',
+      reasonMessage: '当前页面不是任务目标博主',
+    }),
+    dispatchTask: async () => {
+      throw new Error('dispatch should not run');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  const releaseEvent = events.find((event) => event.eventType === 'task.released');
+  assert.equal(releaseEvent.payload.reasonCode, 'page_target_mismatch');
+  assert.equal(releaseEvent.payload.errorCode, 'TARGET_MISMATCH');
+  assert.equal(releaseEvent.payload.userMessage, '当前页面不是任务目标博主');
+});
+
+test('task poller emits a failed event when dispatch throws before startup', async () => {
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_dispatch_throw',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+      },
+      lease: {
+        leaseToken: 'lease-dispatch-throw',
+        attemptId: 'attempt-dispatch-throw',
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => {
+      throw new Error('content handler crashed during startup');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.success, false);
+  assert.equal(result.reason, 'content handler crashed during startup');
+  assert.equal(patches[0][1].status, 'failed');
+  const failedEvent = events.find((event) => event.eventType === 'task.failed');
+  assert.equal(failedEvent.attemptId, 'attempt-dispatch-throw');
+  assert.equal(failedEvent.leaseId, 'lease-dispatch-throw');
+  assert.equal(failedEvent.payload.reason, 'dispatch_failed');
+  assert.equal(failedEvent.payload.errorMessage, 'content handler crashed during startup');
+});
+
+test('task poller emits a failed event when dispatch is rejected', async () => {
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_dispatch_rejected',
+        taskType: 'douyin.batchNotes',
+        platform: 'douyin',
+      },
+      lease: {
+        leaseToken: 'lease-dispatch-rejected',
+        attemptId: 'attempt-dispatch-rejected',
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: false,
+      accepted: false,
+      error: 'dispatch_not_accepted',
+      reasonCode: 'page_context_unavailable',
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.success, false);
+  const failedEvent = events.find((event) => event.eventType === 'task.failed');
+  assert.equal(failedEvent.attemptId, 'attempt-dispatch-rejected');
+  assert.equal(failedEvent.payload.reasonCode, 'page_context_unavailable');
+  assert.equal(failedEvent.payload.errorMessage, 'dispatch_not_accepted');
+});
+
 test('task poller stores selected account and consumes quota only after dispatch', async () => {
   const quotaUpdates = [];
   const poller = createTaskPoller({
@@ -902,6 +1320,175 @@ test('task poller stores selected account and consumes quota only after dispatch
   assert.equal(result.accepted, true);
   assert.deepEqual(quotaUpdates, [['task_account_1', 'account_xhs_1']]);
   assert.equal(poller.getState().activeTask?.accountId, 'account_xhs_1');
+});
+
+test('task poller releases a leased task when the selected account is busy', async () => {
+  const events = [];
+  let dispatchCalls = 0;
+  let clearLeaseCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_account_busy',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+      },
+      lease: {
+        leaseToken: 'lease-account-busy',
+        attemptId: 'attempt-account-busy',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'xhs_account_busy',
+    }),
+    acquireExecutionLock: async () => ({
+      acquired: false,
+      reasonCode: 'account_busy',
+      reasonMessage: '同一账号正在执行另一个采集任务',
+      retryAfterMs: 60000,
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run while account is busy');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'account_busy');
+  assert.equal(dispatchCalls, 0);
+  assert.equal(clearLeaseCalls, 1);
+  const releaseEvent = events.find((event) => event.eventType === 'task.released');
+  assert.equal(releaseEvent.payload.reasonCode, 'account_busy');
+  assert.equal(releaseEvent.payload.accountId, 'xhs_account_busy');
+  assert.equal(releaseEvent.payload.retryAfterMs, 60000);
+});
+
+test('task poller releases the account execution lock when a task finishes', async () => {
+  const releasedLocks = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_account_lock_done',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+      },
+      lease: {
+        leaseToken: 'lease-account-lock-done',
+        attemptId: 'attempt-account-lock-done',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'xhs_account_lock_done',
+    }),
+    acquireExecutionLock: async () => ({ acquired: true }),
+    releaseExecutionLock: async (lock) => {
+      releasedLocks.push(lock);
+    },
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_account_lock_done',
+      collectionRunId: 'run_account_lock_done',
+      resultLookup: {
+        externalTaskId: 'task_account_lock_done',
+        collectionRunId: 'run_account_lock_done',
+      },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_account_lock_done',
+        status: 'done',
+        resultSummary: { itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
+        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+      },
+    }),
+  });
+
+  await poller.tick();
+  await poller.tick();
+
+  assert.deepEqual(releasedLocks, [
+    {
+      platform: 'xhs',
+      accountId: 'xhs_account_lock_done',
+      taskId: 'task_account_lock_done',
+    },
+  ]);
+});
+
+test('task poller refreshes the account execution lock while a task is running', async () => {
+  const acquiredLocks = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_account_lock_running',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+      },
+      lease: {
+        leaseToken: 'lease-account-lock-running',
+        attemptId: 'attempt-account-lock-running',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'xhs_account_lock_running',
+    }),
+    acquireExecutionLock: async (lock) => {
+      acquiredLocks.push(lock);
+      return { acquired: true };
+    },
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_account_lock_running',
+      collectionRunId: 'run_account_lock_running',
+      resultLookup: {
+        externalTaskId: 'task_account_lock_running',
+        collectionRunId: 'run_account_lock_running',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-05-24T01:12:00.000Z' }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_account_lock_running',
+        status: 'running',
+        resultSummary: { itemsPlanned: 2, itemsSucceeded: 1, failedItems: 0 },
+        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+      },
+    }),
+  });
+
+  await poller.tick();
+  await poller.tick();
+
+  assert.equal(acquiredLocks.length, 2);
+  assert.deepEqual(acquiredLocks[1], {
+    platform: 'xhs',
+    accountId: 'xhs_account_lock_running',
+    taskId: 'task_account_lock_running',
+    leaseToken: 'lease-account-lock-running',
+    attemptId: 'attempt-account-lock-running',
+  });
 });
 
 test('task poller does not consume quota when dispatch never starts', async () => {
@@ -1266,13 +1853,14 @@ test('task poller preserves failed run diagnostics when the local run only store
   assert.equal(patches[1][0], 'detail_probe_task');
   assert.equal(patches[1][1].status, 'failed');
   assert.equal(patches[1][1].errorMessage, '笔记数据未稳定就绪: expected=69fd330a actual=');
-  assert.equal(events[0].eventType, 'task.failed');
-  assert.equal(events[0].payload.userMessage, '目标笔记页面没有加载出可采数据');
-  assert.equal(events[0].payload.stage, 'collecting');
-  assert.equal(events[0].payload.failureCategory, 'retry_wait');
-  assert.equal(events[0].payload.reasonCode, 'page_data_not_ready');
-  assert.equal(events[0].payload.recommendedAction, '稍后自动重试，或改用作者页重新定位该笔记');
-  assert.deepEqual(events[0].payload.evidence, {
+  const failedEvent = events.find((event) => event.eventType === 'task.failed');
+  assert.ok(failedEvent);
+  assert.equal(failedEvent.payload.userMessage, '目标笔记页面没有加载出可采数据');
+  assert.equal(failedEvent.payload.stage, 'collecting');
+  assert.equal(failedEvent.payload.failureCategory, 'retry_wait');
+  assert.equal(failedEvent.payload.reasonCode, 'page_data_not_ready');
+  assert.equal(failedEvent.payload.recommendedAction, '稍后自动重试，或改用作者页重新定位该笔记');
+  assert.deepEqual(failedEvent.payload.evidence, {
     expectedNoteId: '69fd330a',
     currentNoteId: '',
   });
@@ -1399,7 +1987,7 @@ test('task poller releases dispatched tasks that never produce a startup run', a
       notBeforeAt: retryAt,
     },
   ]);
-  assert.equal(events.at(-1).eventType, 'task.heartbeat');
+  assert.equal(events.at(-1).eventType, 'task.page_open_failed');
   assert.equal(events.at(-1).payload.reason, 'dispatch_startup_timeout');
   assert.equal(events.at(-1).payload.userMessage, '任务已派出，但页面没有真正启动，已自动释放重试。');
   assert.equal(events.at(-1).payload.notBeforeAt, retryAt);

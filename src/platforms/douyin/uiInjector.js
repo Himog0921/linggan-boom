@@ -22,10 +22,7 @@ export function injectDouyinUI() {
     const page = detectDouyinPageType();
 
     // 清除已有的注入按钮（先卸载 React root 再移除 DOM）
-    document.querySelectorAll('.lgboom-dy-btn-group').forEach((el) => {
-      unmountButtonGroup(el);
-      el.remove();
-    });
+    cleanupDouyinInjectedUI({ includeTaskbar: false });
 
     if (detectDouyinSecurityChallenge({ root: document, href: window.location.href })) {
       return;
@@ -45,6 +42,25 @@ export function injectDouyinUI() {
     }
   } finally {
     setTimeout(() => { window[INJECT_LOCK_KEY] = false; }, 150);
+  }
+}
+
+export function cleanupDouyinInjectedUI({ includeTaskbar = true } = {}) {
+  document.querySelectorAll('.lgboom-dy-btn-group').forEach((el) => {
+    unmountButtonGroup(el);
+    el.remove();
+  });
+
+  document.querySelectorAll('.lgboom-dy-progress, .lgboom-dy-work-indicator').forEach((el) => {
+    el.remove();
+  });
+
+  if (includeTaskbar) {
+    const bar = document.querySelector('.lgboom-dy-taskbar');
+    if (bar) {
+      unmountTaskControlBar(bar);
+      bar.remove();
+    }
   }
 }
 

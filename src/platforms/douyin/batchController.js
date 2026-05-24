@@ -1,5 +1,6 @@
 import { BATCH_CONFIG } from '../../shared/constants.js';
 import { reportProgress } from '../../shared/messaging.js';
+import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { noteStore } from '../../db/noteStore.js';
 import { collectionRunStore } from '../../db/collectionRunStore.js';
 import { collectDouyinVideoByAweme, collectDouyinVideoById } from './videoCollector.js';
@@ -15,9 +16,13 @@ import { buildDouyinSurfaceNoteRecords } from '../../workbench/runtime/monitorTa
 import { pauseForDouyinSecurityChallenge } from './securityChallenge.js';
 import { MONITOR_RECORD_MODE, MONITOR_TASK_STRATEGY } from '../../workbench/protocol/schema.js';
 import {
+  buildDouyinBatchCommentsProgressPatch,
   buildDouyinBatchCommentsRunPatch,
+  buildDouyinBatchVideosProgressPatch,
   buildDouyinBatchVideosRunPatch,
 } from '../../workbench/runtime/douyinBatchRunHelper.js';
+import { resolveBatchResumeState } from '../../workbench/runtime/batchResume.js';
+import { isTerminalCollectionRunStatus } from '../../db/collectionRunStatus.js';
 
 const reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
 
@@ -31,18 +36,7 @@ function normalizeTargetIdentity(value = '') {
 }
 
 function extractDouyinProfileUserId(url = '') {
-  try {
-    const parsed = new URL(url, window.location.origin);
-    const pathname = String(parsed.pathname || '');
-    const match = pathname.match(/^\/user\/([^/?#]+)/i)
-      || pathname.match(/^\/@([^/?#]+)/i);
-    return String(match?.[1] || '').trim();
-  } catch {
-    const raw = String(url || window.location.href || '');
-    const match = raw.match(/\/user\/([^/?#]+)/i)
-      || raw.match(/\/@([^/?#]+)/i);
-    return String(match?.[1] || '').trim();
-  }
+  return extractProfileIdentityFromUrl(url, { baseUrl: window.location.origin });
 }
 
 function getDouyinTargetProfileUrl(monitorMeta = {}) {
@@ -181,6 +175,86 @@ async function handleDouyinBatchSecurityChallenge(error, {
   });
 }
 
+async function createOrResumeDouyinBatchRun({
+  taskType,
+  pageType,
+  triggerSource,
+  externalTaskMeta = {},
+  config = {},
+  meta = {},
+} = {}) {
+  const externalTaskId = String(externalTaskMeta.externalTaskId || '').trim();
+  if (externalTaskId) {
+    const existing = await collectionRunStore.getLatestByExternalTaskId(externalTaskId).catch(() => null);
+    if (
+      existing?.collectionRunId
+      && String(existing.taskType || '').trim() === String(taskType || '').trim()
+      && !isTerminalCollectionRunStatus(existing.status)
+    ) {
+      return { run: existing, resumeRun: existing };
+    }
+  }
+  const run = await createDouyinBatchRun({
+    taskType,
+    pageType,
+    triggerSource,
+    externalTaskMeta,
+    config,
+    meta,
+  });
+  return { run, resumeRun: null };
+}
+
+function normalizeDouyinTargetId(item = {}) {
+  return String(
+    item?.targetId
+    || item?.awemeId
+    || item?.platformContentId
+    || item?.videoId
+    || item?.noteId
+    || item?.contentId
+    || '',
+  ).trim().replace(/^(dy_|douyin_)/i, '');
+}
+
+function hydrateDouyinResumeResults(runRecord = {}, targets = [], nextIndex = 0) {
+  const safeRun = runRecord && typeof runRecord === 'object' && !Array.isArray(runRecord) ? runRecord : {};
+  const targetIds = targets.map(normalizeDouyinTargetId);
+  const completedIds = new Set(targetIds.slice(0, Math.max(0, Number(nextIndex || 0) || 0)));
+  const statuses = Array.isArray(safeRun?.resumeCheckpoint?.resultStatuses)
+    ? safeRun.resumeCheckpoint.resultStatuses
+    : [];
+  const statusById = new Map(statuses.map((item) => [normalizeDouyinTargetId(item), item]));
+  return targetIds.slice(0, Math.max(0, Number(nextIndex || 0) || 0))
+    .map((targetId) => {
+      const status = statusById.get(targetId);
+      if (status) {
+        return {
+          awemeId: targetId,
+          ok: status.ok !== false,
+          noteId: status.contentId || (status.ok !== false ? `dy_${targetId}` : ''),
+          totalComments: Number(status.totalComments || 0) || 0,
+          error: status.ok === false ? String(status.error || 'failed') : '',
+        };
+      }
+      if ((Array.isArray(safeRun.contentIds) ? safeRun.contentIds : [])
+        .map((value) => String(value || '').trim().replace(/^(dy_|douyin_)/i, ''))
+        .includes(targetId)) {
+        return { awemeId: targetId, ok: true, noteId: `dy_${targetId}`, totalComments: 0 };
+      }
+      const failed = (Array.isArray(safeRun.failedTargets) ? safeRun.failedTargets : [])
+        .find((item) => normalizeDouyinTargetId(item) === targetId);
+      if (failed) {
+        return { awemeId: targetId, ok: false, totalComments: 0, error: String(failed.error || 'failed') };
+      }
+      if (completedIds.has(targetId)) {
+        return { awemeId: targetId, ok: false, totalComments: 0, error: 'resume_state_missing_result' };
+      }
+      return null;
+    })
+    .filter(Boolean);
+}
+
 export async function collectDouyinBatchVideoTarget(target = {}, {
   isSearch = false,
   index = 0,
@@ -273,7 +347,7 @@ export async function batchCollectDouyinProfileVideos({
     runConfig.surfaceOnly = Boolean(surfaceOnly && monitorMeta);
     runConfig.monitorMeta = monitorMeta;
   }
-  const run = await createDouyinBatchRun({
+  const { run, resumeRun } = await createOrResumeDouyinBatchRun({
     taskType: 'batchNotes',
     pageType: effectivePageType,
     triggerSource: topByLikes
@@ -400,36 +474,45 @@ export async function batchCollectDouyinProfileVideos({
       };
     }
 
-    await collectionRunStore.updateById(run.collectionRunId, {
-      itemsPlanned: targets.length,
-      targetIds: targets.map((target) => target.awemeId),
+    const resumeState = resolveBatchResumeState({
+      runRecord: resumeRun,
+      targets,
+      getTargetId: (item) => item.awemeId,
     });
+    targets = resumeState.targets;
+    await collectionRunStore.updateById(run.collectionRunId, buildDouyinBatchVideosProgressPatch({
+      targets,
+      results: hydrateDouyinResumeResults(resumeRun, targets, resumeState.nextIndex),
+      processedCount: resumeState.nextIndex,
+    }));
 
     onProgress?.({
-      current: 0,
+      current: resumeState.nextIndex,
       total: targets.length,
-      message: topByLikes
-        ? `已发现作品并按点赞排序，开始采集前 ${targets.length} 条`
-        : `已发现 ${targets.length} 条作品，开始采集`,
+      message: resumeState.resumed
+        ? `已从本地记录恢复，前 ${resumeState.nextIndex}/${targets.length} 条视频不重复采集`
+        : (topByLikes
+          ? `已发现作品并按点赞排序，开始采集前 ${targets.length} 条`
+          : `已发现 ${targets.length} 条作品，开始采集`),
     });
     void reportHeartbeat.report(run.collectionRunId, {
       taskState: 'running',
       stage: 'discovering',
-      current: 0,
+      current: resumeState.nextIndex,
       total: targets.length,
       message: topByLikes
         ? `已发现作品并按点赞排序，开始采集前 ${targets.length} 条`
         : `已发现 ${targets.length} 条作品，开始采集`,
     }).catch(() => {});
 
-    const results = [];
-    let success = 0;
-    let failed = 0;
+    const results = hydrateDouyinResumeResults(resumeRun, targets, resumeState.nextIndex);
+    let success = results.filter((item) => item.ok).length;
+    let failed = results.filter((item) => !item.ok).length;
     const videoPacer = createDouyinBatchPacer({
       baseRange: { min: 180, max: 280 },
     });
 
-    for (let index = 0; index < targets.length; index += 1) {
+    for (let index = resumeState.nextIndex; index < targets.length; index += 1) {
       await waitIfPaused();
       if (shouldStop()) break;
 
@@ -526,6 +609,11 @@ export async function batchCollectDouyinProfileVideos({
         total: targets.length,
         message: `已完成 ${index + 1}/${targets.length} 条${results[results.length - 1]?.ok ? '' : '，当前条失败'}`,
       }).catch(() => {});
+      await collectionRunStore.updateById(run.collectionRunId, buildDouyinBatchVideosProgressPatch({
+        targets,
+        results,
+        processedCount: index + 1,
+      })).catch(() => {});
 
       await videoPacer.wait({ waitIfPaused, shouldStop });
     }
@@ -602,7 +690,7 @@ export async function batchCollectDouyinProfileComments({
   const selectionMode = topByLikes
     ? (isSearch ? 'search_top_likes' : 'top_likes')
     : (isSearch ? 'search_order' : 'profile_order');
-  const run = await createDouyinBatchRun({
+  const { run, resumeRun } = await createOrResumeDouyinBatchRun({
     taskType: 'batchComments',
     pageType: effectivePageType,
     triggerSource: topByLikes
@@ -696,20 +784,36 @@ export async function batchCollectDouyinProfileComments({
       return { ok: false, error, collectionRunId: run.collectionRunId };
     }
 
-    await collectionRunStore.updateById(run.collectionRunId, {
-      itemsPlanned: targets.length,
-      targetIds: targets.map((target) => target.awemeId),
+    const resumeState = resolveBatchResumeState({
+      runRecord: resumeRun,
+      targets,
+      getTargetId: (item) => item.awemeId,
     });
+    targets = resumeState.targets;
 
-    const results = [];
-    let success = 0;
-    let failed = 0;
-    let totalComments = 0;
+    const results = hydrateDouyinResumeResults(resumeRun, targets, resumeState.nextIndex);
+    let success = results.filter((item) => item.ok).length;
+    let failed = results.filter((item) => !item.ok).length;
+    let totalComments = results.reduce((sum, item) => sum + Number(item.totalComments || 0), 0);
     const commentPacer = createDouyinBatchPacer({
       baseRange: { min: 140, max: 220 },
     });
+    await collectionRunStore.updateById(run.collectionRunId, buildDouyinBatchCommentsProgressPatch({
+      targets,
+      results,
+      totalComments,
+      processedCount: resumeState.nextIndex,
+    })).catch(() => {});
 
-    for (let index = 0; index < targets.length; index += 1) {
+    if (resumeState.resumed) {
+      onProgress?.({
+        current: resumeState.nextIndex,
+        total: targets.length,
+        message: `已从本地记录恢复，前 ${resumeState.nextIndex}/${targets.length} 条视频评论不重复采集`,
+      });
+    }
+
+    for (let index = resumeState.nextIndex; index < targets.length; index += 1) {
       await waitIfPaused();
       if (shouldStop()) break;
 
@@ -836,6 +940,12 @@ export async function batchCollectDouyinProfileComments({
         total: targets.length,
         message: `已完成 ${index + 1}/${targets.length} 条视频评论采集`,
       }).catch(() => {});
+      await collectionRunStore.updateById(run.collectionRunId, buildDouyinBatchCommentsProgressPatch({
+        targets,
+        results,
+        totalComments,
+        processedCount: index + 1,
+      })).catch(() => {});
 
       await commentPacer.wait({ waitIfPaused, shouldStop });
     }

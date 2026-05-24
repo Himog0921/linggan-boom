@@ -2,7 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
+  buildDouyinBatchCommentsProgressPatch,
   buildDouyinBatchCommentsRunPatch,
+  buildDouyinBatchVideosProgressPatch,
   buildDouyinBatchVideosRunPatch,
 } from '../src/workbench/runtime/douyinBatchRunHelper.js';
 
@@ -69,4 +71,39 @@ test('douyin batch run patches normalize prefixed content ids back to raw target
   assert.deepEqual(patch.targetIds, ['9001', '9002']);
   assert.deepEqual(patch.contentIds, ['dy_9001']);
   assert.deepEqual(patch.failedTargets, [{ awemeId: '9002', error: 'failed' }]);
+});
+
+test('buildDouyinBatchVideosProgressPatch stores resume checkpoint for processed videos', () => {
+  const patch = buildDouyinBatchVideosProgressPatch({
+    targets: [{ awemeId: '7001' }, { awemeId: '7002' }, { awemeId: '7003' }],
+    processedCount: 2,
+    results: [
+      { awemeId: '7001', ok: true, noteId: 'dy_7001' },
+      { awemeId: '7002', ok: false, error: 'timeout' },
+      { awemeId: '7003', ok: true, noteId: 'dy_7003' },
+    ],
+  });
+
+  assert.equal(patch.nextIndex, 2);
+  assert.equal(patch.resumeCheckpoint.nextIndex, 2);
+  assert.deepEqual(patch.resumeCheckpoint.targetIds, ['7001', '7002', '7003']);
+  assert.deepEqual(patch.contentIds, ['dy_7001']);
+  assert.deepEqual(patch.failedTargets, [{ awemeId: '7002', error: 'timeout' }]);
+});
+
+test('buildDouyinBatchCommentsProgressPatch stores comment counts for resume', () => {
+  const patch = buildDouyinBatchCommentsProgressPatch({
+    targets: [{ awemeId: '8001' }, { awemeId: '8002' }],
+    processedCount: 1,
+    totalComments: 12,
+    results: [
+      { awemeId: '8001', ok: true, noteId: 'dy_8001', totalComments: 12 },
+      { awemeId: '8002', ok: false, error: 'blocked' },
+    ],
+  });
+
+  assert.equal(patch.nextIndex, 1);
+  assert.equal(patch.resumeCheckpoint.resultStatuses[0].targetId, '8001');
+  assert.equal(patch.resumeCheckpoint.resultStatuses[0].totalComments, 12);
+  assert.deepEqual(patch.failedTargets, []);
 });

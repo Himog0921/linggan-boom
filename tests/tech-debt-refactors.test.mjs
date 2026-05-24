@@ -37,3 +37,17 @@ test('background workbench task routing uses one shared task context registry', 
   assert.match(backgroundSource, /function setWorkbenchTaskContext\(/);
   assert.doesNotMatch(backgroundSource, /taskExecutionTabRegistry/);
 });
+
+test('douyin page lifecycle can clean listeners, observers, and injected UI', () => {
+  const adapterSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/index.js'), 'utf8');
+  const uiSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/uiInjector.js'), 'utf8');
+  const contentSource = fs.readFileSync(path.join(projectRoot, 'src/content/index.js'), 'utf8');
+
+  assert.match(adapterSource, /_initialized:\s*false/);
+  assert.match(adapterSource, /cleanupLifecycleListeners\(\)/);
+  assert.match(adapterSource, /_urlObserver\?\.disconnect\(\)/);
+  assert.match(adapterSource, /document\.removeEventListener\('click', this\._nativeShareClickHandler, true\)/);
+  assert.match(adapterSource, /window\.removeEventListener\(BRIDGE_EVENT, handleWindowBridgeEvent\)/);
+  assert.match(uiSource, /export function cleanupDouyinInjectedUI/);
+  assert.match(contentSource, /douyinClickListenerRegistered/);
+});

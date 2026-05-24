@@ -4,6 +4,43 @@ import assert from 'node:assert/strict';
 import { normalizeProgressEvent, toLegacyProgressMessage } from '../src/workbench/runtime/progressEvent.js';
 import { mapErrorToProtocolError } from '../src/workbench/runtime/errorMapper.js';
 import { attachTaskRuntimeObservability } from '../src/workbench/runtime/taskRuntimeObservability.js';
+import { buildIngestEnvelope, buildTaskEvent } from '../src/workbench/protocol/deltaEnvelope.js';
+
+test('workbench task events carry the v1 execution envelope fields', () => {
+  const event = buildTaskEvent({
+    taskId: 'task-envelope-1',
+    pluginRunId: 'run-envelope-1',
+    eventType: 'task.running',
+    sequence: 17,
+    payload: { confirmedTarget: { id: 'author-1' } },
+  });
+
+  assert.equal(event.taskId, 'task-envelope-1');
+  assert.match(event.eventId, /^[0-9a-f-]{36}$/i);
+  assert.equal(event.eventSeq, 17);
+  assert.equal(event.sequence, 17);
+  assert.equal(event.type, 'task.running');
+
+  const envelope = buildIngestEnvelope({
+    taskId: 'task-envelope-1',
+    pluginRunId: 'run-envelope-1',
+    executorInstanceId: 'station-1',
+    attemptId: 'attempt-1',
+    leaseToken: 'lease-1',
+    events: [event],
+    executionContext: {
+      platform: 'xhs',
+      accountId: 'account-1',
+    },
+  });
+
+  assert.equal(envelope.attemptId, 'attempt-1');
+  assert.equal(envelope.events[0].attemptId, 'attempt-1');
+  assert.equal(envelope.events[0].leaseId, 'lease-1');
+  assert.equal(envelope.events[0].stationId, 'station-1');
+  assert.equal(envelope.events[0].accountId, 'account-1');
+  assert.equal(envelope.events[0].platform, 'xhs');
+});
 
 test('normalizeProgressEvent structures progress with explicit stage and heartbeat', () => {
   const event = normalizeProgressEvent({
@@ -47,6 +84,26 @@ test('normalizeProgressEvent preserves plugin observability counters', () => {
   assert.equal(event.observability.parseFailureCount, 1);
   assert.equal(event.observability.parseFailureRate, 0.1);
   assert.equal(event.observability.domParseFailed, true);
+});
+
+test('normalizeProgressEvent preserves record schema health counters', () => {
+  const event = normalizeProgressEvent({
+    status: '记录结构不合格',
+    observability: {
+      recordType: 'comment',
+      schemaValidationAttemptCount: 1,
+      schemaValidationFailureCount: 1,
+      recordSchemaFailed: true,
+      invalidRecordField: 'payload.noteId',
+    },
+  });
+
+  assert.equal(event.observability.recordType, 'comment');
+  assert.equal(event.observability.schemaValidationAttemptCount, 1);
+  assert.equal(event.observability.schemaValidationFailureCount, 1);
+  assert.equal(event.observability.schemaValidationFailureRate, 1);
+  assert.equal(event.observability.recordSchemaFailed, true);
+  assert.equal(event.observability.invalidRecordField, 'payload.noteId');
 });
 
 test('attachTaskRuntimeObservability adds duration and report flag for failed events', () => {

@@ -1,3 +1,5 @@
+import { buildBatchResumeCheckpoint } from './batchResume.js';
+
 function normalizeText(value = '') {
   return String(value || '').trim();
 }
@@ -43,7 +45,12 @@ export function buildRemoteRunCreatePayload({
 
 function buildContentIdsFromNotes(collected = []) {
   return (Array.isArray(collected) ? collected : [])
-    .map((item) => normalizeText(item?.contentId || item?.noteId ? `xhs_${normalizeText(item?.noteId || '').replace(/^xhs_/, '')}` : ''))
+    .map((item) => {
+      const direct = normalizeText(item?.contentId);
+      if (direct.startsWith('xhs_')) return direct;
+      const noteId = normalizeText(item?.noteId || direct).replace(/^xhs_/, '');
+      return noteId ? `xhs_${noteId}` : '';
+    })
     .filter(Boolean);
 }
 
@@ -86,9 +93,26 @@ export function buildXhsBatchNotesProgressPatch({
     collected: scopedCollected,
     failed: scopedFailed,
   });
+  const resume = buildBatchResumeCheckpoint({
+    targetIds: allTargets,
+    processedCount,
+    resultStatuses: [
+      ...scopedCollected.map((item) => ({
+        targetId: normalizeText(item?.noteId),
+        ok: true,
+        contentId: normalizeText(item?.contentId || item?.noteId),
+      })),
+      ...scopedFailed.map((item) => ({
+        targetId: normalizeText(item?.noteId),
+        ok: false,
+        error: normalizeText(item?.error),
+      })),
+    ],
+  });
 
   return {
     ...summary,
+    ...resume,
     itemsPlanned: allTargets.length,
     targetIds: allTargets,
   };
@@ -146,9 +170,24 @@ export function buildXhsBatchCommentsProgressPatch({
     noteList: processedTargets.map((noteId) => ({ noteId })),
     results,
   });
+  const processedSet = new Set(processedTargets);
+  const resume = buildBatchResumeCheckpoint({
+    targetIds: allTargets,
+    processedCount,
+    resultStatuses: (Array.isArray(results) ? results : [])
+      .filter((item) => processedSet.has(normalizeText(item?.noteId)))
+      .map((item) => ({
+        targetId: normalizeText(item?.noteId),
+        ok: Number(item?.total || 0) > 0,
+        contentId: normalizeText(item?.noteId),
+        totalComments: Number(item?.total || 0) || 0,
+        error: Number(item?.total || 0) > 0 ? '' : normalizeText(item?.error || 'no_comments_collected'),
+      })),
+  });
 
   return {
     ...summary,
+    ...resume,
     itemsPlanned: allTargets.length,
     targetIds: allTargets,
   };

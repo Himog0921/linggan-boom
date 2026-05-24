@@ -128,6 +128,23 @@ test('canDispatchTaskFromCapabilityReport accepts matching detail targets across
   assert.equal(result.reasonCode, '');
 });
 
+test('canDispatchTaskFromCapabilityReport accepts matching xhs profile relay detail targets', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=current',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.batchNotes'],
+    },
+  }, 'xhs.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69fdb9db000000001b021e8d',
+  });
+
+  assert.equal(result.accepted, true);
+  assert.equal(result.reasonCode, '');
+});
+
 test('canDispatchTaskFromCapabilityReport validates douyin note detail targets', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'detail',

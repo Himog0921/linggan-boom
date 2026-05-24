@@ -51,7 +51,14 @@ export const REMOTE_TASK_CONTROL_ACTION = {
 
 export const WORKBENCH_TASK_EVENT_TYPE = {
   TASK_CLAIMED: 'task.claimed',
+  TASK_PAGE_OPENED: 'task.page_opened',
+  TASK_EXECUTION_STARTED: 'task.execution_started',
+  TASK_FIRST_RECORD_SEEN: 'task.first_record_seen',
+  TASK_PAGE_OPEN_FAILED: 'task.page_open_failed',
+  TASK_LOGIN_REQUIRED: 'task.login_required',
+  TASK_PLATFORM_RESTRICTED: 'task.platform_restricted',
   TASK_STARTED: 'task.started',
+  TASK_RUNNING: 'task.running',
   TASK_HEARTBEAT: 'task.heartbeat',
   TASK_PROGRESS: 'task.progress',
   TASK_PARTIAL_RESULT: 'task.partial_result',
@@ -63,7 +70,11 @@ export const WORKBENCH_TASK_EVENT_TYPE = {
   TASK_STOPPING: 'task.stopping',
   TASK_STOPPED: 'task.stopped',
   TASK_COMPLETED: 'task.completed',
+  TASK_SUCCEEDED: 'task.succeeded',
+  TASK_RELEASED: 'task.released',
   TASK_FAILED: 'task.failed',
+  TASK_DELETED: 'task.deleted',
+  TASK_CAPABILITY_MISMATCH: 'task.capability_mismatch',
 };
 
 export const WORKBENCH_RECORD_TYPE = {

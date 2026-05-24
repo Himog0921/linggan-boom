@@ -72,6 +72,15 @@ test('buildXhsBatchNotesRunPatch summarizes batch note results', () => {
   });
 });
 
+test('buildXhsBatchNotesRunPatch keeps valid content id when note id is absent', () => {
+  const patch = buildXhsBatchNotesRunPatch({
+    noteList: [{ noteId: 'n1' }],
+    collected: [{ contentId: 'xhs_n1' }],
+  });
+
+  assert.deepEqual(patch.contentIds, ['xhs_n1']);
+});
+
 test('buildXhsBatchNotesProgressPatch only counts processed targets during a running task', () => {
   const patch = buildXhsBatchNotesProgressPatch({
     noteList: [{ noteId: 'n1' }, { noteId: 'n2' }, { noteId: 'n3' }],
@@ -80,7 +89,14 @@ test('buildXhsBatchNotesProgressPatch only counts processed targets during a run
     failed: [{ noteId: 'n2', error: 'timeout' }],
   });
 
-  assert.deepEqual(patch, {
+  assert.deepEqual({
+    itemsPlanned: patch.itemsPlanned,
+    itemsSucceeded: patch.itemsSucceeded,
+    itemsFailed: patch.itemsFailed,
+    targetIds: patch.targetIds,
+    contentIds: patch.contentIds,
+    failedTargets: patch.failedTargets,
+  }, {
     itemsPlanned: 3,
     itemsSucceeded: 1,
     itemsFailed: 1,
@@ -88,6 +104,8 @@ test('buildXhsBatchNotesProgressPatch only counts processed targets during a run
     contentIds: ['xhs_n1'],
     failedTargets: [{ noteId: 'n2', error: 'timeout' }],
   });
+  assert.equal(patch.nextIndex, 2);
+  assert.deepEqual(patch.resumeCheckpoint.targetIds, ['n1', 'n2', 'n3']);
 });
 
 test('buildXhsBatchCommentsRunPatch summarizes batch comment results', () => {
@@ -120,7 +138,15 @@ test('buildXhsBatchCommentsProgressPatch only counts processed targets during a 
     ],
   });
 
-  assert.deepEqual(patch, {
+  assert.deepEqual({
+    itemsPlanned: patch.itemsPlanned,
+    itemsSucceeded: patch.itemsSucceeded,
+    itemsFailed: patch.itemsFailed,
+    totalComments: patch.totalComments,
+    targetIds: patch.targetIds,
+    contentIds: patch.contentIds,
+    failedTargets: patch.failedTargets,
+  }, {
     itemsPlanned: 3,
     itemsSucceeded: 1,
     itemsFailed: 1,
@@ -129,4 +155,6 @@ test('buildXhsBatchCommentsProgressPatch only counts processed targets during a 
     contentIds: ['xhs_n1'],
     failedTargets: [{ noteId: 'n2', total: 0 }],
   });
+  assert.equal(patch.nextIndex, 2);
+  assert.deepEqual(patch.resumeCheckpoint.targetIds, ['n1', 'n2', 'n3']);
 });

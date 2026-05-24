@@ -22,6 +22,7 @@ export const MSG = {
   DISPATCH_ESC: 'dispatchEscapeViaDebugger',
   DOWNLOAD_MEDIA_FILE: 'downloadMediaFile',
   FETCH_BINARY_AS_DATA_URL: 'fetchBinaryAsDataUrl',
+  RELEASE_EXECUTION_ACCOUNT_LOCK: 'releaseExecutionAccountLock',
 
   // 数据操作
   GET_STATS: 'getStats',

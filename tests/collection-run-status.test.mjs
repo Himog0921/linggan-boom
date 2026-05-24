@@ -46,8 +46,6 @@ test('heartbeat patches still refresh non-terminal collection runs', () => {
   assert.deepEqual(patch, {
     status: 'running',
     stage: 'collecting',
-    current: 15,
-    total: 50,
     message: '继续采集',
     lastHeartbeatAt: 456,
   });

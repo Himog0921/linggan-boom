@@ -1,5 +1,16 @@
 import { MSG, COMMENT_DEPTH_MODE, TASK_STATE } from '../shared/constants.js';
+import { sendToBackground } from '../shared/messaging.js';
 import { isPausedTaskState, resolveTaskState } from '../shared/taskUi.js';
+
+async function defaultReleaseExecutionLock(lock = {}) {
+  if (!lock || typeof lock !== 'object' || Array.isArray(lock)) return;
+  if (!lock.platform || !lock.accountId || !lock.taskId) return;
+  try {
+    await sendToBackground(MSG.RELEASE_EXECUTION_ACCOUNT_LOCK, { executionLock: lock }, { timeoutMs: 4000 });
+  } catch {
+    // The lock has an expiry, so release failures must not hide task results.
+  }
+}
 
 function finalizeManagedTask({ toggleStopButton, hideTaskControlBar, setActiveTaskType, clearController } = {}) {
   toggleStopButton(false);
@@ -109,6 +120,7 @@ function createDouyinManagedBatchStartHandler({
   setController,
   attachExternalController,
   pauseManagedTask,
+  releaseExecutionLock = defaultReleaseExecutionLock,
 } = {}) {
   return async (msg = {}) => {
     getController()?.stop?.();
@@ -191,6 +203,7 @@ function createDouyinManagedBatchStartHandler({
         });
         syncTaskUI(buildErrorMessage(msg, err));
       } finally {
+        await releaseExecutionLock(msg.executionLock);
         finalizeManagedTask({
           toggleStopButton,
           hideTaskControlBar,
@@ -232,6 +245,7 @@ function createXhsBatchStartHandler({
   setActiveTaskType,
   setController,
   buildOptions,
+  releaseExecutionLock = defaultReleaseExecutionLock,
 } = {}) {
   return async (msg = {}) => {
     const controller = new ControllerClass();
@@ -276,6 +290,9 @@ function createXhsBatchStartHandler({
           setController,
         });
         throw error;
+      })
+      .finally(() => {
+        void releaseExecutionLock(msg.executionLock);
       });
 
     const isRemoteDispatch = Boolean(String(msg.externalTaskMeta?.externalTaskId || '').trim());
@@ -303,6 +320,7 @@ function createStopHandler({
   setActiveTaskType,
   getDouyinAdapter = null,
   douyinAdapter = null,
+  releaseExecutionLock = defaultReleaseExecutionLock,
 } = {}) {
   const resolveDouyinAdapter = () => {
     if (typeof getDouyinAdapter === 'function') {
@@ -357,6 +375,7 @@ export function createBatchMessageHandlers({
   setBatchCommentCtrl,
   getDouyinAdapter = null,
   douyinAdapter = null,
+  releaseExecutionLock = defaultReleaseExecutionLock,
 } = {}) {
   const resolveDouyinAdapter = () => {
     if (typeof getDouyinAdapter === 'function') {
@@ -482,6 +501,7 @@ export function createBatchMessageHandlers({
     setController: setBatchNoteCtrl,
     attachExternalController: dyAttachExternalController,
     pauseManagedTask: dyPauseManagedTask,
+    releaseExecutionLock,
   });
 
   const startDouyinBatchComments = createDouyinManagedBatchStartHandler({
@@ -531,6 +551,7 @@ export function createBatchMessageHandlers({
     setController: setBatchCommentCtrl,
     attachExternalController: dyAttachExternalController,
     pauseManagedTask: dyPauseManagedTask,
+    releaseExecutionLock,
   });
 
   const startXhsBatchNotes = createXhsBatchStartHandler({
@@ -543,6 +564,7 @@ export function createBatchMessageHandlers({
     hideTaskControlBar,
     setActiveTaskType,
     setController: setBatchNoteCtrl,
+    releaseExecutionLock,
     buildOptions: (msg) => ({
       count: msg.count || 10,
       topByLikes: Boolean(msg.topByLikes),
@@ -563,6 +585,7 @@ export function createBatchMessageHandlers({
     hideTaskControlBar,
     setActiveTaskType,
     setController: setBatchCommentCtrl,
+    releaseExecutionLock,
     buildOptions: (msg) => ({
       count: msg.count || 10,
       topByLikes: Boolean(msg.topByLikes),

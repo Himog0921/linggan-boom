@@ -47,6 +47,8 @@ let contentDataRuntimeInstance = null;
 let contentDataRuntimePromise = null;
 let dashboardBridgeListenerRegistered = false;
 let douyinAdapterRef = null;
+let douyinClickListenerRegistered = false;
+let douyinClickListener = null;
 
 async function assertPluginAuthorized() {
   return assertActivePluginAuthorization();
@@ -143,7 +145,11 @@ async function initDouyinPage() {
   const { DouyinAdapter } = douyinRuntime;
   douyinAdapterRef = DouyinAdapter;
   DouyinAdapter.init();
-  document.addEventListener('click', (e) => {
+  if (douyinClickListenerRegistered) {
+    console.log('[灵感爆爆爆] 抖音模式已启动');
+    return;
+  }
+  douyinClickListener = (e) => {
     const btn = e.target.closest('.lgboom-dy-btn, .lgboom-dy-task-btn');
     if (!btn) return;
     e.preventDefault();
@@ -152,7 +158,9 @@ async function initDouyinPage() {
     Promise.resolve(DouyinAdapter.handleButtonClick(action, params)).catch((err) => {
       console.error('[灵感爆爆爆] 抖音按钮动作失败:', err);
     });
-  });
+  };
+  document.addEventListener('click', douyinClickListener);
+  douyinClickListenerRegistered = true;
   console.log('[灵感爆爆爆] 抖音模式已启动');
 }
 

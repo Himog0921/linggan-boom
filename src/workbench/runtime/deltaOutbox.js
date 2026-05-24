@@ -8,6 +8,10 @@ import {
   WORKBENCH_RECORD_TYPE,
   WORKBENCH_TASK_EVENT_TYPE,
 } from '../protocol/schema.js';
+import {
+  createRecordPayloadValidationError,
+  validateRecordPayload,
+} from '../protocol/recordPayloadValidator.js';
 
 function normalizeText(value = '') {
   return String(value || '').trim();
@@ -107,6 +111,7 @@ export function createDeltaOutbox({
           leaseToken: executionContext.leaseToken,
           leaseEpoch: Number.isFinite(leaseEpoch) ? leaseEpoch : undefined,
           pageFingerprint: executionContext.pageFingerprint,
+          executionContext,
         });
         try {
           const response = await ingestDelta(first.taskId, envelope);
@@ -167,6 +172,11 @@ export function createDeltaOutbox({
     controlRequestId = '',
     snapshot = null,
     occurredAt = '',
+    attemptId = '',
+    leaseId = '',
+    stationId = '',
+    accountId = '',
+    platform = '',
   } = {}) {
     const normalizedSequence = normalizeSequence(sequence);
     const event = buildTaskEvent({
@@ -178,6 +188,11 @@ export function createDeltaOutbox({
       payload,
       controlRequestId,
       occurredAt,
+      attemptId,
+      leaseId,
+      stationId,
+      accountId,
+      platform,
     });
     return enqueueRow({
       taskId,
@@ -210,6 +225,10 @@ export function createDeltaOutbox({
         payload,
       })
       : payload;
+    const validation = validateRecordPayload(recordType, preparedPayload);
+    if (!validation.valid) {
+      throw createRecordPayloadValidationError({ recordType, validation });
+    }
     const record = buildTaskRecord({
       taskId,
       pluginRunId,

@@ -121,3 +121,77 @@ test('xhs task UI falls back to TASK_STATE status when taskState carries a colle
   assert.equal(stopped.current, 2);
   assert.equal(stopped.total, 5);
 });
+
+test('xhs page controller does not duplicate page listeners on repeated init and cleans them', () => {
+  const originalWindow = globalThis.window;
+  const originalDocument = globalThis.document;
+  const originalMutationObserver = globalThis.MutationObserver;
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+
+  const added = [];
+  const removed = [];
+  const observers = [];
+  const clearedTimers = [];
+  let timerId = 0;
+
+  globalThis.window = {
+    location: { href: 'https://www.xiaohongshu.com/explore/note_1' },
+    __lgboom_injecting: false,
+  };
+  globalThis.document = {
+    body: {},
+    querySelector: () => ({ className: 'lgboom-btn-group' }),
+    addEventListener(type, handler) {
+      added.push({ type, handler });
+    },
+    removeEventListener(type, handler) {
+      removed.push({ type, handler });
+    },
+  };
+  globalThis.MutationObserver = class TestMutationObserver {
+    constructor(callback) {
+      this.callback = callback;
+      this.disconnected = false;
+      observers.push(this);
+    }
+
+    observe(target, options) {
+      this.target = target;
+      this.options = options;
+    }
+
+    disconnect() {
+      this.disconnected = true;
+    }
+  };
+  globalThis.setTimeout = () => {
+    timerId += 1;
+    return timerId;
+  };
+  globalThis.clearTimeout = (id) => {
+    if (id) clearedTimers.push(id);
+  };
+
+  try {
+    const { controller } = createControllerHarness();
+    controller.initPage();
+    controller.initPage();
+
+    assert.equal(observers.length, 1);
+    assert.equal(added.filter((entry) => entry.type === 'click').length, 1);
+
+    controller.cleanupPage();
+
+    assert.equal(observers[0].disconnected, true);
+    assert.equal(removed.length, 1);
+    assert.equal(removed[0].handler, added[0].handler);
+    assert.ok(clearedTimers.length >= 1);
+  } finally {
+    globalThis.window = originalWindow;
+    globalThis.document = originalDocument;
+    globalThis.MutationObserver = originalMutationObserver;
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});

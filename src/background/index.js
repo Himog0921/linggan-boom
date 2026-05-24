@@ -1,6 +1,10 @@
 import '../extensionPublicPath.js';
 import { MSG } from '../shared/constants.js';
 import {
+  extractProfileIdentityFromUrl,
+  parseTargetIdentity,
+} from '../shared/targetIdentity.js';
+import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
@@ -39,6 +43,11 @@ import {
   stationCapabilitiesForRuntimeStates,
 } from '../workbench/runtime/executionStationRuntime.js';
 import { createTaskPoller } from '../workbench/runtime/taskPoller.js';
+import {
+  createExecutionAccountLockManager,
+  createExecutionAccountLockStorageStore,
+} from '../workbench/runtime/executionAccountLock.js';
+import { createManualExecutionLockCoordinator } from '../workbench/runtime/manualExecutionLock.js';
 import {
   scheduleWorkbenchTaskPollAlarm,
   shouldRunWorkbenchTaskPollAfterHeartbeat,
@@ -99,6 +108,8 @@ const resultPackager = createResultPackager({
 const workbenchTaskRegistry = new Map();
 const navigatedTabs = new Map();
 const NAVIGATED_TASK_TABS_STORAGE_KEY = 'workbenchNavigatedTaskTabs';
+const ACTIVE_TASK_CONTEXT_STORAGE_KEY = 'workbenchActiveTaskContext';
+const EXECUTION_ACCOUNT_LOCK_STORAGE_KEY = 'workbenchExecutionAccountLocks';
 const WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY = 'workbenchTaskAuthorizationBackoff';
 const WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY = 'workbenchStationHeartbeatBackoff';
 const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
@@ -178,6 +189,25 @@ async function clearTaskAuthorizationBackoff() {
   return clearLocalStorageValue(WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY);
 }
 
+async function readActiveTaskExecutionContext(taskId = '') {
+  const snapshot = await readLocalStorageValue(ACTIVE_TASK_CONTEXT_STORAGE_KEY);
+  if (!snapshot || typeof snapshot !== 'object' || Array.isArray(snapshot)) return null;
+  const normalizedTaskId = String(taskId || '').trim();
+  const snapshotTaskId = String(snapshot.taskId || '').trim();
+  return !normalizedTaskId || snapshotTaskId === normalizedTaskId ? snapshot : null;
+}
+
+async function writeActiveTaskExecutionContext(snapshot = {}) {
+  const normalized = snapshot && typeof snapshot === 'object' && !Array.isArray(snapshot)
+    ? { ...snapshot, updatedAtMs: Date.now() }
+    : null;
+  return writeLocalStorageValue(ACTIVE_TASK_CONTEXT_STORAGE_KEY, normalized);
+}
+
+async function clearActiveTaskExecutionContext() {
+  return clearLocalStorageValue(ACTIVE_TASK_CONTEXT_STORAGE_KEY);
+}
+
 async function readHeartbeatAuthorizationBackoff() {
   return readLocalStorageValue(WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY);
 }
@@ -240,11 +270,13 @@ function isUrlLike(value = '') {
 }
 
 function isXhsDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/[^/?#]+/i.test(String(url || '').trim());
+  const identity = parseTargetIdentity(url);
+  return identity.platform === 'xhs' && Boolean(identity.contentId);
 }
 
 function isDouyinDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/[^/?#]+/i.test(String(url || '').trim());
+  const identity = parseTargetIdentity(url);
+  return identity.platform === 'douyin' && Boolean(identity.contentId);
 }
 
 function normalizeString(value = '') {
@@ -252,19 +284,13 @@ function normalizeString(value = '') {
 }
 
 function extractXhsDetailIdFromUrl(url = '') {
-  const raw = normalizeString(url);
-  if (!raw) return '';
-  const match = raw.match(
-    /xiaohongshu\.com\/(?:(?:explore|discovery\/item)\/|user\/profile\/[^/?#]+\/)([^/?#]+)/i,
-  );
-  return normalizeString(match?.[1] || '').replace(/^xhs_/, '');
+  const identity = parseTargetIdentity(url);
+  return identity.platform === 'xhs' ? identity.contentId : '';
 }
 
 function extractDouyinDetailIdFromUrl(url = '') {
-  const raw = normalizeString(url);
-  if (!raw) return '';
-  const match = raw.match(/douyin\.com\/(?:video|note)\/([^/?#]+)/i);
-  return normalizeString(match?.[1] || '').replace(/^dy_/, '');
+  const identity = parseTargetIdentity(url);
+  return identity.platform === 'douyin' ? identity.contentId : '';
 }
 
 function extractDetailContentIdFromUrl(url = '') {
@@ -277,10 +303,7 @@ function buildCanonicalXhsDetailUrl(noteId = '') {
 }
 
 function extractXhsProfileUserId(url = '') {
-  const raw = normalizeString(url);
-  if (!raw) return '';
-  const match = raw.match(/xiaohongshu\.com\/user\/profile\/([^/?#]+)/i);
-  return normalizeString(match?.[1] || '');
+  return extractProfileIdentityFromUrl(url);
 }
 
 function buildCanonicalXhsProfileUrl(userId = '') {
@@ -1069,11 +1092,25 @@ const bgHandlers = {
     if (!tabId) return { error: 'No tabId' };
     chrome.action.setBadgeText({ text: '⏳', tabId });
     chrome.action.setBadgeBackgroundColor({ color: '#3498db', tabId });
+    let manualLock = null;
     try {
-      return await sendToTab(tabId, buildBatchNotesDispatchMessage(msg), {
+      manualLock = await prepareManualExecutionLockForDispatch({
+        action: MSG.START_BATCH_NOTES,
+        msg,
+        tabId,
+        sender,
+      });
+      const response = await sendToTab(tabId, buildBatchNotesDispatchMessage(manualLock.message), {
         timeoutMs: msg?.asyncDispatch ? 12000 : 10000,
       });
+      if (response?.success === false || response?.accepted === false || response?.error) {
+        await manualExecutionLockCoordinator.release(manualLock.lock);
+      } else if (manualLock.lock?.accountId) {
+        await accountStore.updateUsage(manualLock.lock.accountId);
+      }
+      return response;
     } catch (err) {
+      await manualExecutionLockCoordinator.release(manualLock?.lock);
       await clearBadge(tabId);
       throw err;
     }
@@ -1114,11 +1151,25 @@ const bgHandlers = {
     if (!tabId) return { error: 'No tabId' };
     chrome.action.setBadgeText({ text: '评', tabId });
     chrome.action.setBadgeBackgroundColor({ color: '#e74c3c', tabId });
+    let manualLock = null;
     try {
-      return await sendToTab(tabId, buildBatchCommentsDispatchMessage(msg), {
+      manualLock = await prepareManualExecutionLockForDispatch({
+        action: MSG.START_BATCH_COMMENTS,
+        msg,
+        tabId,
+        sender,
+      });
+      const response = await sendToTab(tabId, buildBatchCommentsDispatchMessage(manualLock.message), {
         timeoutMs: msg?.asyncDispatch ? 12000 : 10000,
       });
+      if (response?.success === false || response?.accepted === false || response?.error) {
+        await manualExecutionLockCoordinator.release(manualLock.lock);
+      } else if (manualLock.lock?.accountId) {
+        await accountStore.updateUsage(manualLock.lock.accountId);
+      }
+      return response;
     } catch (err) {
+      await manualExecutionLockCoordinator.release(manualLock?.lock);
       await clearBadge(tabId);
       throw err;
     }
@@ -1147,6 +1198,13 @@ const bgHandlers = {
       return { error: control?.error || 'No tabId' };
     }
     return { success: true };
+  },
+
+  [MSG.RELEASE_EXECUTION_ACCOUNT_LOCK]: async (msg = {}) => {
+    const lock = msg.executionLock && typeof msg.executionLock === 'object'
+      ? msg.executionLock
+      : msg;
+    return manualExecutionLockCoordinator.release(lock);
   },
 
   [MSG.TOGGLE_DASHBOARD]: async (msg) => {
@@ -1263,16 +1321,31 @@ const bgHandlers = {
   [MSG.GET_EXECUTION_STATION_STATUS]: async () => {
     const authorizationStatus = await getPluginAuthorizationSnapshot();
     const identity = await executionStationClient.getStoredStationIdentity();
-    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
+    const [runtimeSnapshot, lockSnapshot, unsentOutboxCount] = await Promise.all([
+      collectExecutionStationRuntimeSnapshot(identity),
+      executionAccountLockManager.snapshot().catch(() => ({ locks: {} })),
+      workbenchOutboxStore.countUnsent().catch(() => 0),
+    ]);
+    const activeLocks = Object.values(lockSnapshot?.locks || {})
+      .map((lock) => summarizeExecutionLockForDiagnostics(lock))
+      .filter((lock) => lock.platform || lock.accountId || lock.taskId);
+    const currentTask = summarizeActiveTaskForDiagnostics(taskPoller?.getState?.()?.activeTask || null);
     return {
       success: true,
       authorized: authorizationStatus.authorized,
       authorization: authorizationStatus.authorization,
       authorizationMessage: authorizationStatus.authorizationMessage,
       registered: Boolean(identity?.stationId && identity?.stationToken),
-      identity,
+      pluginVersion: getPluginVersion(),
+      identity: summarizeStationIdentityForDiagnostics(identity),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
+      diagnostics: {
+        currentTask,
+        activeLocks,
+        activeLockCount: activeLocks.length,
+        unsentOutboxCount: Number(unsentOutboxCount || 0),
+      },
     };
   },
 
@@ -1864,6 +1937,43 @@ async function collectExecutionStationRuntimeSnapshot(identity = null) {
   };
 }
 
+function summarizeActiveTaskForDiagnostics(activeTask = null) {
+  if (!activeTask || typeof activeTask !== 'object') return null;
+  return {
+    taskId: String(activeTask.taskId || activeTask.id || '').trim(),
+    externalTaskId: String(activeTask.externalTaskId || '').trim(),
+    taskType: String(activeTask.taskType || activeTask.sourceType || '').trim(),
+    platform: String(activeTask.platform || '').trim(),
+    accountId: String(activeTask.accountId || activeTask.pendingAccountUsageId || '').trim(),
+    workbenchStatus: String(activeTask.workbenchStatus || activeTask.status || '').trim(),
+    pluginRunId: String(activeTask.pluginRunId || '').trim(),
+    attemptId: String(activeTask.attemptId || '').trim(),
+    leaseEpoch: Number.isFinite(Number(activeTask.leaseEpoch)) ? Number(activeTask.leaseEpoch) : null,
+    dispatchedAtMs: Number.isFinite(Number(activeTask.dispatchedAtMs)) ? Number(activeTask.dispatchedAtMs) : null,
+  };
+}
+
+function summarizeExecutionLockForDiagnostics(lock = {}) {
+  return {
+    key: String(lock.key || '').trim(),
+    platform: String(lock.platform || '').trim(),
+    accountId: String(lock.accountId || '').trim(),
+    taskId: String(lock.taskId || '').trim(),
+    attemptId: String(lock.attemptId || '').trim(),
+    acquiredAtMs: Number.isFinite(Number(lock.acquiredAtMs)) ? Number(lock.acquiredAtMs) : null,
+    expiresAtMs: Number.isFinite(Number(lock.expiresAtMs)) ? Number(lock.expiresAtMs) : null,
+  };
+}
+
+function summarizeStationIdentityForDiagnostics(identity = null) {
+  if (!identity || typeof identity !== 'object') return null;
+  return {
+    stationId: String(identity.stationId || '').trim(),
+    displayName: String(identity.displayName || '').trim(),
+    role: String(identity.role || '').trim(),
+  };
+}
+
 async function sendExecutionStationHeartbeat(status = 'online') {
   const config = await getAuthorizedFlywheelConfig();
   if (!shouldPollWorkbenchTasks(config)) {
@@ -1896,6 +2006,42 @@ const taskDeltaReporter = createTaskDeltaReporter({
   getTaskExecutionContext: (taskId) => getCurrentTaskExecutionContext(taskId),
 });
 
+const executionAccountLockManager = createExecutionAccountLockManager({
+  store: createExecutionAccountLockStorageStore({
+    storageArea: chrome.storage?.local,
+    storageKey: EXECUTION_ACCOUNT_LOCK_STORAGE_KEY,
+  }),
+});
+
+const manualExecutionLockCoordinator = createManualExecutionLockCoordinator({
+  accountStore,
+  lockManager: executionAccountLockManager,
+  injectCookiesForAccount,
+});
+
+async function resolveTabUrlForManualLock(tabId = '', sender = {}) {
+  const senderUrl = String(sender?.tab?.url || '').trim();
+  if (senderUrl) return senderUrl;
+  const normalizedTabId = Number(tabId);
+  if (!Number.isFinite(normalizedTabId) || !chrome.tabs?.get) return '';
+  try {
+    const tab = await chrome.tabs.get(normalizedTabId);
+    return String(tab?.url || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+async function prepareManualExecutionLockForDispatch({ action = '', msg = {}, tabId = '', sender = {} } = {}) {
+  const tabUrl = await resolveTabUrlForManualLock(tabId, sender);
+  return manualExecutionLockCoordinator.prepare({
+    action,
+    msg,
+    tabId,
+    tabUrl,
+  });
+}
+
 const taskPoller = createTaskPoller({
   beforeDispatch: async (task) => {
     const platform = String(task.platform || '').trim();
@@ -1921,6 +2067,8 @@ const taskPoller = createTaskPoller({
     if (!normalizedAccountId) return;
     await accountStore.updateUsage(normalizedAccountId);
   },
+  acquireExecutionLock: async (lock) => executionAccountLockManager.acquire(lock),
+  releaseExecutionLock: async (lock) => executionAccountLockManager.release(lock),
   claimTaskLease: async () => {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
@@ -1994,6 +2142,9 @@ const taskPoller = createTaskPoller({
   readAuthorizationFailureBackoff: readTaskAuthorizationBackoff,
   writeAuthorizationFailureBackoff: writeTaskAuthorizationBackoff,
   clearAuthorizationFailureBackoff: clearTaskAuthorizationBackoff,
+  readActiveTaskContext: readActiveTaskExecutionContext,
+  writeActiveTaskContext: writeActiveTaskExecutionContext,
+  clearActiveTaskContext: clearActiveTaskExecutionContext,
   readTaskLease: () => taskLeaseStore.read(),
   clearTaskLease: () => taskLeaseStore.clear(),
   patchTask: async (taskId, patch) => {

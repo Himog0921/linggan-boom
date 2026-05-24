@@ -14,6 +14,7 @@ import {
   buildXhsBatchCommentsProgressPatch,
   buildXhsBatchCommentsRunPatch,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import { resolveBatchResumeState } from '../../workbench/runtime/batchResume.js';
 import {
   CLOSE_SELECTORS,
   isNoteDetailReady,
@@ -26,6 +27,37 @@ import {
   waitForNoteState,
 } from './batchShared.js';
 import { BaseBatchController } from '../../shared/baseBatchController.js';
+
+async function resolveExistingBatchRun({ collectionRunId = '', externalTaskId = '', taskType = '' } = {}) {
+  const explicitRunId = String(collectionRunId || '').trim();
+  if (explicitRunId) {
+    return collectionRunStore.getById(explicitRunId).catch(() => null);
+  }
+  const taskId = String(externalTaskId || '').trim();
+  if (!taskId) return null;
+  if (typeof collectionRunStore.getLatestResumableByExternalTaskId === 'function') {
+    return collectionRunStore.getLatestResumableByExternalTaskId(taskId, { taskType }).catch(() => null);
+  }
+  return collectionRunStore.getLatestByExternalTaskId(taskId).catch(() => null);
+}
+
+function hydrateXhsCommentResumeState(runRecord = {}, completedTargetIds = []) {
+  const completedSet = new Set((Array.isArray(completedTargetIds) ? completedTargetIds : [])
+    .map((value) => String(value || '').trim().replace(/^xhs_/, ''))
+    .filter(Boolean));
+  const statuses = Array.isArray(runRecord?.resumeCheckpoint?.resultStatuses)
+    ? runRecord.resumeCheckpoint.resultStatuses
+    : [];
+  const results = statuses
+    .map((item) => ({
+      noteId: String(item?.targetId || item?.noteId || '').trim().replace(/^xhs_/, ''),
+      total: Math.max(0, Number(item?.totalComments || 0) || 0),
+      error: String(item?.error || '').trim(),
+    }))
+    .filter((item) => item.noteId && completedSet.has(item.noteId));
+  const total = results.reduce((sum, item) => sum + Number(item.total || 0), 0);
+  return { results, total };
+}
 
 export class BatchCommentController extends BaseBatchController {
   constructor() {
@@ -64,23 +96,35 @@ export class BatchCommentController extends BaseBatchController {
     this._commentDepthMode = String(settings.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() || COMMENT_DEPTH_MODE.TWO_LEVEL;
     const safeCount = Math.min(Math.max(1, Number(settings.count || 10) || 10), BATCH_CONFIG.maxPerSession);
     const triggerSource = String(settings.triggerSource || 'popup_manual').trim() || 'popup_manual';
-    const runPayload = buildRemoteRunCreatePayload({
-      platform: 'xhs',
-      taskType: 'batchComments',
-      pageType: mode,
-      triggerSource,
-      pageUrl: window.location.href,
-      config: {
-        count: safeCount,
-        topByLikes: this._topByLikes,
-        commentLimit: this._commentLimit,
-        commentDepthMode: this._commentDepthMode,
-      },
-      externalTaskMeta: settings.externalTaskMeta || {},
+    const externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
+    const existingCollectionRunId = String(settings.collectionRunId || '').trim();
+    let existingRun = await resolveExistingBatchRun({
+      collectionRunId: existingCollectionRunId,
+      externalTaskId,
+      taskType: this.type,
     });
+    const runPayload = existingCollectionRunId || existingRun?.collectionRunId
+      ? null
+      : buildRemoteRunCreatePayload({
+        platform: 'xhs',
+        taskType: 'batchComments',
+        pageType: mode,
+        triggerSource,
+        pageUrl: window.location.href,
+        config: {
+          count: safeCount,
+          topByLikes: this._topByLikes,
+          commentLimit: this._commentLimit,
+          commentDepthMode: this._commentDepthMode,
+        },
+        externalTaskMeta: settings.externalTaskMeta || {},
+      });
     if (runPayload) {
       const run = await collectionRunStore.createRun(runPayload);
       this.collectionRunId = run.collectionRunId;
+      existingRun = run;
+    } else if (existingCollectionRunId || existingRun?.collectionRunId) {
+      this.collectionRunId = existingCollectionRunId || existingRun.collectionRunId;
     } else {
       this.collectionRunId = '';
     }
@@ -131,6 +175,24 @@ export class BatchCommentController extends BaseBatchController {
     }
 
     this.noteList = noteList;
+    const resumeState = resolveBatchResumeState({
+      runRecord: existingRun,
+      targets: this.noteList,
+      getTargetId: (item) => item.noteId,
+    });
+    this.noteList = resumeState.targets;
+    if (resumeState.resumed) {
+      this.currentIndex = resumeState.nextIndex;
+      const hydrated = hydrateXhsCommentResumeState(existingRun, resumeState.completedTargetIds);
+      this.results = hydrated.results;
+      this._totalCommentsCollected = hydrated.total;
+      this._emitProgress({
+        status: 'resuming',
+        total: this.noteList.length,
+        current: this.currentIndex,
+        message: `已从本地记录恢复，前 ${this.currentIndex}/${this.noteList.length} 篇评论不重复采集`,
+      });
+    }
 
     this._emitProgress({
       status: 'started',

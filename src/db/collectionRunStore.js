@@ -1,5 +1,8 @@
 import db from './index.js';
-import { buildHeartbeatPatchForRun } from './collectionRunStatus.js';
+import {
+  buildHeartbeatPatchForRun,
+  isTerminalCollectionRunStatus,
+} from './collectionRunStatus.js';
 
 function now() {
   return Date.now();
@@ -205,6 +208,14 @@ export const collectionRunStore = {
       .toArray();
     if (!runs.length) return null;
     return runs.sort((a, b) => Number(b.startedAt || 0) - Number(a.startedAt || 0))[0] || null;
+  },
+
+  async getLatestResumableByExternalTaskId(externalTaskId, { taskType = '' } = {}) {
+    const run = await this.getLatestByExternalTaskId(externalTaskId);
+    if (!run) return null;
+    if (taskType && normalizeText(run.taskType) !== normalizeText(taskType)) return null;
+    if (isTerminalCollectionRunStatus(run.status)) return null;
+    return run;
   },
 
   async deleteById(collectionRunId) {

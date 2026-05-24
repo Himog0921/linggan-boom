@@ -8,7 +8,7 @@
 
 - 数据库名：`LingganBoomDB`
 - ORM：Dexie.js v4.3.0
-- Schema 版本：v8（已引入远程任务映射字段，支持内容工作台任务与本地执行记录对齐）
+- Schema 版本：v13（已引入远程任务映射、增量 outbox、账号表和按任务打包索引）
 
 ## 表结构
 
@@ -164,6 +164,11 @@
 | `lastHeartbeatAt` | number | 最近一次心跳时间戳 |
 | `config` | object | 本次任务配置快照 |
 | `meta` | object | 页面 URL 等额外上下文 |
+| `processedCount` | number | 批量任务已处理数量 |
+| `nextIndex` | number | 批量任务下一条目标序号 |
+| `resumeCheckpoint` | object | 批量断点续跑快照，包含目标顺序、已处理数量和结果状态 |
+| `latestSummary` | object | 最近一次可读进度摘要 |
+| `error` | string | 失败原因摘要 |
 | `startedAt` | number | 开始时间 |
 | `finishedAt` | number | 结束时间 |
 | `updatedAt` | number | 最近更新时间 |
@@ -183,6 +188,36 @@
 | `lastResolvedAt` | number | 最近一次刷新/解析时间 |
 | `createdAt` | number | 创建时间 |
 
+### workbenchOutbox
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `id` | string (PK) | 本地队列行 ID |
+| `taskId` | string | 内容工作台任务 ID |
+| `pluginRunId` | string | 插件本地执行 ID |
+| `idempotencyKey` | string (unique) | 幂等键，防止重复事件 / 记录重复写入 |
+| `kind` | string | `event` / `record` |
+| `status` | string | `pending / in_flight / failed / failed_terminal / acked` |
+| `payload` | object | 待上传事件或记录 |
+| `snapshot` | object | 可选任务快照 |
+| `sequence` | number | 本地顺序号 |
+| `attemptCount` | number | 上传尝试次数 |
+| `nextAttemptAt` | number | 下次允许上传时间 |
+| `errorMessage` | string | 最近一次失败原因 |
+| `createdAt` | number | 创建时间 |
+| `updatedAt` | number | 最近更新时间 |
+
+### accounts
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `accountId` | string (PK) | 本地平台账号 ID |
+| `name` | string | 账号展示名 |
+| `status` | string | 当前账号可用状态 |
+| `platform` | string | 平台标识 |
+| `lastUsedAt` | number | 最近使用时间 |
+| `createdAt` | number | 创建时间 |
+
 ## 数据约束
 
 - 同一笔记以 `noteId` 去重（覆盖更新）
@@ -190,6 +225,8 @@
 - 博主通过 `userId` 去重（覆盖更新）
 - 批量任务通过 `collectionRunId` 去重
 - 媒体资产通过 `assetId` 去重
+- 增量 outbox 通过唯一 `idempotencyKey` 去重
+- 批量任务通过 `resumeCheckpoint.targetIds + nextIndex` 恢复，不重复处理已完成目标
 
 ## Schema 迁移历史
 
@@ -203,6 +240,11 @@
 | v6 | AI-ready 基线：新增 `contentId/platformContentId/authorEntityId`、评论树结构字段、`collectionRuns`、`mediaAssets` |
 | v7 | `mediaAssets` 新增 `collectionRunId` 索引，支持按任务追溯评论图片区与后续内容媒体资产 |
 | v8 | `collectionRuns` 新增 `externalTaskId / externalTaskType / executorInstanceId / protocolVersion / resultUploadStatus / lastHeartbeatAt`，支持内容工作台远程任务映射 |
+| v9 | 新增 `workbenchOutbox`，支持工作台事件 / 记录增量上传、离线重试和幂等写入 |
+| v10 | `workbenchOutbox` 新增 `[status+nextAttemptAt+createdAt]` 复合索引，避免待上传扫描退化 |
+| v11 | 新增 `accounts`，支持平台账号状态和多账号执行管理 |
+| v12 | `workbenchOutbox.idempotencyKey` 改为唯一索引，并在升级时清理重复 outbox 行 |
+| v13 | `notes / authors` 新增 `collectionRunId` 索引，避免按任务打包结果时全表扫描 |
 
 ## 当前模型的局限
 
@@ -219,8 +261,8 @@
 - 原始证据层已接入小红书内容/评论/作者与抖音视频/评论/作者，但历史记录尚未回填，评论图片区和更多媒体资产仍需继续补齐
 - 跨平台字段语义仍在清理中，尤其是 `redId / handle / douyinId`
 - 评论树字段虽然已进入 schema，且批量评论链路已开始写入，但单条评论、导出和分析层语义仍需再统一
-- `collectionRuns / mediaAssets` 已建表，并已接入批量任务与评论图片区链路，但内容媒体与更细粒度任务追溯仍有深化空间
-- 远程任务映射字段已经进入 `collectionRuns`，但“工作台创建任务 -> 插件自动认领 -> 工作台状态回写”的完整实机闭环仍需继续验收
+- `collectionRuns / mediaAssets / workbenchOutbox / accounts` 已建表，并已接入批量任务、评论图片区、远程任务增量回写与账号执行锁链路
+- 远程任务映射字段已经进入 `collectionRuns`，自动认领、租约、增量事件、记录回写和故障演练已有自动化覆盖；真实账号登录态下的完整页面点击采集仍需继续验收
 - 现已提供“读时标准化 + 显式批量回填”双路径：
   - `src/db/recordNormalization.js`：所有 store 读写时对旧记录做运行时对齐
   - `src/db/legacyDataMaintenance.js`：需要时可一次性把历史记录持久化回填到新契约
