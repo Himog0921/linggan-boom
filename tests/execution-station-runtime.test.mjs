@@ -110,6 +110,39 @@ test('execution station runtime merges page permission and login state into acco
   assert.equal(byPlatform.get('douyin').rawProfile.loginState, 'logged_out');
 });
 
+test('stored execution accounts remain dispatchable before cookies are injected into the browser', () => {
+  const reports = buildPlatformAccountReports([
+    {
+      accountId: 'account-1',
+      name: '监控小红书 01',
+      platform: 'xhs',
+      status: 'available',
+      cookieJson: '[{"name":"web_session","value":"stored"}]',
+      dailyQuotaUsed: 3,
+      dailyQuotaLimit: 100,
+      cooldownUntil: 0,
+    },
+  ], {
+    now: new Date('2026-04-17T12:00:00.000Z').getTime(),
+    runtimeStates: [
+      {
+        platform: 'xhs',
+        pagePermission: 'granted',
+        loginState: 'logged_out',
+        cookiesReadable: true,
+        platformBlocked: false,
+        checkedAt: 1776427200000,
+      },
+    ],
+  });
+
+  assert.equal(reports.length, 1);
+  assert.equal(reports[0].healthStatus, 'healthy');
+  assert.equal(reports[0].rawProfile.loginState, 'logged_out');
+  assert.equal(reports[0].rawProfile.storedAccountAvailable, true);
+  assert.equal(reports[0].rawProfile.executionLoginMode, 'stored_cookie_injection');
+});
+
 test('execution station runtime detects browser platform state from chrome APIs', async () => {
   const chromeApi = {
     permissions: {

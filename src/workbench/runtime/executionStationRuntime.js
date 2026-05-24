@@ -135,13 +135,18 @@ export async function collectStationRuntimeStates({
   return states;
 }
 
-function runtimeHealthStatus(runtimeState = null, fallback = 'unknown') {
+function hasInjectableStoredAccount(account = {}) {
+  return Boolean(normalizeText(account.accountId) && normalizeText(account.cookieJson));
+}
+
+function runtimeHealthStatus(runtimeState = null, fallback = 'unknown', options = {}) {
   if (!runtimeState) return fallback;
   if (runtimeState.pagePermission === 'denied' || runtimeState.pagePermission === 'missing') {
     return 'restricted';
   }
   if (runtimeState.platformBlocked) return 'restricted';
   if (runtimeState.loginState === 'logged_out' || runtimeState.loginState === 'login_expired') {
+    if (options.canInjectStoredCookies) return fallback === 'unknown' ? 'healthy' : fallback;
     return 'needs_login';
   }
   if (runtimeState.loginState === 'logged_in' && runtimeState.pagePermission === 'granted') {
@@ -180,12 +185,13 @@ export function buildPlatformAccountReports(accounts = [], {
     const current = latestByPlatform.get(platform);
     const runtimeState = runtimeByPlatform.get(platform) || null;
     const baseHealthStatus = mapAccountHealth(account, now);
+    const canInjectStoredCookies = baseHealthStatus === 'healthy' && hasInjectableStoredAccount(account);
     const next = {
       platform,
       platformAccountId: normalizeText(account.accountId) || null,
       displayName: normalizeText(account.name) || null,
       purpose,
-      healthStatus: runtimeHealthStatus(runtimeState, baseHealthStatus),
+      healthStatus: runtimeHealthStatus(runtimeState, baseHealthStatus, { canInjectStoredCookies }),
       cooldownUntil: Number(account.cooldownUntil || 0) || 0,
       dailyTaskCount: Number(account.dailyQuotaUsed || 0),
       dailyOpenedCount: Number(account.dailyQuotaUsed || 0),
@@ -200,6 +206,8 @@ export function buildPlatformAccountReports(accounts = [], {
         cookiesReadable: runtimeState?.cookiesReadable ?? false,
         platformBlocked: runtimeState?.platformBlocked ?? false,
         runtimeCheckedAt: runtimeState?.checkedAt || now,
+        storedAccountAvailable: canInjectStoredCookies,
+        executionLoginMode: canInjectStoredCookies ? 'stored_cookie_injection' : 'browser_session',
       },
     };
 
