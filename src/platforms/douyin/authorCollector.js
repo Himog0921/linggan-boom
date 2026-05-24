@@ -11,6 +11,7 @@ import { createCollectorEvidence, createCollectorQualityMeta, joinRawDomText } f
 import { getRenderData } from './videoApiData.js';
 import { MONITOR_RECORD_MODE } from '../../workbench/protocol/schema.js';
 import { withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
+import { fetchDouyinWithTimeout } from './fetchWithTimeout.js';
 
 // ========== 已验证选择器（2026-03-24）==========
 const SEL = {
@@ -290,7 +291,7 @@ async function fetchProfileMetaFromApi(userId) {
   let best = { ipLocation: '', douyinId: '' };
   for (const apiUrl of apiUrls) {
     try {
-      const resp = await fetch(apiUrl, { credentials: 'include' });
+      const resp = await fetchDouyinWithTimeout(apiUrl, { credentials: 'include' });
       if (!resp.ok) continue;
       const json = await resp.json();
       const parsed = pickProfileMetaFromApiPayload(json);

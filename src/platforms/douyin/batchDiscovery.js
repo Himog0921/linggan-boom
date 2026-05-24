@@ -2,6 +2,7 @@ import { collectionRunStore } from '../../db/collectionRunStore.js';
 import { parseCount } from '../../shared/utils.js';
 import { detectDouyinPageType, detectDouyinSearchBatchContext, getDouyinSearchKeyword, getDouyinSearchTabType, DY_PAGE_TYPE } from './pageDetector.js';
 import { mergeCapturedDouyinSearchPages, normalizeDouyinSearchChannel } from './searchCapture.js';
+import { fetchDouyinWithTimeout } from './fetchWithTimeout.js';
 import {
   createDouyinSecurityChallengeError,
   detectDouyinSecurityChallenge,
@@ -433,7 +434,7 @@ export async function fetchDouyinProfileVideoPage(secUserId, { cursor = 0, count
   let lastError = null;
   for (const url of urls) {
     try {
-      const response = await fetch(url, { credentials: 'include' });
+      const response = await fetchDouyinWithTimeout(url, { credentials: 'include' });
       if (!response.ok) {
         lastError = new Error(`HTTP ${response.status}`);
         continue;
@@ -509,7 +510,7 @@ export async function fetchDouyinSearchVideoPage(keyword, { offset = 0, count = 
   let lastError = null;
   for (const url of urls) {
     try {
-      const response = await fetch(url, { credentials: 'include' });
+      const response = await fetchDouyinWithTimeout(url, { credentials: 'include' });
       if (!response.ok) {
         lastError = new Error(`HTTP ${response.status}`);
         continue;
