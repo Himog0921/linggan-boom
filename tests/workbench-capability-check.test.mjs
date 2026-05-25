@@ -2,7 +2,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { canDispatchTaskFromCapabilityReport } from '../src/workbench/runtime/capabilityCheck.js';
-import { mapTaskEnvelopeToCapabilityCheck } from '../src/workbench/runtime/taskEnvelopeMapper.js';
+import {
+  mapTaskEnvelopeToCapabilityCheck,
+  mapTaskEnvelopeToInternalCommand,
+} from '../src/workbench/runtime/taskEnvelopeMapper.js';
 
 test('canDispatchTaskFromCapabilityReport accepts ready task types', () => {
   const result = canDispatchTaskFromCapabilityReport({
@@ -203,4 +206,33 @@ test('mapTaskEnvelopeToCapabilityCheck converts task envelope into capability ch
       url: 'https://www.xiaohongshu.com/user/profile/demo',
     },
   });
+});
+
+test('mapTaskEnvelopeToInternalCommand scopes xhs detail comment probes to the target note', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'task_comment_detail_1',
+    taskType: 'xhs.batchComments',
+    platform: 'xhs',
+    taskStrategy: 'detail_probe',
+    target: {
+      pageType: 'detail',
+      url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=target',
+    },
+    payload: {
+      commentLimit: 50,
+      noteId: '69fdb9db000000001b021e8d',
+    },
+  });
+
+  assert.equal(command.action, 'startBatchComments');
+  assert.equal(command.payload.mode, 'detail');
+  assert.equal(command.payload.commentLimit, 50);
+  assert.deepEqual(command.payload.noteList, [
+    {
+      noteId: '69fdb9db000000001b021e8d',
+      url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d?xsec_token=target',
+    },
+  ]);
 });

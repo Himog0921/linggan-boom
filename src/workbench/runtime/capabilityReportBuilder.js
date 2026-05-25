@@ -17,7 +17,9 @@ function inferCanRunTaskTypes(pageContext = {}) {
     if (capabilities.canBatchNotes || (String(pageContext.mode || '').trim() === 'detail' && capabilities.canCollectPrimary)) {
       taskTypes.push(REMOTE_TASK_TYPE.XHS_BATCH_NOTES);
     }
-    if (capabilities.canBatchComments) taskTypes.push(REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS);
+    if (capabilities.canBatchComments || (String(pageContext.mode || '').trim() === 'detail' && capabilities.canCollectComments)) {
+      taskTypes.push(REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS);
+    }
     if (capabilities.canCollectAuthor) taskTypes.push(REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR);
     return taskTypes;
   }

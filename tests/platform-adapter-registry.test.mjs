@@ -57,6 +57,28 @@ test('xhs adapter builds capability report through the shared adapter contract',
   assert.equal(report.target.taskType, 'xhs.batchNotes');
 });
 
+test('xhs adapter allows remote comment collection on note detail pages', async () => {
+  const registry = createPlatformAdapterRegistry({
+    xhs: {
+      detectPage: () => ({ type: 'noteDetail', url: 'https://www.xiaohongshu.com/explore/n1' }),
+      getWindow: () => ({ location: { href: 'https://www.xiaohongshu.com/explore/n1' } }),
+    },
+  });
+
+  const report = await registry.require(PLATFORM_ID.XHS).checkCapability({
+    taskType: 'xhs.batchComments',
+    target: {
+      pageType: 'detail',
+      url: 'https://www.xiaohongshu.com/explore/n1',
+    },
+  });
+
+  assert.equal(report.platform, PLATFORM_ID.XHS);
+  assert.equal(report.mode, 'detail');
+  assert.equal(report.capabilities.canCollectComments, true);
+  assert.ok(report.capabilities.canRunTaskTypes.includes('xhs.batchComments'));
+});
+
 test('douyin adapter reports platform block through the shared adapter contract', async () => {
   const registry = createPlatformAdapterRegistry({
     douyin: {

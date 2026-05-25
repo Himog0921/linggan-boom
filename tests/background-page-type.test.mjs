@@ -104,6 +104,17 @@ test('keyword targets still map batchNotes tasks to search page type', () => {
   );
 });
 
+test('xhs detail url maps batchComments detail probe tasks to detail page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.batchComments',
+      taskStrategy: 'detail_probe',
+      target: 'https://www.xiaohongshu.com/explore/note_123',
+    }),
+    'detail',
+  );
+});
+
 test('declared targetPageType from payload wins when monitor detail probe uses profile-style share url', () => {
   assert.equal(
     inferPageTypeFromTask({

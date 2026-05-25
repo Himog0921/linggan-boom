@@ -421,6 +421,9 @@ function inferPageTypeFromTask(task = {}) {
   if (taskType === 'xhs.collectAuthor' || taskType === 'douyin.collectAuthor') {
     return 'profile';
   }
+  if (taskType === 'xhs.batchComments' && isXhsDetailUrl(targetUrl)) {
+    return 'detail';
+  }
   if (taskType === 'xhs.batchNotes' || taskType === 'douyin.batchNotes') {
     if (isXhsDetailUrl(targetUrl) || isDouyinDetailUrl(targetUrl)) {
       return 'detail';

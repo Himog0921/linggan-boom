@@ -1,4 +1,5 @@
 import { COMMENT_DEPTH_MODE } from '../../shared/constants.js';
+import { extractContentIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { validateTaskEnvelope } from '../protocol/validator.js';
 import {
   REMOTE_TARGET_PAGE_TYPE,
@@ -65,14 +66,28 @@ function buildBatchNotesPayload(task = {}) {
 
 function buildBatchCommentsPayload(task = {}) {
   const payload = task.payload || {};
+  const mode = inferModeFromTarget(task.target);
+  const targetUrl = String(task.target?.url || '').trim();
+  const targetNoteId = String(
+    payload.platformContentId
+    || payload.noteId
+    || payload.contentId
+    || extractContentIdentityFromUrl(targetUrl)
+    || '',
+  ).trim().replace(/^xhs_/, '');
   return {
-    mode: inferModeFromTarget(task.target),
-    count: ensurePositiveInteger(payload.limit ?? payload.count, 10),
+    mode,
+    count: mode === 'detail' && targetNoteId
+      ? 1
+      : ensurePositiveInteger(payload.limit ?? payload.count, 10),
     topByLikes: Boolean(payload.topByLikes),
     commentLimit: ensurePositiveInteger(payload.commentLimit, 0),
     commentDepthMode: normalizeCommentDepthMode(payload.commentDepthMode),
     sortMode: String(payload.sortMode || '').trim() || undefined,
     triggerSource: String(task.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
+    noteList: mode === 'detail' && targetNoteId
+      ? [{ noteId: targetNoteId, url: targetUrl }]
+      : undefined,
   };
 }
 

@@ -55,7 +55,7 @@ test('buildCapabilityReport blocks douyin tasks while platform security verifica
   assert.equal(report.contextSnapshot.platformBlocked, true);
 });
 
-test('buildCapabilityReport declares xhs batch notes on detail page when the page can run direct note probes', () => {
+test('buildCapabilityReport declares xhs detail note and comment probes on detail pages', () => {
   const report = buildCapabilityReport({
     platform: 'xhs',
     mode: 'detail',
@@ -69,6 +69,7 @@ test('buildCapabilityReport declares xhs batch notes on detail page when the pag
 
   assert.deepEqual(report.capabilities.canRunTaskTypes, [
     'xhs.batchNotes',
+    'xhs.batchComments',
   ]);
 });
 

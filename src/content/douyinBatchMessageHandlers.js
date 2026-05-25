@@ -593,6 +593,7 @@ export function createBatchMessageHandlers({
       commentDepthMode: normalizeCommentDepthMode(msg.commentDepthMode),
       triggerSource: String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual',
       externalTaskMeta: msg.externalTaskMeta || {},
+      noteList: Array.isArray(msg.noteList) ? msg.noteList : undefined,
     }),
   });
 

@@ -132,6 +132,76 @@ test('douyin stopped batch comment summary keeps video and comment totals in tas
   assert.equal(stopped.message, '批量评论已停止：视频 1/3，评论 9 条');
 });
 
+test('xhs remote detail batch comments forwards the single target note list', async () => {
+  let startedMode = '';
+  let startedOptions = null;
+  class BatchCommentController {
+    constructor() {
+      this.collectionRunId = '';
+    }
+    async start(mode, onProgress, options) {
+      startedMode = mode;
+      startedOptions = options;
+      this.collectionRunId = 'run_xhs_detail_comments_1';
+      onProgress({
+        taskType: 'batchComments',
+        taskState: TASK_STATE.RUNNING,
+        current: 0,
+        total: 1,
+        message: '启动',
+      });
+      await new Promise(() => {});
+    }
+    stop() {}
+  }
+
+  const handlers = createBatchMessageHandlers({
+    isDouyinPage: () => false,
+    createManagedTaskController,
+    batchCollectDouyinProfileVideos: async () => ({ ok: true }),
+    batchCollectDouyinProfileComments: async () => ({ ok: true }),
+    BatchNoteController: class {},
+    BatchCommentController,
+    reportProgress: () => {},
+    reportDone: () => {},
+    syncTaskUI: () => {},
+    startBatchTask: () => {},
+    toggleStopButton: () => {},
+    hideTaskControlBar: () => {},
+    setActiveTaskType: () => {},
+    pauseActiveTask: () => {},
+    resumeActiveTask: () => {},
+    getBatchNoteCtrl: () => null,
+    setBatchNoteCtrl: () => {},
+    getBatchCommentCtrl: () => null,
+    setBatchCommentCtrl: () => {},
+  });
+
+  const result = await handlers[MSG.START_BATCH_COMMENTS]({
+    count: 1,
+    mode: 'detail',
+    commentLimit: 50,
+    noteList: [
+      {
+        noteId: '69fdb9db000000001b021e8d',
+        url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d',
+      },
+    ],
+    externalTaskMeta: {
+      externalTaskId: 'task_xhs_detail_comments_1',
+    },
+  });
+
+  assert.equal(result.collectionRunId, 'run_xhs_detail_comments_1');
+  assert.equal(startedMode, 'detail');
+  assert.deepEqual(startedOptions.noteList, [
+    {
+      noteId: '69fdb9db000000001b021e8d',
+      url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d',
+    },
+  ]);
+});
+
 test('douyin failed batch video summary uses TASK_STATE.ERROR for taskbar state', async () => {
   const syncCalls = [];
   let batchNoteController = null;
