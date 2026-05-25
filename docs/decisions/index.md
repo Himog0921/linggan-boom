@@ -185,3 +185,11 @@
 - **方案**：插件通过 Chrome Web Push 注册订阅到工作台；工作台在采集控制台、监控中心、数据同步建单或任务控制变化时发送轻量 push。插件收到 `collection_task_available / collection_task_control` 后，只把下一次工作台接单检查提前，不直接执行任务、不信任 push payload 里的业务数据。
 - **结果**：新任务可以更快被插件发现，但任务是否能领取、是否能运行、是否能回写，仍由原来的 `claim / lease / control / ingest` 链路判断。未配置 VAPID、推送失败或订阅过期时，v2 低频轮询继续兜底。
 - **影响**：后续排查“插件没接到任务”时，先区分“push 是否叫醒”和“claim 是否拿到任务”。Push 只能缩短发现时间，不能绕过执行设备能力、账号健康、任务租约和服务器限流。
+
+## D22: Content 消息处理器按职责拆分，工作台控制归口到 runtime
+
+- **日期**：2026-05-25
+- **背景**：`src/content/messageHandlers.js` 已经膨胀到近千行，数据读写、采集、远程控制、媒体下载和工作台结果打包混在同一个工厂里；同时 `src/content/index.js` 对无 `taskControl` 的 `WORKBENCH_TASK_CONTROL` 有一条绕过 runtime 的特殊停止路径，导致同类控制逻辑分散。
+- **方案**：保留 `createContentMessageHandlers()` 的外部调用形态，把具体处理拆到 `messageHandlers/dataHandlers.js`、`collectionHandlers.js`、`workbenchHandlers.js`、`mediaHandlers.js`，并新增 `remoteControlRegistry.js` 管理远程任务暂停 / 继续 / 停止登记。`src/content/index.js` 不再直接处理工作台控制消息，而是统一交给 runtime 的工作台处理器。
+- **结果**：调用方仍可从 `messageHandlers.js` 引入同一个门面函数；测试按职责拆成数据、采集、媒体、工作台和门面冒烟五组；旧式无 `taskControl` 的停止 / 暂停 / 继续消息仍能控制当前页面批量任务。
+- **影响**：后续新增消息动作时，先按职责放入对应处理器；不要再把跨职责逻辑直接塞回 `messageHandlers.js` 或在 `content/index.js` 增加消息特殊分支。

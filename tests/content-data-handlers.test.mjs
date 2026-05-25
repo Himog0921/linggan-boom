@@ -2,43 +2,43 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { MSG } from '../src/shared/constants.js';
-import { createContentMessageHandlers } from '../src/content/messageHandlers.js';
+import { createDataHandlers } from '../src/content/messageHandlers/dataHandlers.js';
 
-function createHandlersWithStores({ notes = [], comments = [], authors = [], csvCalls }) {
-  return createContentMessageHandlers({
+function createDataHandlersWithStores({ notes = [], comments = [], authors = [], csvCalls }) {
+  return createDataHandlers({
     MSG,
-    isDouyinPage: () => false,
-    collectNote: async () => null,
-    collectComments: async () => null,
-    collectAuthor: async () => null,
-    collectDouyinVideo: async () => null,
-    collectDouyinComments: async () => null,
-    downloadDouyinCommentImages: async () => null,
-    collectDouyinAuthor: async () => null,
-    noteStore: { getAll: async () => notes },
-    commentStore: { getAll: async () => comments },
-    authorStore: { getAll: async () => authors },
-    reportDone: () => {},
-    batchMessageHandlers: {},
-    extractNoteId: () => '',
-    downloadNoteMediaFromRecord: async () => null,
+    ensurePluginAuthorized: async () => null,
+    noteStore: {
+      count: async () => notes.length,
+      getAll: async () => notes,
+      deleteById: async () => true,
+      clear: async () => true,
+    },
+    commentStore: {
+      count: async () => comments.length,
+      getAll: async () => comments,
+      deleteById: async () => true,
+      clear: async () => true,
+    },
+    authorStore: {
+      count: async () => authors.length,
+      getAll: async () => authors,
+      deleteById: async () => true,
+      clear: async () => true,
+    },
     generateCsv: (headers, rows) => {
       csvCalls.push({ headers, rows });
       return 'csv-content';
     },
     downloadFile: () => {},
-    backfillLegacyAiReadyFields: async () => null,
+    backfillLegacyAiReadyFields: async () => ({}),
     getPageContext: async () => ({ platform: 'xhs', pageType: 'detail' }),
-    collectionRunStore: null,
-    packageWorkbenchResult: async () => null,
-    discoverXhsSurfaceNotes: async () => [],
-    discoverDouyinSurfaceTargets: async () => [],
   });
 }
 
-test('content export csv includes quality fields for notes comments and authors', async () => {
+test('data handlers export csv includes quality fields for notes comments and authors', async () => {
   const csvCalls = [];
-  const handlers = createHandlersWithStores({
+  const handlers = createDataHandlersWithStores({
     csvCalls,
     notes: [{
       platform: 'douyin',
@@ -95,4 +95,18 @@ test('content export csv includes quality fields for notes comments and authors'
     authorCsv.rows[0].slice(-3),
     ['degraded', 'inject_failed_dom_only', 'dom'],
   );
+});
+
+test('data handlers protect local record reads with plugin authorization', async () => {
+  const handlers = createDataHandlersWithStores({
+    csvCalls: [],
+    notes: [{ noteId: 'note_1' }],
+  });
+
+  assert.deepEqual(await handlers[MSG.GET_STATS](), {
+    notes: 1,
+    comments: 0,
+    authors: 0,
+  });
+  assert.deepEqual(await handlers[MSG.GET_ALL_NOTES](), [{ noteId: 'note_1' }]);
 });

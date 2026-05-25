@@ -21,13 +21,12 @@ import { createBatchMessageHandlers } from './douyinBatchMessageHandlers.js';
 import { CONTENT_PLATFORM, createContentRouter } from './contentRouter.js';
 import { loadContentDataRuntimeFactory } from './contentDataRuntimeLoader.js';
 import { loadDouyinRuntime } from './douyinRuntime.js';
+import { createRuntimeMessageListener } from './messageListener.js';
 import { createXhsPageController } from './xhsPageController.js';
 import { reportDone, reportProgress, isContextValid, sendToBackground } from '../shared/messaging.js';
 import { generateCsv, downloadFile, extractNoteId } from '../shared/utils.js';
 import { createManagedTaskController } from '../shared/managedTaskController.js';
-import { normalizeWorkbenchMessageResponse } from '../workbench/protocol/responseEnvelope.js';
 import { assertActivePluginAuthorization } from '../workbench/runtime/pluginAuthorization.js';
-import { normalizeContentMessageResponse } from './protocol/responseEnvelope.js';
 import '../content.css';
 import { initThemeManager } from '../themes/themeManager.js';
 
@@ -67,13 +66,16 @@ async function loadContentDataRuntime() {
         collectComments,
         collectAuthor,
         collectDouyinVideo: (...args) => callDouyinRuntime('collectDouyinVideo', ...args),
-    collectDouyinComments: (...args) => callDouyinRuntime('collectDouyinComments', ...args),
-    downloadDouyinCommentImages: (...args) => callDouyinRuntime('downloadDouyinCommentImages', ...args),
-    collectDouyinAuthor: (...args) => callDouyinRuntime('collectDouyinAuthor', ...args),
-    BatchNoteController,
-    reportDone,
-    batchMessageHandlers,
-    extractNoteId,
+        collectDouyinComments: (...args) => callDouyinRuntime('collectDouyinComments', ...args),
+        downloadDouyinCommentImages: (...args) => callDouyinRuntime('downloadDouyinCommentImages', ...args),
+        collectDouyinAuthor: (...args) => callDouyinRuntime('collectDouyinAuthor', ...args),
+        BatchNoteController,
+        reportDone,
+        reportProgress,
+        batchMessageHandlers,
+        getBatchNoteCtrl: xhsPageController.getBatchNoteCtrl,
+        getBatchCommentCtrl: xhsPageController.getBatchCommentCtrl,
+        extractNoteId,
         generateCsv,
         downloadFile,
         sendToBackground,
@@ -102,13 +104,6 @@ function registerDashboardBridgeListener() {
     const runtime = await loadContentDataRuntime();
     await runtime.dashboardBridge.handleDashboardMessageEvent(event);
   });
-}
-
-function normalizeRuntimeMessageResponse(action, result) {
-  return normalizeContentMessageResponse(
-    action,
-    normalizeWorkbenchMessageResponse(action, result),
-  );
 }
 
 const xhsPageController = createXhsPageController({
@@ -193,45 +188,10 @@ registerDashboardBridgeListener();
 // ========== 消息监听（来自 popup / background / dashboard） ==========
 
 if (isContextValid()) {
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (!isContextValid()) return; // 扩展已重载，忽略消息
-
-    // 工作台任务控制消息（停止/暂停）——直接处理，不经过 runtime messageHandlers
-    if (message.action === MSG.WORKBENCH_TASK_CONTROL && !message.taskControl) {
-      const batchNoteCtrl = xhsPageController.getBatchNoteCtrl?.();
-      const batchCommentCtrl = xhsPageController.getBatchCommentCtrl?.();
-      if (message.command === 'stop') {
-        batchNoteCtrl?.stop?.();
-        batchCommentCtrl?.stop?.();
-      }
-      sendResponse({ success: true });
-      return true;
-    }
-
-    Promise.resolve(loadContentDataRuntime())
-      .then((runtime) => {
-        const handler = runtime.messageHandlers[message.action];
-        if (!handler) {
-          sendResponse(undefined);
-          return;
-        }
-        return Promise.resolve(handler(message)).then(async (result) => {
-          if (result?.toggleDashboard) {
-            await runtime.dashboardBridge.toggleDashboard();
-            sendResponse({ success: true });
-            return;
-          }
-          sendResponse(normalizeRuntimeMessageResponse(message.action, result));
-        });
-      })
-      .catch((err) => {
-        sendResponse(normalizeRuntimeMessageResponse(message.action, {
-          success: false,
-          error: err.message,
-        }));
-      });
-    return true; // 保持消息通道
-  });
+  chrome.runtime.onMessage.addListener(createRuntimeMessageListener({
+    loadContentDataRuntime,
+    isContextValid,
+  }));
 }
 
 const batchMessageHandlers = createBatchMessageHandlers({

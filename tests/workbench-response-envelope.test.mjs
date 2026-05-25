@@ -45,8 +45,10 @@ test('non-workbench responses stay untouched for legacy raw callers', () => {
 
 test('content and background runtime listeners normalize workbench responses before sendResponse', () => {
   const contentSource = fs.readFileSync(path.join(projectRoot, 'src/content/index.js'), 'utf8');
+  const contentListenerSource = fs.readFileSync(path.join(projectRoot, 'src/content/messageListener.js'), 'utf8');
   const backgroundSource = fs.readFileSync(path.join(projectRoot, 'src/background/index.js'), 'utf8');
 
-  assert.match(contentSource, /normalizeWorkbenchMessageResponse/);
+  assert.match(contentSource, /createRuntimeMessageListener/);
+  assert.match(contentListenerSource, /normalizeWorkbenchMessageResponse/);
   assert.match(backgroundSource, /normalizeWorkbenchMessageResponse/);
 });

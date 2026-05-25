@@ -32,5 +32,9 @@ test('content page-context and stats actions expose direct data payloads', () =>
 
 test('content runtime listener normalizes content envelopes before sendResponse', () => {
   const source = fs.readFileSync(path.join(projectRoot, 'src/content/index.js'), 'utf8');
-  assert.match(source, /normalizeContentMessageResponse/);
+  const listenerSource = fs.readFileSync(path.join(projectRoot, 'src/content/messageListener.js'), 'utf8');
+
+  assert.match(source, /createRuntimeMessageListener/);
+  assert.match(listenerSource, /normalizeContentMessageResponse/);
+  assert.match(listenerSource, /sendResponse\(normalizeRuntimeMessageResponse/);
 });

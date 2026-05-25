@@ -188,7 +188,8 @@ idle → running ⇄ paused → stopping → done / error
 | contentRouter.js / contentPlatformRegistry.js | 域名 → 平台入口分发 |
 | contentDataRuntime.js | 延迟加载数据采集函数、Dashboard bridge、媒体下载服务 |
 | dashboardBridge.js | Dashboard iframe 通信桥接 |
-| messageHandlers.js | Popup/Background 消息分发 |
+| messageHandlers.js / messageHandlers/\* | Popup/Background 消息分发门面；数据、采集、工作台控制、媒体下载按职责拆分 |
+| remoteControlRegistry.js | 远程任务暂停 / 继续 / 停止控制登记，供采集与工作台控制共享 |
 | xhsPageController.js | XHS 页面控制器 + 批量任务管理 |
 | douyinRuntime.js | Douyin 运行时加载入口 |
 | douyinRuntimeModule.js | Douyin 适配器 + 单条/批量/评论能力 |
