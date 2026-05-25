@@ -28,6 +28,11 @@ import {
 } from './batchShared.js';
 import { BaseBatchController } from '../../shared/baseBatchController.js';
 
+const REMOTE_CAPTCHA_ACTION_TIMEOUT_MS = 45_000;
+const REMOTE_NOTE_COLLECTION_TIMEOUT_MS = 120_000;
+const CAPTCHA_TIMEOUT_ERROR_MESSAGE = '检测到小红书安全验证，等待人工处理超时，已停止本次评论采集。';
+const NOTE_COLLECTION_TIMEOUT_ERROR_MESSAGE = '单篇评论采集长时间没有结束，已停止本篇并释放任务。';
+
 async function resolveExistingBatchRun({ collectionRunId = '', externalTaskId = '', taskType = '' } = {}) {
   const explicitRunId = String(collectionRunId || '').trim();
   if (explicitRunId) {
@@ -74,6 +79,10 @@ export class BatchCommentController extends BaseBatchController {
     this._commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL;
     this._totalCommentsCollected = 0;
     this._stoppedByUser = false;
+    this._captchaActionTimeoutMs = 0;
+    this._noteCollectionTimeoutMs = 0;
+    this._blockingError = null;
+    this._noteTimedOut = false;
     this.reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
     this.heartbeatLoop = createCollectionRunHeartbeatLoop({ reporter: this.reportHeartbeat });
   }
@@ -97,6 +106,15 @@ export class BatchCommentController extends BaseBatchController {
     const safeCount = Math.min(Math.max(1, Number(settings.count || 10) || 10), BATCH_CONFIG.maxPerSession);
     const triggerSource = String(settings.triggerSource || 'popup_manual').trim() || 'popup_manual';
     const externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
+    const isRemoteDispatch = Boolean(externalTaskId);
+    this._captchaActionTimeoutMs = Math.max(
+      0,
+      Number(settings.captchaActionTimeoutMs ?? (isRemoteDispatch ? REMOTE_CAPTCHA_ACTION_TIMEOUT_MS : 0)) || 0,
+    );
+    this._noteCollectionTimeoutMs = Math.max(
+      0,
+      Number(settings.noteCollectionTimeoutMs ?? (isRemoteDispatch ? REMOTE_NOTE_COLLECTION_TIMEOUT_MS : 0)) || 0,
+    );
     const existingCollectionRunId = String(settings.collectionRunId || '').trim();
     let existingRun = await resolveExistingBatchRun({
       collectionRunId: existingCollectionRunId,
@@ -141,9 +159,13 @@ export class BatchCommentController extends BaseBatchController {
 
     this.captchaWatcher = watchCaptcha(async () => {
       this.pause();
-      const action = await showCaptchaPauseOverlay();
-      if (action === 'resume') this.resume();
-      else this.stop();
+      const action = await showCaptchaPauseOverlay({ timeoutMs: this._captchaActionTimeoutMs });
+      if (action === 'resume') {
+        this.resume();
+      } else {
+        this._blockingError = new Error(action === 'timeout' ? CAPTCHA_TIMEOUT_ERROR_MESSAGE : '用户停止了安全验证后的评论采集。');
+        this.stop();
+      }
     });
 
     let noteList = Array.isArray(settings.noteList) ? settings.noteList.slice() : [];
@@ -220,11 +242,13 @@ export class BatchCommentController extends BaseBatchController {
   async _collectLoop() {
     while (this.currentIndex < this.noteList.length && this.isRunning) {
       await this._waitIfPaused();
+      this._throwIfBlockingError();
       if (!this.isRunning) break;
       if (await this._pauseForRiskControl()) continue;
 
       const noteInfo = this.noteList[this.currentIndex];
       this.currentIndex += 1;
+      this._noteTimedOut = false;
       const rankHint = this._topByLikes
         ? `｜Top ${noteInfo.__topRank || this.currentIndex}/${this.noteList.length}（赞 ${formatCompactCount(noteInfo.__likesParsed ?? parseCount(noteInfo.likes))}）`
         : '';
@@ -249,12 +273,10 @@ export class BatchCommentController extends BaseBatchController {
       }).catch(() => {});
 
       try {
-        const success = await this._captureByPopup(noteInfo);
-        if (!success && this._allowNavigationFallback) {
-          await this._captureByNavigation(noteInfo);
-        }
+        await this._captureNoteWithTimeout(noteInfo);
       } catch (err) {
         console.warn(`[灵感爆爆爆] 评论采集失败: ${noteInfo.noteId}`, err);
+        if (this._blockingError) throw this._blockingError;
         await this._closeNotePopup();
       } finally {
         await this._syncRunProgress();
@@ -287,6 +309,65 @@ export class BatchCommentController extends BaseBatchController {
       taskState: this.state,
       phase: 'done',
     });
+  }
+
+  _throwIfBlockingError() {
+    if (this._blockingError) {
+      throw this._blockingError;
+    }
+  }
+
+  async _captureNote(noteInfo) {
+    if (this._mode === 'detail') {
+      const success = await this._captureCurrentDetail(noteInfo);
+      if (success) return true;
+      return this._captureByNavigation(noteInfo);
+    }
+
+    const success = await this._captureByPopup(noteInfo);
+    if (!success && this._allowNavigationFallback) {
+      return this._captureByNavigation(noteInfo);
+    }
+    return success;
+  }
+
+  async _captureNoteWithTimeout(noteInfo) {
+    const timeoutMs = this._noteCollectionTimeoutMs;
+    if (!(timeoutMs > 0)) return this._captureNote(noteInfo);
+
+    let timer = null;
+    try {
+      return await Promise.race([
+        this._captureNote(noteInfo),
+        new Promise((_, reject) => {
+          timer = window.setTimeout(() => {
+            this._noteTimedOut = true;
+            reject(new Error(NOTE_COLLECTION_TIMEOUT_ERROR_MESSAGE));
+          }, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) window.clearTimeout(timer);
+    }
+  }
+
+  async _captureCurrentDetail(noteInfo) {
+    if (!this._isNoteDetailPath(window.location.pathname, noteInfo.noteId)) {
+      return false;
+    }
+
+    if (shouldWaitForNoteState(window.location.pathname, noteInfo.noteId)) {
+      await waitForNoteState(noteInfo.noteId, 10000);
+    }
+    const commentsReady = await this._waitForCommentPipelineReady(noteInfo.noteId, 12000);
+    if (!commentsReady) return false;
+
+    await randomDelay(120, 220);
+
+    const result = await this._collectOneNoteComments(noteInfo, noteInfo.url || window.location.href);
+    this._totalCommentsCollected += Number(result?.total || 0);
+    this.results.push({ noteId: noteInfo.noteId, ...result });
+    return true;
   }
 
   async _captureByPopup(noteInfo) {
@@ -447,9 +528,10 @@ export class BatchCommentController extends BaseBatchController {
       maxTotal: this._commentLimit,
       maxSubComments: this._commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 0 : BATCH_CONFIG.maxSubComments,
       commentDepthMode: this._commentDepthMode,
-      shouldStop: () => !this.isRunning,
+      shouldStop: () => !this.isRunning || this._noteTimedOut,
       waitIfPaused: () => this._waitIfPaused(),
       collectionRunId: this.collectionRunId,
+      captchaActionTimeoutMs: this._captchaActionTimeoutMs,
       onProgress: (progress) => {
         this._reportHeartbeat(progress?.message || `第 ${this.currentIndex}/${this.noteList.length} 篇评论采集中`, {
           stage: 'collecting',
@@ -488,6 +570,8 @@ export class BatchCommentController extends BaseBatchController {
     const startedAt = Date.now();
     let stableRounds = 0;
     while (Date.now() - startedAt < timeout) {
+      this._throwIfBlockingError();
+      if (this._noteTimedOut) return false;
       if (await this._pauseForRiskControl()) return;
       const pathname = window.location.pathname || '';
       const inDetail = this._isNoteDetailPath(pathname, noteId) || isPopupOpen() || isNoteDetailReady();
@@ -543,6 +627,8 @@ export class BatchCommentController extends BaseBatchController {
   async _waitForNoteLoad(noteId, timeout = 15000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
+      this._throwIfBlockingError();
+      if (this._noteTimedOut) return false;
       if (await this._pauseForRiskControl()) return false;
       this._reportHeartbeat(`正在等待第 ${this.currentIndex}/${this.noteList.length} 篇详情页加载`, {
         stage: 'context_check',
@@ -564,6 +650,8 @@ export class BatchCommentController extends BaseBatchController {
   async _waitForCommentsReady(noteId, timeout = 12000) {
     const start = Date.now();
     while (Date.now() - start < timeout) {
+      this._throwIfBlockingError();
+      if (this._noteTimedOut) return false;
       if (await this._pauseForRiskControl()) return false;
       this._reportHeartbeat(`正在等待第 ${this.currentIndex}/${this.noteList.length} 篇评论区加载`, {
         stage: 'context_check',

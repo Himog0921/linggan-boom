@@ -200,6 +200,8 @@ test('xhs remote detail batch comments forwards the single target note list', as
       url: 'https://www.xiaohongshu.com/explore/69fdb9db000000001b021e8d',
     },
   ]);
+  assert.equal(startedOptions.captchaActionTimeoutMs, 45_000);
+  assert.equal(startedOptions.noteCollectionTimeoutMs, 120_000);
 });
 
 test('douyin failed batch video summary uses TASK_STATE.ERROR for taskbar state', async () => {

@@ -87,7 +87,8 @@ export function watchCaptcha(onDetected) {
  * @param {Function} onResume - 用户点击继续后的回调，参数 'resume' | 'stop'
  * @returns {Function} dismiss - 手动移除浮窗
  */
-export function showCaptchaPauseOverlay(onResume) {
+export function showCaptchaPauseOverlay(options = {}) {
+  const timeoutMs = Math.max(0, Number(options?.timeoutMs || 0) || 0);
   document.querySelector('.lgbbb-captcha-overlay')?.remove();
 
   const overlay = document.createElement('div');
@@ -144,14 +145,23 @@ export function showCaptchaPauseOverlay(onResume) {
   const dismiss = () => overlay.remove();
 
   return new Promise((resolve) => {
-    resumeBtn.addEventListener('click', () => {
+    let timer = null;
+    const finish = (action) => {
+      if (timer) window.clearTimeout(timer);
       dismiss();
-      resolve('resume');
+      resolve(action);
+    };
+    resumeBtn.addEventListener('click', () => {
+      finish('resume');
     });
     stopBtn.addEventListener('click', () => {
-      dismiss();
-      resolve('stop');
+      finish('stop');
     });
     document.body.appendChild(overlay);
+    if (timeoutMs > 0) {
+      timer = window.setTimeout(() => {
+        finish('timeout');
+      }, timeoutMs);
+    }
   });
 }

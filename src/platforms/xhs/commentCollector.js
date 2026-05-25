@@ -12,6 +12,16 @@ import {
   fetchXhsJsonViaBridge,
 } from './commentApi.js';
 
+const CAPTCHA_TIMEOUT_ERROR_MESSAGE = '检测到小红书安全验证，等待人工处理超时，已停止本次评论采集。';
+
+async function waitForCaptchaAction(timeoutMs = 0) {
+  const action = await showCaptchaPauseOverlay({ timeoutMs });
+  if (action === 'timeout') {
+    throw new Error(CAPTCHA_TIMEOUT_ERROR_MESSAGE);
+  }
+  return action;
+}
+
 async function waitForCondition(predicate, timeout = 500, interval = 80) {
   const startedAt = Date.now();
   while (Date.now() - startedAt < timeout) {
@@ -60,6 +70,7 @@ export async function collectComments({
   waitIfPaused = async () => {},
   commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
   collectionRunId = '',
+  captchaActionTimeoutMs = 0,
 } = {}) {
   const apiResult = await collectCommentsViaApi({
     noteId,
@@ -71,6 +82,7 @@ export async function collectComments({
     waitIfPaused,
     commentDepthMode,
     collectionRunId,
+    captchaActionTimeoutMs,
   });
   if (!apiResult.needsDomContinuation && (apiResult.apiObserved || apiResult.total > 0)) {
     return { total: apiResult.total, comments: apiResult.comments };
@@ -95,6 +107,7 @@ export async function collectComments({
     commentDepthMode,
     collectionRunId,
     initialComments: apiResult.comments,
+    captchaActionTimeoutMs,
   });
 }
 
@@ -135,6 +148,7 @@ async function collectCommentsViaApi({
   waitIfPaused = async () => {},
   commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
   collectionRunId = '',
+  captchaActionTimeoutMs = 0,
 } = {}) {
   noteUrl = noteUrl || window.location.href;
   noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
@@ -177,7 +191,7 @@ async function collectCommentsViaApi({
         current: allComments.length,
         message: `检测到安全验证，当前已采集 ${allComments.length} 条评论`,
       });
-      const action = await showCaptchaPauseOverlay();
+      const action = await waitForCaptchaAction(captchaActionTimeoutMs);
       if (action === 'stop') break;
     }
 
@@ -313,6 +327,7 @@ async function collectCommentsFromDom({
   commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
   collectionRunId = '',
   initialComments = [],
+  captchaActionTimeoutMs = 0,
 } = {}) {
   noteUrl = noteUrl || window.location.href;
   noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
@@ -354,7 +369,7 @@ async function collectCommentsFromDom({
         current: allComments.length,
         message: `检测到安全验证，当前已采集 ${allComments.length} 条评论`,
       });
-      const action = await showCaptchaPauseOverlay();
+      const action = await waitForCaptchaAction(captchaActionTimeoutMs);
       if (action === 'stop') break;
     }
 
@@ -494,6 +509,7 @@ export async function collectCommentImages({
   onProgress = null,
   shouldStop = () => false,
   waitIfPaused = async () => {},
+  captchaActionTimeoutMs = 0,
 } = {}) {
   const resolveContainer = () => getActiveCommentsContext().container;
   let container = resolveContainer();
@@ -517,7 +533,7 @@ export async function collectCommentImages({
       message: `正在扫描评论图片区，当前已发现 ${allImages.length} 张`,
     });
     if (detectCaptcha()) {
-      const action = await showCaptchaPauseOverlay();
+      const action = await waitForCaptchaAction(captchaActionTimeoutMs);
       if (action === 'stop') break;
     }
 

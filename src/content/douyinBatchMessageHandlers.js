@@ -594,6 +594,8 @@ export function createBatchMessageHandlers({
       triggerSource: String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual',
       externalTaskMeta: msg.externalTaskMeta || {},
       noteList: Array.isArray(msg.noteList) ? msg.noteList : undefined,
+      captchaActionTimeoutMs: msg.externalTaskMeta?.externalTaskId ? 45_000 : 0,
+      noteCollectionTimeoutMs: msg.externalTaskMeta?.externalTaskId ? 120_000 : 0,
     }),
   });
 
