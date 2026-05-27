@@ -67,6 +67,28 @@ test('canDispatchTaskFromCapabilityReport prioritizes platform security verifica
   assert.match(result.reasonMessage, /安全验证/);
 });
 
+test('canDispatchTaskFromCapabilityReport keeps unavailable detail page reason over unsupported task type', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'unknown',
+    url: 'https://www.xiaohongshu.com/explore/deleted-note',
+    readiness: {
+      ready: false,
+      reasonCode: 'content_not_found',
+      reasonMessage: '当前笔记已删除或不可访问',
+    },
+    capabilities: {
+      canRunTaskTypes: [],
+    },
+  }, 'xhs.batchComments', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/deleted-note',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'content_not_found');
+  assert.equal(result.reasonMessage, '当前笔记已删除或不可访问');
+});
+
 test('canDispatchTaskFromCapabilityReport rejects page type mismatches for remote detail tasks', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'profile',

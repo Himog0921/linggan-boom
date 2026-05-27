@@ -77,7 +77,7 @@
 | 抖音 | 评论图片区下载 | 部分完成 | 高清字段已接通，且已补“高清候选优先 / 非图片 blob 跳过 / background dataUrl 回退”自动回归，待真实有图样本页完整验收 |
 | 抖音 | 数据面板二次下载 | 部分完成 | 已支持刷新直链，且已补“空媒体队列刷新 / 旧直链失效重试”自动回归测试，仍待真实长时效回归 |
 | 工作台 | Dashboard 勾选同步 | 已完成 | `notes / comments / authors` 三类数据都可同步到内容工作台 |
-| 工作台 | 自动接单与状态回写 | 部分完成 | `pending` 任务轮询、能力检查、派单、lease、heartbeat、结果包回取与状态 patch 已落地，且自动回归已覆盖 `pending -> dispatched/running -> paused/stopped/completed/failed`，待完整实机闭环验收 |
+| 工作台 | 自动接单与状态回写 | 部分完成 | `pending` 任务轮询、能力检查、派单、lease、heartbeat、结果包回取与状态 patch 已落地；已补“笔记删除 / 页面错误 / 无权限访问”不再回到待分配循环的失败归类，自动回归覆盖 `pending -> dispatched/running -> paused/stopped/completed/failed`，待完整实机闭环验收 |
 
 ---
 

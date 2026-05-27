@@ -1166,6 +1166,75 @@ test('task poller releases a leased task when the content script is unavailable'
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller fails unavailable detail pages instead of returning them to pending', async () => {
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_deleted_note',
+        taskType: 'xhs.batchComments',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/explore/deleted-note',
+      },
+      lease: {
+        leaseToken: 'lease-deleted-note',
+        attemptId: 'attempt-deleted-note',
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: false,
+      reasonCode: 'content_not_found',
+      reasonMessage: '当前笔记已删除或不可访问',
+      report: {
+        mode: 'unknown',
+        pageType: 'error',
+        url: 'https://www.xiaohongshu.com/explore/deleted-note',
+        readiness: {
+          ready: false,
+          reasonCode: 'content_not_found',
+          reasonMessage: '当前笔记已删除或不可访问',
+        },
+        capabilities: {
+          canRunTaskTypes: [],
+        },
+      },
+    }),
+    dispatchTask: async () => {
+      throw new Error('dispatch should not run');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.deepEqual(patches[0], [
+    'task_deleted_note',
+    {
+      status: 'failed',
+      progress: 100,
+      errorMessage: '当前笔记已删除或不可访问',
+    },
+  ]);
+  const mismatchEvent = events.find((event) => event.eventType === 'task.capability_mismatch');
+  assert.equal(mismatchEvent.payload.reasonCode, 'content_not_found');
+  assert.equal(mismatchEvent.payload.reportPageType, 'error');
+  assert.equal(mismatchEvent.payload.reportUrl, 'https://www.xiaohongshu.com/explore/deleted-note');
+  assert.equal(mismatchEvent.payload.status, 'failed');
+  assert.equal(events.some((event) => event.eventType === 'task.released'), false);
+  assert.equal(poller.getState().activeTask, null);
+});
+
 test('task poller releases target mismatch with an explicit target mismatch code', async () => {
   const events = [];
   const poller = createTaskPoller({

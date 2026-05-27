@@ -1,6 +1,6 @@
 # 当前待办总表
 
-> 更新日期：2026-05-24
+> 更新日期：2026-05-27
 > 目的：把当前真正仍活跃的待办从验收报告、活跃计划、`progress.txt` 和技术债清单里收拢到同一处，避免状态漂移。
 
 ## 0. 最近完成
@@ -152,6 +152,7 @@
 | T12 | 中 | 工作台协议适配层继续收口 | `background` 网关、消息 envelope、长任务语义仍未完全统一 |
 | T13 | 低 | Dashboard 评论 tab 暂未实现虚拟滚动 | 用户已确认当前分页 + 列宽方案可用，虚拟滚动只保留为后续体验优化 |
 | T14 | 高 | 代码审查安全与效率修复（2026-04-20） | XSS 已修、内存泄漏已修、死代码已清、重复 `normalizeServerUrl` 已进一步收敛；`sendToTab` 合并、Flywheel token 配置化、TaskController 统一、popup 弹层 reset 收口、background registry 合并已落地；2026-04-21 又补修了 `300017` 切号后的本地 paused 状态同步、替换账号 usage 延迟消费、启动超时任务回到 `pending` 可重试。剩余主要是真正 bundle 降体积、repo 级状态常量与 envelope 继续统一 |
+| T18 | 中 | 小红书不可访问页面自检专项优化 | 2026-05-27 已先完成“插件收到 `content_not_found / error_page / page_permission_denied` 后直接失败、不再退回待分配”的止血修复；但小红书真实页面上“笔记已删除 / 页面错误 / 无权限访问”的识别仍依赖后续专项增强，后面需要在 XHS 页面自检层稳定产出这些原因码，并补 adapter / page detector 级实机与自动回归 |
 
 - T15 已于 2026-04-20 关闭：`sendToTab` 真实实现已收敛到 `shared/messaging.js`，`background` 只保留默认超时兼容包装，`popup.js / popup/utils.js` 不再各自维护独立实现。
 - T17 已于 2026-04-20 关闭：`flywheelSync.js` 不再硬编码 `API_TOKEN`，当前会从 `flywheelConfig.apiToken` 读取，未配置时不再自动注入固定 bearer token。

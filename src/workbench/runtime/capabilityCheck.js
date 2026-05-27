@@ -17,6 +17,26 @@ function normalizeCapabilityPageMode(report = {}) {
   return '';
 }
 
+function buildReadinessRejection(report = {}) {
+  if (report?.readiness?.ready !== false) return null;
+  const reasonCode = String(report?.readiness?.reasonCode || '').trim();
+  const reasonMessage = String(report?.readiness?.reasonMessage || '').trim();
+  if (!reasonCode && !reasonMessage) return null;
+  return {
+    accepted: false,
+    reasonCode: reasonCode || REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE,
+    reasonMessage: reasonMessage || '当前页面未形成可执行上下文',
+  };
+}
+
+function shouldPrioritizeReadinessRejection(reasonCode = '') {
+  return new Set([
+    REMOTE_ERROR_CODE.CONTENT_NOT_FOUND,
+    REMOTE_ERROR_CODE.ERROR_PAGE,
+    REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED,
+  ]).has(String(reasonCode || '').trim());
+}
+
 export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', target = {}) {
   const supportedTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
     ? report.capabilities.canRunTaskTypes
@@ -31,6 +51,11 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
       reasonCode: readinessReasonCode || REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE,
       reasonMessage: String(report?.readiness?.reasonMessage || '平台触发了安全验证，请先完成验证后继续').trim(),
     };
+  }
+
+  const readinessRejection = buildReadinessRejection(report);
+  if (readinessRejection && shouldPrioritizeReadinessRejection(readinessRejection.reasonCode)) {
+    return readinessRejection;
   }
 
   if (!supportedTaskTypes.includes(String(taskType || '').trim())) {
@@ -77,13 +102,7 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
     }
   }
 
-  if (!report?.readiness?.ready) {
-    return {
-      accepted: false,
-      reasonCode: String(report?.readiness?.reasonCode || REMOTE_ERROR_CODE.PAGE_CONTEXT_UNAVAILABLE).trim(),
-      reasonMessage: String(report?.readiness?.reasonMessage || '当前页面未形成可执行上下文').trim(),
-    };
-  }
+  if (readinessRejection) return readinessRejection;
 
   return {
     accepted: true,

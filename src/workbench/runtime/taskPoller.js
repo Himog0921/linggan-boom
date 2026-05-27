@@ -193,6 +193,34 @@ function normalizeLeaseSnapshot(lease = {}) {
   return snapshot;
 }
 
+function shouldFailCapabilityRejection(reasonCode = '') {
+  return new Set([
+    REMOTE_ERROR_CODE.CONTENT_NOT_FOUND,
+    REMOTE_ERROR_CODE.ERROR_PAGE,
+    REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED,
+  ]).has(String(reasonCode || '').trim());
+}
+
+function buildCapabilityReportDiagnostic(report = {}) {
+  if (!report || typeof report !== 'object' || Array.isArray(report)) return {};
+  const readiness = report.readiness && typeof report.readiness === 'object' ? report.readiness : {};
+  const canRunTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
+    ? report.capabilities.canRunTaskTypes.map((item) => String(item || '').trim()).filter(Boolean)
+    : [];
+  const diagnostic = {
+    reportUrl: String(report.url || '').trim(),
+    reportMode: String(report.mode || '').trim(),
+    reportPageType: String(report.pageType || '').trim(),
+    readinessReady: readiness.ready === undefined ? undefined : Boolean(readiness.ready),
+    readinessReasonCode: String(readiness.reasonCode || '').trim(),
+    readinessReasonMessage: String(readiness.reasonMessage || '').trim(),
+    capabilityTaskTypes: canRunTaskTypes.slice(0, 20),
+  };
+  return Object.fromEntries(
+    Object.entries(diagnostic).filter(([, value]) => value !== undefined && value !== '' && (!Array.isArray(value) || value.length > 0)),
+  );
+}
+
 function normalizeCapabilityRejection(capability = {}) {
   const reasonCode = String(capability?.reasonCode || capability?.error || 'capability_rejected').trim()
     || 'capability_rejected';
@@ -201,13 +229,15 @@ function normalizeCapabilityRejection(capability = {}) {
     capability?.error,
     '当前页面暂时不能执行这个任务',
   );
+  const shouldFail = shouldFailCapabilityRejection(reasonCode);
   const payload = {
-    status: 'pending',
+    status: shouldFail ? 'failed' : 'pending',
     reason: 'capability_rejected',
     reasonCode,
     errorMessage: reasonMessage,
     userMessage: reasonMessage,
     taskType: String(capability?.taskType || '').trim(),
+    ...buildCapabilityReportDiagnostic(capability?.report),
   };
   if (capability?.recommendedAction) {
     payload.recommendedAction = String(capability.recommendedAction || '').trim();
@@ -219,6 +249,8 @@ function normalizeCapabilityRejection(capability = {}) {
     reasonCode,
     reasonMessage,
     payload,
+    taskStatus: shouldFail ? 'failed' : 'pending',
+    progress: shouldFail ? 100 : 0,
   };
 }
 
@@ -1120,8 +1152,8 @@ export function createTaskPoller(deps = {}) {
       });
       if (lease) {
         await patchTask(task.id, {
-          status: 'pending',
-          progress: 0,
+          status: rejection.taskStatus,
+          progress: rejection.progress,
           errorMessage: rejection.reasonMessage,
         });
       }
@@ -1138,9 +1170,11 @@ export function createTaskPoller(deps = {}) {
             reasonCode: rejection.reasonCode,
             reasonMessage: rejection.reasonMessage,
             recommendedAction: capability?.recommendedAction || '',
+            status: rejection.taskStatus,
+            ...buildCapabilityReportDiagnostic(capability?.report),
           },
         });
-        if (lease) {
+        if (lease && rejection.taskStatus === 'pending') {
           await deps.enqueueEvent({
             taskId: task.id,
             pluginRunId: '',

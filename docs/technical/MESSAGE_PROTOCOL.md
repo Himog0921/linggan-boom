@@ -216,6 +216,12 @@ task.deleted
 task.capability_mismatch
 ```
 
+能力拒收：
+
+`task.capability_mismatch` 表示插件已经完成页面自检，但当前页面不能执行本任务。payload 至少包含 `taskType`、`reasonCode`、`reasonMessage`、`status`；如果插件拿到了页面报告，还会附带 `reportUrl`、`reportMode`、`reportPageType`、`readinessReady`、`readinessReasonCode`、`readinessReasonMessage`、`capabilityTaskTypes`，用于排查“页面已删除 / 页面未就绪 / 页面类型不对 / 任务类型缺失”的具体差异。
+
+明确不可执行的页面错误会终止任务，不再重新排队：`content_not_found`、`error_page`、`page_permission_denied` 对应任务状态 `failed`。可恢复的执行环境问题仍保持释放语义：例如 `page_context_unavailable` 继续通过 `task.released` 回到稍后重试。
+
 运行指标：
 
 `task.progress`、`task.completed`、`task.succeeded`、`task.failed`、`task.released` 等事件的 `payload.observability` 会携带插件侧运行摘要，用于工作台统一日志与告警排查。该字段只放计数和阶段信息，不放目标链接、正文或完整页面数据。
