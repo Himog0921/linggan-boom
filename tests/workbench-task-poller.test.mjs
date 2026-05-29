@@ -600,6 +600,78 @@ test('task poller ignores persisted context from a stale attempt', async () => {
   assert.equal(poller.getState().activeTask.pluginRunId, '');
 });
 
+test('task poller keeps persisted execution page when the resumed server task has the same local run id', async () => {
+  const lookups = [];
+  const persistedSnapshots = [];
+  const poller = createTaskPoller({
+    readTaskLease: async () => ({
+      taskId: 'task_resume_same_run',
+      leaseToken: 'lease-new-context',
+      attemptId: 'attempt-new-context',
+    }),
+    readActiveTaskContext: async () => ({
+      taskId: 'task_resume_same_run',
+      externalTaskId: 'task_resume_same_run',
+      pluginRunId: 'run_same_context',
+      attemptId: 'attempt-old-context',
+      platform: 'douyin',
+      accountId: 'douyin_account_1',
+      tabId: 987,
+      pageFingerprint: {
+        platform: 'douyin',
+        pageType: 'profile',
+        routeKey: 'profile:author-1',
+      },
+      workbenchStatus: 'running',
+      dispatchedAtMs: 1000,
+    }),
+    writeActiveTaskContext: async (snapshot) => {
+      persistedSnapshots.push(snapshot);
+    },
+    reconcileTaskLease: async () => ({
+      success: true,
+      action: 'resume',
+      lease: {
+        taskId: 'task_resume_same_run',
+        leaseToken: 'lease-new-context',
+        attemptId: 'attempt-new-context',
+      },
+      task: {
+        id: 'task_resume_same_run',
+        taskType: 'douyin.collectAuthor',
+        platform: 'douyin',
+        status: 'running',
+        pluginRunId: 'run_same_context',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-17T12:05:00.000Z' }),
+    getResultPackage: async (lookup) => {
+      lookups.push(lookup);
+      return {
+        success: true,
+        result: {
+          collectionRunId: 'run_same_context',
+          status: 'running',
+          resultSummary: { itemsPlanned: 2, itemsSucceeded: 1, failedItems: 0 },
+          records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+        },
+      };
+    },
+    patchTask: async () => ({ success: true }),
+  });
+
+  await poller.tick();
+
+  assert.deepEqual(lookups[0], {
+    collectionRunId: 'run_same_context',
+    externalTaskId: 'task_resume_same_run',
+    tabId: 987,
+  });
+  assert.equal(poller.getState().activeTask.accountId, 'douyin_account_1');
+  assert.equal(poller.getState().activeTask.pageFingerprint.routeKey, 'profile:author-1');
+  assert.equal(persistedSnapshots.at(-1).tabId, 987);
+});
+
 test('task poller surfaces idle claim reason details from the lease endpoint', async () => {
   const poller = createTaskPoller({
     claimTaskLease: async () => ({

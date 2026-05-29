@@ -2029,16 +2029,19 @@ export function createTaskPoller(deps = {}) {
     if (result.task?.id) {
       const persistedContext = await readActiveTaskContext(result.task.id);
       const persistedAttemptId = String(persistedContext?.attemptId || '').trim();
+      const persistedPluginRunId = String(persistedContext?.pluginRunId || '').trim();
+      const serverPluginRunId = String(result.task?.pluginRunId || result.task?.collectionRunId || '').trim();
       const currentAttemptId = String(
         state.activeLease?.attemptId
         || result.task?.currentAttemptId
         || result.task?.attemptId
         || '',
       ).trim();
+      const sameLocalRun = Boolean(serverPluginRunId && persistedPluginRunId === serverPluginRunId);
       const hydrated = hydrateTrackedTask(
         result.task,
         now,
-        persistedAttemptId && currentAttemptId && persistedAttemptId !== currentAttemptId
+        persistedAttemptId && currentAttemptId && persistedAttemptId !== currentAttemptId && !sameLocalRun
           ? null
           : persistedContext,
       );
