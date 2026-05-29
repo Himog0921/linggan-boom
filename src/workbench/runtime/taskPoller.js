@@ -324,6 +324,7 @@ function normalizeExecutionLockResult(result = {}) {
     reasonCode,
     reasonMessage,
     retryAfterMs,
+    existingTaskId: String(result?.existingTaskId || '').trim(),
   };
 }
 
@@ -1093,6 +1094,20 @@ export function createTaskPoller(deps = {}) {
     const lock = buildExecutionLockSnapshot({ task, lease, accountId });
     try {
       const result = normalizeExecutionLockResult(await deps.acquireExecutionLock(lock));
+      if (!result.acquired && await shouldReleaseStaleExecutionLock(result.existingTaskId, task)) {
+        await deps.releaseExecutionLock?.({
+          platform,
+          accountId,
+          taskId: result.existingTaskId,
+        });
+        const retry = normalizeExecutionLockResult(await deps.acquireExecutionLock(lock));
+        return {
+          ...retry,
+          lock,
+          staleLockReleased: retry.acquired,
+          staleLockTaskId: result.existingTaskId,
+        };
+      }
       return { ...result, lock };
     } catch (error) {
       return {
@@ -1102,6 +1117,23 @@ export function createTaskPoller(deps = {}) {
         retryAfterMs: 60000,
         lock,
       };
+    }
+  }
+
+  async function shouldReleaseStaleExecutionLock(existingTaskId = '', task = {}) {
+    const normalizedExistingTaskId = String(existingTaskId || '').trim();
+    const normalizedCurrentTaskId = String(task?.id || task?.taskId || '').trim();
+    if (!normalizedExistingTaskId || normalizedExistingTaskId === normalizedCurrentTaskId) return false;
+    if (/^manual:/i.test(normalizedExistingTaskId)) return false;
+    if (state.activeTask?.taskId === normalizedExistingTaskId) return false;
+    if (typeof deps.readTaskLease !== 'function') return true;
+    try {
+      const localLease = await deps.readTaskLease();
+      if (String(localLease?.taskId || '').trim() !== normalizedExistingTaskId) return true;
+      const expiresAtMs = Date.parse(String(localLease?.expiresAt || '').trim());
+      return Number.isFinite(expiresAtMs) && expiresAtMs <= getNow();
+    } catch {
+      return false;
     }
   }
 

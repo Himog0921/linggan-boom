@@ -1517,6 +1517,122 @@ test('task poller releases a leased task when the selected account is busy', asy
   assert.equal(releaseEvent.payload.retryAfterMs, 60000);
 });
 
+test('task poller clears a stale workbench account lock before dispatching a fresh task', async () => {
+  const acquiredLocks = [];
+  const releasedLocks = [];
+  let dispatchCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'new_douyin_task',
+        taskType: 'douyin.collectAuthor',
+        platform: 'douyin',
+      },
+      lease: {
+        leaseToken: 'lease-new-douyin-task',
+        attemptId: 'attempt-new-douyin-task',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'douyin_account_1',
+    }),
+    readTaskLease: async () => ({
+      taskId: 'new_douyin_task',
+      leaseToken: 'lease-new-douyin-task',
+      expiresAt: '2099-01-01T00:00:00.000Z',
+    }),
+    acquireExecutionLock: async (lock) => {
+      acquiredLocks.push(lock);
+      if (acquiredLocks.length === 1) {
+        return {
+          acquired: false,
+          reasonCode: 'account_busy',
+          reasonMessage: '同一账号正在执行另一个采集任务',
+          existingTaskId: 'old_douyin_task',
+          retryAfterMs: 60000,
+        };
+      }
+      return { acquired: true };
+    },
+    releaseExecutionLock: async (lock) => {
+      releasedLocks.push(lock);
+    },
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      return {
+        success: true,
+        accepted: true,
+        taskId: 'new_douyin_task',
+        resultLookup: { externalTaskId: 'new_douyin_task' },
+      };
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.accepted, true);
+  assert.equal(dispatchCalls, 1);
+  assert.equal(acquiredLocks.length, 2);
+  assert.deepEqual(releasedLocks, [
+    {
+      platform: 'douyin',
+      accountId: 'douyin_account_1',
+      taskId: 'old_douyin_task',
+    },
+  ]);
+  assert.equal(poller.getState().activeTask?.taskId, 'new_douyin_task');
+  assert.equal(poller.getState().activeTask?.accountId, 'douyin_account_1');
+});
+
+test('task poller keeps manual account locks reserved for local sync work', async () => {
+  const releasedLocks = [];
+  let dispatchCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'new_douyin_task_manual_busy',
+        taskType: 'douyin.collectAuthor',
+        platform: 'douyin',
+      },
+      lease: {
+        leaseToken: 'lease-manual-busy',
+        attemptId: 'attempt-manual-busy',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'douyin_account_1',
+    }),
+    acquireExecutionLock: async () => ({
+      acquired: false,
+      reasonCode: 'account_busy',
+      reasonMessage: '同一账号正在执行另一个采集任务',
+      existingTaskId: 'manual:startBatchNotes:1',
+      retryAfterMs: 60000,
+    }),
+    releaseExecutionLock: async (lock) => {
+      releasedLocks.push(lock);
+    },
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run while a manual lock is active');
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'account_busy');
+  assert.equal(dispatchCalls, 0);
+  assert.deepEqual(releasedLocks, []);
+});
+
 test('task poller releases a leased task when no local account is available before dispatch', async () => {
   const patches = [];
   const events = [];
