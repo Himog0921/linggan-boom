@@ -69,6 +69,12 @@ function ensurePositiveInteger(value, fallback = 0) {
   return Math.floor(num);
 }
 
+function positiveTimestamp(value) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return 0;
+  return Math.floor(num);
+}
+
 function pickStrategy({ taskStrategy = '', payload = {} } = {}) {
   const candidates = [
     taskStrategy,
@@ -120,6 +126,13 @@ export function buildMonitorTaskMeta({
   const effectiveLimit = isDetail
     ? ensurePositiveInteger(detailProbeLimit, 10)
     : ensurePositiveInteger(scanLimit, defaultSurfaceLimit);
+  const display = payload.display && typeof payload.display === 'object' ? payload.display : {};
+  const authorPlatformId = normalizeString(
+    payload.authorPlatformId || payload.platformAuthorId || payload.authorId,
+  );
+  const authorName = normalizeString(
+    payload.authorName || payload.authorNickname || payload.nickname || display.name,
+  );
 
   return {
     monitorId: normalizeString(payload.monitorId),
@@ -129,10 +142,16 @@ export function buildMonitorTaskMeta({
     targetNoteId: extractXhsTargetNoteId({ payload, target }),
     targetPageType: pageType,
     targetUrl: normalizeString(target?.url),
+    profileUrl: normalizeString(payload.profileUrl || payload.authorProfileUrl || (pageType === REMOTE_TARGET_PAGE_TYPE.PROFILE ? target?.url : '')),
+    authorId: authorPlatformId,
+    authorPlatformId,
+    platformAuthorId: authorPlatformId,
+    authorEntityId: normalizeString(payload.authorEntityId),
+    authorName,
     keyword: normalizeString(payload.keyword || payload.query),
     monitorStrength: normalizeString(payload.monitorStrength),
     accountPurpose: normalizeString(payload.accountPurpose),
-    display: payload.display && typeof payload.display === 'object' ? payload.display : {},
+    display,
     scanLimit,
     detailProbeLimit,
     limit: effectiveLimit,
@@ -266,6 +285,19 @@ export function buildDouyinSurfaceNoteRecords(targets = [], {
       const url = normalizeDouyinUrl(target.href || target.url || (platformContentId ? `/video/${platformContentId}` : ''));
       const images = Array.isArray(target.images) ? target.images.filter(Boolean) : [];
       const imageCandidates = Array.isArray(target.imageCandidates) ? target.imageCandidates.filter(Boolean) : [];
+      const publishedAt = positiveTimestamp(
+        target.publishedAt ?? target.publishTime ?? target.createTime ?? target.create_time,
+      );
+      const authorPlatformId = normalizeString(
+        target.authorPlatformId
+        || target.platformAuthorId
+        || target.authorId
+        || monitorMeta?.authorPlatformId
+        || monitorMeta?.platformAuthorId
+        || monitorMeta?.authorId,
+      );
+      const authorEntityId = normalizeString(target.authorEntityId || monitorMeta?.authorEntityId);
+      const authorName = normalizeString(target.authorHint || target.authorName || monitorMeta?.authorName);
       const cover = firstText(target.cover)
         || firstText(target.coverImg)
         || firstText(target.coverUrl)
@@ -294,7 +326,14 @@ export function buildDouyinSurfaceNoteRecords(targets = [], {
         collects: parseCount(target.collects),
         shares: parseCount(target.shares),
         type: 'video',
-        authorName: normalizeString(target.authorHint || target.authorName),
+        authorId: authorPlatformId,
+        authorPlatformId,
+        platformAuthorId: authorPlatformId,
+        authorEntityId,
+        authorName,
+        profileUrl: normalizeString(target.profileUrl || monitorMeta?.profileUrl),
+        publishedAt: publishedAt || null,
+        createTime: publishedAt || 0,
         publishedAtText: normalizeString(target.timeHint || target.publishedAtText),
         searchKeyword: normalizeString(searchKeyword || target.searchKeyword || monitorMeta?.keyword),
         searchPageUrl: normalizeString(searchPageUrl),

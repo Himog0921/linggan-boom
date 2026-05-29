@@ -185,6 +185,57 @@ test('douyin author surface records preserve aweme cover candidates for workbenc
   ]);
 });
 
+test('douyin author surface records carry publish time and monitored author identity', () => {
+  const monitorMeta = buildMonitorTaskMeta({
+    platform: 'douyin',
+    taskType: 'douyin.collectAuthor',
+    taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_BASELINE,
+    payload: {
+      monitorId: 'monitor_author_douyin_1',
+      platformAuthorId: 'dy_MS4wLjABAAAAuthor1',
+      authorEntityId: 'author-row-1',
+      authorName: '懿直成长',
+      scanLimit: 20,
+    },
+    target: {
+      pageType: 'profile',
+      url: 'https://www.douyin.com/user/MS4wLjABAAAAuthor1',
+    },
+  });
+
+  const target = buildDouyinBatchTargetFromAweme({
+    aweme_id: '7630831732593437428',
+    desc: '多动症孩子规则建立',
+    create_time: 1779617280,
+    statistics: {
+      digg_count: 38,
+      comment_count: 19,
+    },
+    video: {
+      cover: {
+        url_list: ['https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg'],
+      },
+    },
+  }, 0);
+
+  const records = buildDouyinSurfaceNoteRecords([target], {
+    monitorMeta,
+    collectionRunId: 'run_douyin_author_surface_1',
+    mode: MONITOR_RECORD_MODE.AUTHOR_SURFACE,
+    limit: 1,
+  });
+
+  assert.equal(records.length, 1);
+  assert.equal(records[0].platformContentId, '7630831732593437428');
+  assert.equal(records[0].publishedAt, 1779617280);
+  assert.equal(records[0].createTime, 1779617280);
+  assert.equal(records[0].authorPlatformId, 'dy_MS4wLjABAAAAuthor1');
+  assert.equal(records[0].platformAuthorId, 'dy_MS4wLjABAAAAuthor1');
+  assert.equal(records[0].authorEntityId, 'author-row-1');
+  assert.equal(records[0].authorName, '懿直成长');
+  assert.equal(records[0].profileUrl, 'https://www.douyin.com/user/MS4wLjABAAAAuthor1');
+});
+
 test('xhs author surface records keep signed share links when xsec_token is already present', () => {
   const signedUrl = 'https://www.xiaohongshu.com/user/profile/5f1234567890abcd12345678/680123456789abcdef012345?xsec_token=abc123';
   const records = buildXhsSurfaceNoteRecords([
