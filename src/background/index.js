@@ -2017,10 +2017,44 @@ const executionAccountLockManager = createExecutionAccountLockManager({
   }),
 });
 
+async function shouldReleaseStaleWorkbenchExecutionLock({ existingTaskId = '' } = {}) {
+  const normalizedTaskId = String(existingTaskId || '').trim();
+  if (!normalizedTaskId || /^manual:/i.test(normalizedTaskId)) return false;
+  const activeTask = taskPoller?.getState?.().activeTask;
+  if (
+    String(activeTask?.taskId || '').trim() === normalizedTaskId
+    || String(activeTask?.externalTaskId || '').trim() === normalizedTaskId
+  ) {
+    return false;
+  }
+
+  try {
+    const localLease = await taskLeaseStore.read();
+    if (String(localLease?.taskId || '').trim() === normalizedTaskId && String(localLease?.leaseToken || '').trim()) {
+      const expiresAtMs = Date.parse(String(localLease?.expiresAt || '').trim());
+      if (!Number.isFinite(expiresAtMs) || expiresAtMs > Date.now()) {
+        return false;
+      }
+    }
+  } catch {
+    return false;
+  }
+
+  try {
+    const context = await readActiveTaskExecutionContext(normalizedTaskId);
+    if (context?.taskId) return false;
+  } catch {
+    return false;
+  }
+
+  return true;
+}
+
 const manualExecutionLockCoordinator = createManualExecutionLockCoordinator({
   accountStore,
   lockManager: executionAccountLockManager,
   injectCookiesForAccount,
+  shouldReleaseStaleWorkbenchLock: shouldReleaseStaleWorkbenchExecutionLock,
 });
 
 async function resolveTabUrlForManualLock(tabId = '', sender = {}) {

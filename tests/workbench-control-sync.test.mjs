@@ -306,8 +306,19 @@ test('task poller applies workbench pause control and emits applied plus paused 
 test('task poller maps workbench delete control to local stop semantics', async () => {
   const controlsApplied = [];
   const events = [];
+  const releasedLocks = [];
+  let resultLookups = 0;
   const poller = createTaskPoller({
-    claimTaskLease: claimTask([{ id: 'task_2', taskType: 'douyin.batchComments', platform: 'douyin' }]),
+    claimTaskLease: claimTask([{
+      id: 'task_2',
+      taskType: 'douyin.batchComments',
+      platform: 'douyin',
+      accountId: 'douyin_account_1',
+    }]),
+    beforeDispatch: async () => ({
+      shouldPause: false,
+      accountId: 'douyin_account_1',
+    }),
     patchTask: async () => ({ success: true }),
     capabilityCheck: async () => ({ success: true, accepted: true }),
     dispatchTask: async () => ({
@@ -335,15 +346,22 @@ test('task poller maps workbench delete control to local stop semantics', async 
     enqueueEvent: async (event) => {
       events.push(event);
     },
-    getResultPackage: async () => ({
-      success: true,
-      result: {
-        collectionRunId: 'run_2',
-        status: 'stopping',
-        resultSummary: {},
-        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
-      },
-    }),
+    releaseExecutionLock: async (lock) => {
+      releasedLocks.push(lock);
+    },
+    clearTaskLease: async () => {},
+    getResultPackage: async () => {
+      resultLookups += 1;
+      return {
+        success: true,
+        result: {
+          collectionRunId: 'run_2',
+          status: 'stopping',
+          resultSummary: {},
+          records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+        },
+      };
+    },
   });
 
   await poller.tick();
@@ -352,4 +370,12 @@ test('task poller maps workbench delete control to local stop semantics', async 
   assert.equal(controlsApplied[0].action, REMOTE_TASK_CONTROL_ACTION.STOP);
   const stoppingEvent = events.find((event) => event.eventType === WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPING);
   assert.equal(stoppingEvent.payload.deleteRequested, true);
+  assert.ok(events.find((event) => event.eventType === WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPED));
+  assert.deepEqual(releasedLocks, [{
+    platform: 'douyin',
+    accountId: 'douyin_account_1',
+    taskId: 'task_2',
+  }]);
+  assert.equal(resultLookups, 0);
+  assert.equal(poller.getState().activeTask, null);
 });

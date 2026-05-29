@@ -133,7 +133,8 @@ function mapRunStatusToWorkbenchStatus(status = '') {
   if (normalized === 'paused') {
     return { status: 'paused', final: false, progress: null };
   }
-  if (normalized === 'running' || normalized === 'accepted' || normalized === 'stopping') {
+  if (normalized === 'stopping') return { status: 'stopping', final: false, progress: null };
+  if (normalized === 'running' || normalized === 'accepted') {
     return { status: 'running', final: false, progress: null };
   }
   return { status: 'dispatched', final: false, progress: 5 };
@@ -149,11 +150,19 @@ function mapWorkbenchStatusToEventType(status = '') {
       return WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED;
     case 'paused':
       return WORKBENCH_TASK_EVENT_TYPE.TASK_PAUSED;
+    case 'stopping':
+      return WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPING;
     case 'running':
       return WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS;
     default:
       return WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT;
   }
+}
+
+function isTerminalControlAction(action = '') {
+  const normalized = String(action || '').trim();
+  return normalized === REMOTE_TASK_CONTROL_ACTION.STOP
+    || normalized === REMOTE_TASK_CONTROL_ACTION.DELETE;
 }
 
 function mapControlActionToStateEvent(action = '') {
@@ -829,6 +838,9 @@ function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null
       || now,
     pendingAccountUsageId: String(matchingPersisted?.pendingAccountUsageId || '').trim(),
     firstRecordSeen: Boolean(matchingPersisted?.firstRecordSeen),
+    stopRequestedAtMs: toFiniteNumber(matchingPersisted?.stopRequestedAtMs, 0),
+    stopControlAction: String(task?.controlAction || matchingPersisted?.stopControlAction || '').trim(),
+    deleteRequested: Boolean(task?.deletedAt || matchingPersisted?.deleteRequested),
   };
 }
 
@@ -1083,6 +1095,55 @@ export function createTaskPoller(deps = {}) {
     if (typeof deps.clearTaskLease === 'function') {
       await deps.clearTaskLease();
     }
+  }
+
+  async function finalizeControlledStop(activeTask = state.activeTask, terminalControl = {}) {
+    if (!activeTask) return { success: true, idle: true };
+    const action = String(
+      terminalControl.action
+      || terminalControl.originalAction
+      || activeTask.stopControlAction
+      || REMOTE_TASK_CONTROL_ACTION.STOP
+    ).trim();
+    const deleteRequested = Boolean(
+      terminalControl.deleteRequested
+      || action === REMOTE_TASK_CONTROL_ACTION.DELETE
+      || activeTask.deleteRequested
+    );
+    const controlRequestId = String(terminalControl.controlRequestId || '').trim();
+    const cleanupTask = cleanupTaskSnapshot(activeTask);
+    const userMessage = deleteRequested
+      ? '任务已删除，插件已停止本地执行并释放账号。'
+      : '任务已停止，插件已释放账号。';
+
+    await notifyContentScriptToStop(activeTask);
+    try {
+      await patchTask(activeTask.taskId, {
+        status: 'stopped',
+        pluginRunId: activeTask.pluginRunId || null,
+        errorMessage: null,
+      });
+    } catch {
+      // The task may already be deleted; local cleanup still has to continue.
+    }
+    await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPED, {
+      status: 'stopped',
+      action,
+      controlRequestId,
+      deleteRequested,
+      reasonCode: 'control_stop_applied',
+      userMessage,
+    }, { controlRequestId });
+    state.activeTask = null;
+    state.seenControlIds.clear();
+    await clearActiveLease(activeTask);
+    return {
+      success: true,
+      final: true,
+      status: 'stopped',
+      reason: deleteRequested ? 'control_delete_stopped' : 'control_stop_stopped',
+      cleanupTask,
+    };
   }
 
   async function acquireExecutionLock(task = {}, preCheck = null, lease = null) {
@@ -1576,6 +1637,7 @@ export function createTaskPoller(deps = {}) {
 
     const controls = Array.isArray(response?.controls) ? response.controls : [];
     let handled = 0;
+    let terminalControl = null;
     for (const control of controls) {
       const controlRequestId = String(control?.controlRequestId || control?.id || control?.idempotencyKey || '').trim();
       if (controlRequestId && state.seenControlIds.has(controlRequestId)) continue;
@@ -1616,6 +1678,18 @@ export function createTaskPoller(deps = {}) {
           status: deleteRequested || actionToApply === REMOTE_TASK_CONTROL_ACTION.STOP ? 'stopping' : actionToApply,
           deleteRequested,
         }, { controlRequestId });
+        if (isTerminalControlAction(originalAction)) {
+          activeTask.workbenchStatus = 'stopping';
+          activeTask.stopRequestedAtMs = getNow();
+          activeTask.stopControlAction = originalAction;
+          activeTask.deleteRequested = deleteRequested;
+          terminalControl = {
+            controlRequestId,
+            action: originalAction,
+            appliedAction: actionToApply,
+            deleteRequested,
+          };
+        }
       } catch (error) {
         await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_CONTROL_FAILED, {
           controlRequestId,
@@ -1633,7 +1707,7 @@ export function createTaskPoller(deps = {}) {
     if (response?.nextCursor && !controls.length) {
       activeTask.controlCursor = String(response.nextCursor || '').trim();
     }
-    return { success: true, controls: handled };
+    return { success: true, controls: handled, terminalControl };
   }
 
   async function pollActiveTask() {
@@ -1641,6 +1715,9 @@ export function createTaskPoller(deps = {}) {
       return { success: true, idle: true };
     }
     const activeTask = state.activeTask;
+    if (activeTask.workbenchStatus === 'stopping' || activeTask.deleteRequested) {
+      return finalizeControlledStop(activeTask);
+    }
     if (
       !state.activeLease &&
       !isMonitorTask(activeTask) &&
@@ -1719,6 +1796,9 @@ export function createTaskPoller(deps = {}) {
     }
     await refreshExecutionLock(activeTask);
     const controlResult = await consumeControlRequests(activeTask);
+    if (controlResult?.terminalControl) {
+      return finalizeControlledStop(activeTask, controlResult.terminalControl);
+    }
     if (controlResult?.missingActiveTask) {
       const cleanupTask = cleanupTaskSnapshot(activeTask);
       state.activeTask = null;

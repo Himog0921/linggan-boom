@@ -67,10 +67,15 @@ function accountBusyMessage() {
   return '同一账号正在执行另一个采集任务，请等当前任务结束后再启动手动采集。';
 }
 
+function isManualTaskId(taskId = '') {
+  return /^manual:/i.test(normalizeString(taskId));
+}
+
 export function createManualExecutionLockCoordinator({
   accountStore = null,
   lockManager = null,
   injectCookiesForAccount = async () => ({ success: true }),
+  shouldReleaseStaleWorkbenchLock = async () => false,
   now = Date.now,
   random = Math.random,
 } = {}) {
@@ -110,9 +115,33 @@ export function createManualExecutionLockCoordinator({
         accountId: normalizeString(account.accountId),
         taskId: createManualTaskId({ action, tabId, now, random }),
       };
-      const lockResult = lockManager?.acquire
+      let lockResult = lockManager?.acquire
         ? await lockManager.acquire(lock)
         : { acquired: true };
+      const existingTaskId = normalizeString(lockResult?.existingTaskId);
+      if (!lockResult?.acquired && existingTaskId && !isManualTaskId(existingTaskId)) {
+        let shouldRelease = false;
+        try {
+          shouldRelease = await shouldReleaseStaleWorkbenchLock({
+            platform,
+            accountId: lock.accountId,
+            existingTaskId,
+            lockResult,
+          });
+        } catch {
+          shouldRelease = false;
+        }
+        if (shouldRelease && lockManager?.release) {
+          await lockManager.release({
+            platform,
+            accountId: lock.accountId,
+            taskId: existingTaskId,
+          });
+          lockResult = lockManager?.acquire
+            ? await lockManager.acquire(lock)
+            : { acquired: true };
+        }
+      }
       if (!lockResult?.acquired) {
         lastBusy = lockResult;
         continue;

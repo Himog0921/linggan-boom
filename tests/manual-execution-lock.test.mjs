@@ -107,6 +107,59 @@ test('manual execution lock reports a clear account-busy message', async () => {
   );
 });
 
+test('manual execution lock clears stale workbench account lock before manual collection', async () => {
+  const acquiredLocks = [];
+  const releasedLocks = [];
+  const coordinator = createManualExecutionLockCoordinator({
+    accountStore: createAccountStore([
+      {
+        accountId: 'account_1',
+        platform: 'douyin',
+        status: 'available',
+        cookieJson: '[]',
+        dailyQuotaUsed: 0,
+        dailyQuotaLimit: 100,
+      },
+    ]),
+    lockManager: {
+      acquire: async (lock) => {
+        acquiredLocks.push(lock);
+        if (acquiredLocks.length === 1) {
+          return {
+            acquired: false,
+            reasonCode: 'account_busy',
+            reasonMessage: '同一账号正在执行另一个采集任务',
+            existingTaskId: 'old_workbench_task',
+          };
+        }
+        return { acquired: true };
+      },
+      release: async (lock) => {
+        releasedLocks.push(lock);
+      },
+    },
+    shouldReleaseStaleWorkbenchLock: async ({ existingTaskId }) => existingTaskId === 'old_workbench_task',
+    injectCookiesForAccount: async () => ({ success: true }),
+    now: () => 1000,
+    random: () => 0.1,
+  });
+
+  const prepared = await coordinator.prepare({
+    action: 'startBatchNotes',
+    msg: { count: 10 },
+    tabId: 3,
+    tabUrl: 'https://www.douyin.com/user/demo',
+  });
+
+  assert.equal(prepared.locked, true);
+  assert.equal(acquiredLocks.length, 2);
+  assert.deepEqual(releasedLocks, [{
+    platform: 'douyin',
+    accountId: 'account_1',
+    taskId: 'old_workbench_task',
+  }]);
+});
+
 test('manual execution lock releases the lock when cookie injection fails', async () => {
   const released = [];
   const coordinator = createManualExecutionLockCoordinator({
