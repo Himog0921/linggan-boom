@@ -11,7 +11,8 @@ import {
   formatDataQualityLabel, formatQualityReasonLabel, formatSourceTierLabel,
   truncate, escapeHtml, debounce,
   sortByCreatedAt, formatLocalDate, normalizeUrl, toDisplayUrl, getPreferredRecordUrl, getUnifiedAuthorHandle,
-  buildWorkbenchSyncPayload, getItemId, getTabLabel, getColumns, getExportColumns, sendToParent, unwrapParentResponseData,
+  DASHBOARD_SYNC_TO_WORKBENCH_TIMEOUT_MS,
+  buildWorkbenchSyncPayload, summarizeWorkbenchSyncResult, getItemId, getTabLabel, getColumns, getExportColumns, sendToParent, unwrapParentResponseData,
 } from './utils.js';
 import { formatTaskLeaseIdleNotice } from '../workbench/runtime/taskLeaseClient.js';
 
@@ -545,26 +546,28 @@ export default function App() {
       try {
         showNotice(`正在同步 ${selectedItems.length} 条${getTabLabel(currentTab)}到工作台...`, 'info');
         const payload = buildWorkbenchSyncPayload(currentTab, selectedItems);
-        const result = await sendToParent(MSG.SYNC_TO_WORKBENCH, payload);
+        const result = await sendToParent(MSG.SYNC_TO_WORKBENCH, payload, {
+          timeoutMs: DASHBOARD_SYNC_TO_WORKBENCH_TIMEOUT_MS,
+        });
+        if (!result) {
+          showNotice('同步失败：工作台还没有返回结果，请稍后查看数据是否已写入；如果没有写入再重试。', 'error');
+          return;
+        }
         if (result?.success) {
-          const imported = result.imported || 0;
-          const skipped = result.skipped || 0;
-          const total = selectedItems.length;
-          const meta = result.meta || {};
-          const details = [];
-          if (meta.notesReceived != null) details.push(`笔记 ${meta.notesReceived}`);
-          if (meta.commentsReceived != null) details.push(`评论 ${meta.commentsReceived}`);
-          if (meta.authorsReceived != null) details.push(`博主 ${meta.authorsReceived}`);
-          const detailText = details.length ? `（${details.join('，')}）` : '';
-          const failReason = meta.failReason || meta.errorReason || '';
+          const { imported, skipped, invalid, total, detailText, failReason } = summarizeWorkbenchSyncResult(
+            currentTab,
+            selectedItems.length,
+            result,
+          );
+          const invalidText = invalid > 0 ? `，无效 ${invalid} 条` : '';
           if (imported === total) {
             showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');
           } else if (imported > 0) {
             const reasonText = failReason ? `，原因：${failReason}` : '';
-            showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${detailText}${reasonText}`, 'warning');
+            showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${invalidText}${detailText}${reasonText}`, 'warning');
           } else {
             const reasonText = failReason ? `，原因：${failReason}` : '';
-            showNotice(`所有${getTabLabel(currentTab)}都已存在，跳过 ${skipped} 条${detailText}${reasonText}`, 'info');
+            showNotice(`所有${getTabLabel(currentTab)}都已存在或不可导入，跳过 ${skipped} 条${invalidText}${detailText}${reasonText}`, 'info');
           }
         } else {
           const errorMsg = result?.error || result?.meta?.failReason || '未知错误';

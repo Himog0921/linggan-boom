@@ -150,6 +150,28 @@ test('selectReachableTaskTab skips dead tabs and keeps trying the next live xhs 
   assert.equal(selected?.id, 22);
 });
 
+test('selectReachableTaskTab skips tabs that Chrome says the extension cannot read', async () => {
+  const selected = await selectReachableTaskTab([
+    {
+      id: 11,
+      url: 'https://www.douyin.com/user/demo',
+      active: false,
+    },
+    {
+      id: 22,
+      url: 'https://www.douyin.com/user/demo',
+      active: false,
+    },
+  ], 'https://www.douyin.com/user/demo', async (tab) => {
+    if (tab.id === 11) {
+      throw new Error('Cannot access contents of the page. Extension manifest must request permission to access the respective host.');
+    }
+    return { accepted: true };
+  });
+
+  assert.equal(selected?.id, 22);
+});
+
 test('selectReachableTaskTab avoids hijacking the currently visible tab when a background candidate is available', async () => {
   const selected = await selectReachableTaskTab([
     {

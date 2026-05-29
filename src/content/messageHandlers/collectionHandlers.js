@@ -333,14 +333,24 @@ export function createCollectionHandlers({
         && String(monitorMeta?.taskStrategy || '').trim() === MONITOR_TASK_STRATEGY.AUTHOR_BASELINE;
       const scanLimit = Math.max(1, Number(msg.count || monitorMeta?.scanLimit || monitorMeta?.limit || 30) || 30);
       const baselineBatchCount = Math.max(1, Number(monitorMeta?.scanLimit || monitorMeta?.limit || 50) || 50);
-      const collectAuthorSurfaceRecords = async ({ platform, collectionRunId }) => {
+      const collectAuthorSurfaceRecords = async ({
+        platform,
+        collectionRunId,
+        shouldStop = () => false,
+        waitIfPaused = async () => {},
+      }) => {
         if (!isMonitorSurface || !collectionRunId || isAuthorBaselineMonitor) return [];
+        await waitIfPaused();
+        if (shouldStop()) return [];
         const pageUrl = String(globalThis.window?.location?.href || '').trim();
         if (platform === 'douyin' && typeof discoverDouyinSurfaceTargets === 'function') {
           const targets = await discoverDouyinSurfaceTargets({
             maxCount: scanLimit,
             topByLikes: false,
+            shouldStop,
+            waitIfPaused,
           });
+          if (shouldStop()) return [];
           const records = buildDouyinSurfaceNoteRecords(targets, {
             monitorMeta,
             collectionRunId,
@@ -356,6 +366,7 @@ export function createCollectionHandlers({
           const cards = await discoverXhsSurfaceNotes(resolveXhsSurfaceContainerSelector(), 10, {
             expectedCount: scanLimit,
           });
+          if (shouldStop()) return [];
           const records = buildXhsSurfaceNoteRecords(cards, {
             monitorMeta,
             collectionRunId,
@@ -380,7 +391,8 @@ export function createCollectionHandlers({
           monitorMeta: monitorMeta || undefined,
         } : {},
       });
-      const runXhsBaselineBatchCollection = async (remoteRun = null) => {
+      const runXhsBaselineBatchCollection = async (remoteRun = null, control = {}) => {
+        const shouldStop = typeof control.shouldStop === 'function' ? control.shouldStop : () => false;
         if (!isAuthorBaselineMonitor || !BatchNoteController) {
           return {
             planned: 0,
@@ -395,15 +407,37 @@ export function createCollectionHandlers({
             shortfallCount: baselineBatchCount,
           };
         }
+        if (shouldStop()) {
+          return {
+            planned: 0,
+            succeeded: 0,
+            failed: 0,
+            targetIds: [],
+            contentIds: [],
+            stopped: true,
+            completionNote: '',
+            requestedCount: baselineBatchCount,
+            discoveredCount: 0,
+            shortfallCount: baselineBatchCount,
+          };
+        }
         const controller = new BatchNoteController();
-        await controller.start('profile', () => {}, {
-          count: baselineBatchCount,
-          topByLikes: false,
-          triggerSource,
-          collectionRunId: remoteRun?.collectionRunId || '',
-          monitorMeta,
-          surfaceOnly: false,
-        });
+        let stopWatcher = null;
+        try {
+          stopWatcher = setInterval(() => {
+            if (shouldStop()) controller.stop?.();
+          }, 250);
+          await controller.start('profile', () => {}, {
+            count: baselineBatchCount,
+            topByLikes: false,
+            triggerSource,
+            collectionRunId: remoteRun?.collectionRunId || '',
+            monitorMeta,
+            surfaceOnly: false,
+          });
+        } finally {
+          if (stopWatcher) clearInterval(stopWatcher);
+        }
         const targetIds = (Array.isArray(controller.noteList) ? controller.noteList : [])
           .map((item) => String(item?.noteId || '').trim())
           .filter(Boolean);
@@ -416,7 +450,7 @@ export function createCollectionHandlers({
           failed: Array.isArray(controller.failed) ? controller.failed.length : 0,
           targetIds,
           contentIds,
-          stopped: Boolean(controller?._stoppedByUser),
+          stopped: Boolean(controller?._stoppedByUser || shouldStop()),
           completionNote: buildAuthorBaselineShortfallNote({
             requestedCount: baselineBatchCount,
             discoveredCount: targetIds.length,
@@ -428,128 +462,219 @@ export function createCollectionHandlers({
         };
       };
       const runAuthorCollection = async (remoteRun = null) => {
-        if (isDouyinPage()) {
+        const controlBinding = remoteRun && remoteControlRegistry?.bindRemoteControl
+          ? remoteControlRegistry.bindRemoteControl({
+            remoteRun,
+            remoteTaskMeta: msg.externalTaskMeta,
+          })
+          : null;
+        const shouldStop = typeof controlBinding?.control?.shouldStop === 'function'
+          ? controlBinding.control.shouldStop
+          : () => false;
+        const waitIfPaused = typeof controlBinding?.control?.waitIfPaused === 'function'
+          ? controlBinding.control.waitIfPaused
+          : async () => {};
+
+        try {
+          if (isDouyinPage()) {
+            let douyinAuthor = null;
+            try {
+              assertAuthorMonitorTarget({ isDouyinPage, monitorMeta });
+              await waitIfPaused();
+              if (shouldStop()) {
+                await finalizeRemoteRun(remoteRun, 'stopped', {
+                  itemsPlanned: 1,
+                  itemsSucceeded: 0,
+                  itemsFailed: 0,
+                });
+                return {
+                  success: true,
+                  stopped: true,
+                  collectionRunId: remoteRun?.collectionRunId || '',
+                };
+              }
+              const result = await collectDouyinAuthor({
+                collectionRunId: remoteRun?.collectionRunId || '',
+                triggerSource,
+                externalTaskMeta: msg.externalTaskMeta || {},
+                monitorMeta,
+                shouldStop,
+                waitIfPaused,
+              });
+              if (!result?.ok) {
+                throw new Error(result?.error || '抖音博主采集失败');
+              }
+              douyinAuthor = result.data;
+              await waitIfPaused();
+              const surfaceRecords = shouldStop()
+                ? []
+                : await collectAuthorSurfaceRecords({
+                  platform: 'douyin',
+                  collectionRunId: remoteRun?.collectionRunId || '',
+                  shouldStop,
+                  waitIfPaused,
+                });
+              const stopped = shouldStop();
+              const surfaceTargetIds = surfaceRecords
+                .map((record) => String(record.platformContentId || record.noteId || '').trim())
+                .filter(Boolean);
+              const surfaceContentIds = surfaceRecords
+                .map((record) => String(record.contentId || '').trim())
+                .filter(Boolean);
+              const summaryPatch = {
+                itemsPlanned: 1 + surfaceRecords.length,
+                itemsSucceeded: 1 + surfaceRecords.length,
+                itemsFailed: 0,
+                targetIds: [
+                  String(result?.data?.platformAuthorId || result?.data?.userId || '').trim(),
+                  ...surfaceTargetIds,
+                ].filter(Boolean),
+                contentIds: surfaceContentIds,
+              };
+              if (isMonitorSurface) {
+                summaryPatch.requestedCount = scanLimit;
+                summaryPatch.discoveredCount = surfaceRecords.length;
+                summaryPatch.shortfallCount = Math.max(0, scanLimit - surfaceRecords.length);
+              }
+              await finalizeRemoteRun(remoteRun, stopped ? 'stopped' : 'done', summaryPatch);
+              if (!stopped) reportDone('author', 1, { platform: 'douyin' });
+              return {
+                success: true,
+                author: result.data,
+                stopped,
+                collectionRunId: remoteRun?.collectionRunId || '',
+              };
+            } catch (error) {
+              if (shouldStop()) {
+                await finalizeRemoteRun(remoteRun, 'stopped', {
+                  itemsPlanned: 1,
+                  itemsSucceeded: douyinAuthor ? 1 : 0,
+                  itemsFailed: 0,
+                  targetIds: [String(douyinAuthor?.platformAuthorId || douyinAuthor?.userId || '').trim()].filter(Boolean),
+                });
+                return {
+                  success: true,
+                  author: douyinAuthor,
+                  stopped: true,
+                  collectionRunId: remoteRun?.collectionRunId || '',
+                };
+              }
+              await finalizeRemoteRun(remoteRun, 'failed', {
+                error: String(error?.message || error),
+                itemsPlanned: 1,
+                itemsSucceeded: 0,
+                itemsFailed: 1,
+              });
+              throw error;
+            }
+          }
+
+          let author = null;
+          let batchResult = {
+            planned: 0,
+            succeeded: 0,
+            failed: 0,
+            targetIds: [],
+            contentIds: [],
+            stopped: false,
+            completionNote: '',
+            requestedCount: 0,
+            discoveredCount: 0,
+            shortfallCount: 0,
+          };
           try {
             assertAuthorMonitorTarget({ isDouyinPage, monitorMeta });
-            const result = await collectDouyinAuthor({
+            await waitIfPaused();
+            if (shouldStop()) {
+              await finalizeRemoteRun(remoteRun, 'stopped', {
+                itemsPlanned: 1,
+                itemsSucceeded: 0,
+                itemsFailed: 0,
+              });
+              return {
+                success: true,
+                stopped: true,
+                collectionRunId: remoteRun?.collectionRunId || '',
+              };
+            }
+            author = await collectAuthor({
               collectionRunId: remoteRun?.collectionRunId || '',
               triggerSource,
               externalTaskMeta: msg.externalTaskMeta || {},
               monitorMeta,
+              shouldStop,
+              waitIfPaused,
             });
-            if (!result?.ok) {
-              throw new Error(result?.error || '抖音博主采集失败');
-            }
-            const surfaceRecords = await collectAuthorSurfaceRecords({
-              platform: 'douyin',
-              collectionRunId: remoteRun?.collectionRunId || '',
+            batchResult = isAuthorBaselineMonitor
+              ? await runXhsBaselineBatchCollection(remoteRun, { shouldStop, waitIfPaused })
+              : { planned: 0, succeeded: 0, failed: 0, targetIds: [], contentIds: [], stopped: false };
+            const surfaceRecords = shouldStop()
+              ? []
+              : await collectAuthorSurfaceRecords({
+                platform: 'xhs',
+                collectionRunId: remoteRun?.collectionRunId || '',
+                shouldStop,
+                waitIfPaused,
+              });
+            const authorTargetId = String(author?.platformAuthorId || author?.userId || '').trim();
+            const stopped = Boolean(batchResult.stopped || shouldStop());
+            const finalStatus = stopped ? 'stopped' : 'done';
+            await finalizeRemoteRun(remoteRun, finalStatus, {
+              itemsPlanned: 1 + batchResult.planned + surfaceRecords.length,
+              itemsSucceeded: 1 + batchResult.succeeded + surfaceRecords.length,
+              itemsFailed: batchResult.failed,
+              targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
+              contentIds: batchResult.contentIds,
+              completionNote: batchResult.completionNote || undefined,
+              requestedCount: batchResult.requestedCount || undefined,
+              discoveredCount: batchResult.discoveredCount || undefined,
+              shortfallCount: batchResult.shortfallCount || undefined,
             });
-            const surfaceTargetIds = surfaceRecords
-              .map((record) => String(record.platformContentId || record.noteId || '').trim())
-              .filter(Boolean);
-            const surfaceContentIds = surfaceRecords
-              .map((record) => String(record.contentId || '').trim())
-              .filter(Boolean);
-            const summaryPatch = {
-              itemsPlanned: 1 + surfaceRecords.length,
-              itemsSucceeded: 1 + surfaceRecords.length,
-              itemsFailed: 0,
-              targetIds: [
-                String(result?.data?.platformAuthorId || result?.data?.userId || '').trim(),
-                ...surfaceTargetIds,
-              ].filter(Boolean),
-              contentIds: surfaceContentIds,
-            };
-            if (isMonitorSurface) {
-              summaryPatch.requestedCount = scanLimit;
-              summaryPatch.discoveredCount = surfaceRecords.length;
-              summaryPatch.shortfallCount = Math.max(0, scanLimit - surfaceRecords.length);
-            }
-            await finalizeRemoteRun(remoteRun, 'done', summaryPatch);
-            reportDone('author', 1, { platform: 'douyin' });
+            if (!stopped) reportDone('author', 1);
             return {
               success: true,
-              author: result.data,
+              author,
+              stopped,
               collectionRunId: remoteRun?.collectionRunId || '',
             };
           } catch (error) {
+            const authorTargetId = String(author?.platformAuthorId || author?.userId || '').trim();
+            if (shouldStop()) {
+              await finalizeRemoteRun(remoteRun, 'stopped', {
+                itemsPlanned: 1 + batchResult.planned,
+                itemsSucceeded: (author ? 1 : 0) + batchResult.succeeded,
+                itemsFailed: 0,
+                targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
+                contentIds: batchResult.contentIds,
+              });
+              return {
+                success: true,
+                author,
+                stopped: true,
+                collectionRunId: remoteRun?.collectionRunId || '',
+              };
+            }
+            const plannedItems = isAuthorBaselineMonitor
+              ? 1 + Math.max(batchResult.planned, baselineBatchCount)
+              : 1;
+            const succeededItems = author ? 1 + batchResult.succeeded : 0;
+            const failedItems = Math.max(
+              1,
+              plannedItems - succeededItems,
+              batchResult.failed,
+            );
             await finalizeRemoteRun(remoteRun, 'failed', {
               error: String(error?.message || error),
-              itemsPlanned: 1,
-              itemsSucceeded: 0,
-              itemsFailed: 1,
+              itemsPlanned: plannedItems,
+              itemsSucceeded: succeededItems,
+              itemsFailed: failedItems,
+              targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
+              contentIds: batchResult.contentIds,
             });
             throw error;
           }
-        }
-        let author = null;
-        let batchResult = {
-          planned: 0,
-          succeeded: 0,
-          failed: 0,
-          targetIds: [],
-          contentIds: [],
-          stopped: false,
-          completionNote: '',
-          requestedCount: 0,
-          discoveredCount: 0,
-          shortfallCount: 0,
-        };
-        try {
-          assertAuthorMonitorTarget({ isDouyinPage, monitorMeta });
-          author = await collectAuthor({
-            collectionRunId: remoteRun?.collectionRunId || '',
-            triggerSource,
-            externalTaskMeta: msg.externalTaskMeta || {},
-            monitorMeta,
-          });
-          batchResult = isAuthorBaselineMonitor
-            ? await runXhsBaselineBatchCollection(remoteRun)
-            : { planned: 0, succeeded: 0, failed: 0, targetIds: [], contentIds: [], stopped: false };
-          const surfaceRecords = await collectAuthorSurfaceRecords({
-            platform: 'xhs',
-            collectionRunId: remoteRun?.collectionRunId || '',
-          });
-          const authorTargetId = String(author?.platformAuthorId || author?.userId || '').trim();
-          const finalStatus = batchResult.stopped ? 'stopped' : 'done';
-          await finalizeRemoteRun(remoteRun, finalStatus, {
-            itemsPlanned: 1 + batchResult.planned + surfaceRecords.length,
-            itemsSucceeded: 1 + batchResult.succeeded + surfaceRecords.length,
-            itemsFailed: batchResult.failed,
-            targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
-            contentIds: batchResult.contentIds,
-            completionNote: batchResult.completionNote || undefined,
-            requestedCount: batchResult.requestedCount || undefined,
-            discoveredCount: batchResult.discoveredCount || undefined,
-            shortfallCount: batchResult.shortfallCount || undefined,
-          });
-          reportDone('author', 1);
-          return {
-            success: true,
-            author,
-            stopped: batchResult.stopped,
-            collectionRunId: remoteRun?.collectionRunId || '',
-          };
-        } catch (error) {
-          const authorTargetId = String(author?.platformAuthorId || author?.userId || '').trim();
-          const plannedItems = isAuthorBaselineMonitor
-            ? 1 + Math.max(batchResult.planned, baselineBatchCount)
-            : 1;
-          const succeededItems = author ? 1 + batchResult.succeeded : 0;
-          const failedItems = Math.max(
-            1,
-            plannedItems - succeededItems,
-            batchResult.failed,
-          );
-          await finalizeRemoteRun(remoteRun, 'failed', {
-            error: String(error?.message || error),
-            itemsPlanned: plannedItems,
-            itemsSucceeded: succeededItems,
-            itemsFailed: failedItems,
-            targetIds: [authorTargetId, ...batchResult.targetIds].filter(Boolean),
-            contentIds: batchResult.contentIds,
-          });
-          throw error;
+        } finally {
+          controlBinding?.release?.();
         }
       };
 

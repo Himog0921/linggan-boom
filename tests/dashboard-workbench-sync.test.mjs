@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildWorkbenchSyncPayload } from '../src/dashboard/utils.js';
+import {
+  DASHBOARD_SYNC_TO_WORKBENCH_TIMEOUT_MS,
+  buildWorkbenchSyncPayload,
+  summarizeWorkbenchSyncResult,
+} from '../src/dashboard/utils.js';
 
 test('buildWorkbenchSyncPayload preserves quality fields for manual workbench sync', () => {
   const extractedAt = 1776671494763;
@@ -87,4 +91,28 @@ test('buildWorkbenchSyncPayload keeps rich note media fields for manual workbenc
   assert.equal(payload.notes[0].videoDownloadUrl, 'https://video.example.com/download.mp4');
   assert.deepEqual(payload.notes[0].videoStreams, [{ url: 'https://video.example.com/stream.mp4', quality: '720p' }]);
   assert.equal(payload.notes[0].mediaDownloadStatus, '已完成');
+});
+
+test('dashboard workbench sync waits long enough for larger comment batches', () => {
+  assert.equal(DASHBOARD_SYNC_TO_WORKBENCH_TIMEOUT_MS, 45000);
+});
+
+test('dashboard workbench sync summarizes comment imports from comment metadata', () => {
+  const summary = summarizeWorkbenchSyncResult('comments', 50, {
+    success: true,
+    imported: 0,
+    skipped: 0,
+    meta: {
+      commentsReceived: 50,
+      commentsRegistered: 48,
+      commentsSkipped: 2,
+      commentsInvalid: 0,
+    },
+  });
+
+  assert.equal(summary.imported, 48);
+  assert.equal(summary.skipped, 2);
+  assert.equal(summary.invalid, 0);
+  assert.equal(summary.total, 50);
+  assert.equal(summary.detailText, '（评论 50）');
 });

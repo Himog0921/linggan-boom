@@ -457,7 +457,6 @@ test('task poller persists active task context after dispatch starts', async () 
         id: 'task_persist_context',
         taskType: 'xhs.batchNotes',
         platform: 'xhs',
-        tabId: 789,
       },
       lease: {
         leaseToken: 'lease-persist-context',
@@ -471,6 +470,7 @@ test('task poller persists active task context after dispatch starts', async () 
       success: true,
       accepted: true,
       taskId: 'task_persist_context',
+      tabId: 789,
       collectionRunId: 'run_persist_context',
       resultLookup: {
         externalTaskId: 'task_persist_context',
@@ -547,6 +547,7 @@ test('task poller recovers persisted context after worker restart', async () => 
   assert.deepEqual(lookups[0], {
     collectionRunId: 'run_recover_context',
     externalTaskId: 'task_recover_context',
+    tabId: 456,
   });
   assert.equal(poller.getState().activeTask.tabId, 456);
   assert.equal(poller.getState().activeTask.accountId, 'douyin_account_1');
@@ -1235,6 +1236,78 @@ test('task poller fails unavailable detail pages instead of returning them to pe
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller fails comment detail tasks when capability only reports unsupported task type', async () => {
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_comment_unsupported',
+        taskType: 'xhs.batchComments',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/explore/note-1',
+        taskStrategy: 'detail_probe',
+        payload: {
+          noteId: 'note-1',
+          taskStrategy: 'detail_probe',
+        },
+      },
+      lease: {
+        leaseToken: 'lease-comment-unsupported',
+        attemptId: 'attempt-comment-unsupported',
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: false,
+      reasonCode: 'unsupported_task_type',
+      reasonMessage: '当前页面能力报告未声明支持该任务类型',
+      report: {
+        mode: 'detail',
+        pageType: 'detail',
+        url: 'https://www.xiaohongshu.com/explore/note-1',
+        readiness: {
+          ready: false,
+          reasonCode: 'content_not_found',
+          reasonMessage: '当前笔记已删除或不可访问',
+        },
+        capabilities: {
+          canRunTaskTypes: [],
+        },
+      },
+    }),
+    dispatchTask: async () => {
+      throw new Error('dispatch should not run');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.deepEqual(patches[0], [
+    'task_comment_unsupported',
+    {
+      status: 'failed',
+      progress: 100,
+      errorMessage: '当前页面能力报告未声明支持该任务类型',
+    },
+  ]);
+  const mismatchEvent = events.find((event) => event.eventType === 'task.capability_mismatch');
+  assert.equal(mismatchEvent.payload.reasonCode, 'unsupported_task_type');
+  assert.equal(mismatchEvent.payload.status, 'failed');
+  assert.equal(events.some((event) => event.eventType === 'task.released'), false);
+  assert.equal(poller.getState().activeTask, null);
+});
+
 test('task poller releases target mismatch with an explicit target mismatch code', async () => {
   const events = [];
   const poller = createTaskPoller({
@@ -1442,6 +1515,66 @@ test('task poller releases a leased task when the selected account is busy', asy
   assert.equal(releaseEvent.payload.reasonCode, 'account_busy');
   assert.equal(releaseEvent.payload.accountId, 'xhs_account_busy');
   assert.equal(releaseEvent.payload.retryAfterMs, 60000);
+});
+
+test('task poller releases a leased task when no local account is available before dispatch', async () => {
+  const patches = [];
+  const events = [];
+  let dispatchCalls = 0;
+  let clearLeaseCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_no_account',
+        taskType: 'xhs.batchComments',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/explore/note-1',
+      },
+      lease: {
+        leaseToken: 'lease-no-account',
+        attemptId: 'attempt-no-account',
+      },
+    }),
+    beforeDispatch: async () => ({
+      shouldPause: true,
+      reason: 'no_available_account',
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => {
+      dispatchCalls += 1;
+      throw new Error('dispatch should not run without account');
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.reason, 'no_available_account');
+  assert.equal(dispatchCalls, 0);
+  assert.equal(clearLeaseCalls, 1);
+  assert.deepEqual(patches[0], [
+    'task_no_account',
+    {
+      status: 'pending',
+      progress: 0,
+      errorMessage: 'no_available_account',
+    },
+  ]);
+  const releaseEvent = events.find((event) => event.eventType === 'task.released');
+  assert.equal(releaseEvent.payload.reasonCode, 'no_available_account');
+  assert.equal(releaseEvent.payload.status, 'pending');
+  assert.equal(poller.getState().activeTask, null);
 });
 
 test('task poller releases the account execution lock when a task finishes', async () => {
@@ -2060,6 +2193,79 @@ test('task poller releases dispatched tasks that never produce a startup run', a
   assert.equal(events.at(-1).payload.reason, 'dispatch_startup_timeout');
   assert.equal(events.at(-1).payload.userMessage, '任务已派出，但页面没有真正启动，已自动释放重试。');
   assert.equal(events.at(-1).payload.notBeforeAt, retryAt);
+  assert.equal(poller.getState().activeTask, null);
+});
+
+test('task poller fails running task when the result package handoff is lost', async () => {
+  const patches = [];
+  const events = [];
+  const lookups = [];
+  let nowMs = Date.parse('2026-04-20T16:00:00.000Z');
+  const poller = createTaskPoller({
+    now: () => nowMs,
+    claimTaskLease: claimTask([
+      {
+        id: 'task_handoff_lost',
+        taskType: 'douyin.collectAuthor',
+        platform: 'douyin',
+        source: 'monitor',
+        taskStrategy: 'author_baseline',
+        target: 'https://www.douyin.com/user/demo',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_handoff_lost',
+      tabId: 789,
+      collectionRunId: 'run_handoff_lost',
+      resultLookup: {
+        externalTaskId: 'task_handoff_lost',
+        collectionRunId: 'run_handoff_lost',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-20T16:20:00.000Z' }),
+    getResultPackage: async (lookup) => {
+      lookups.push(lookup);
+      return {
+        success: false,
+        error: 'collectionRun not found for collectionRunId: run_handoff_lost',
+      };
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  await poller.tick();
+  nowMs += 13 * 60 * 1000;
+  const result = await poller.tick();
+
+  assert.equal(result.failed, true);
+  assert.equal(result.reason, 'result_package_handoff_lost');
+  assert.deepEqual(lookups[0], {
+    collectionRunId: 'run_handoff_lost',
+    externalTaskId: 'task_handoff_lost',
+    tabId: 789,
+  });
+  assert.deepEqual(patches.at(-1), [
+    'task_handoff_lost',
+    {
+      status: 'failed',
+      progress: 100,
+      pluginRunId: 'run_handoff_lost',
+      errorMessage: '采集页结果包没有交回工作台：插件没有找到本轮执行页，已停止这条卡住的任务。',
+    },
+  ]);
+  assert.equal(events.at(-1).eventType, 'task.failed');
+  assert.equal(events.at(-1).payload.reason, 'result_package_handoff_lost');
   assert.equal(poller.getState().activeTask, null);
 });
 

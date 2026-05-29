@@ -32,6 +32,7 @@ function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
 
 const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
 const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
+const RUNNING_RESULT_LOOKUP_TIMEOUT_MS = 12 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
@@ -39,7 +40,7 @@ const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
-  return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout/i.test(msg);
+  return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout|Cannot access contents|Extension manifest must request permission/i.test(msg);
 }
 
 function isLeaseConflictError(error) {
@@ -193,12 +194,38 @@ function normalizeLeaseSnapshot(lease = {}) {
   return snapshot;
 }
 
-function shouldFailCapabilityRejection(reasonCode = '') {
+function isTerminalReadinessReason(reasonCode = '') {
   return new Set([
     REMOTE_ERROR_CODE.CONTENT_NOT_FOUND,
     REMOTE_ERROR_CODE.ERROR_PAGE,
     REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED,
   ]).has(String(reasonCode || '').trim());
+}
+
+function isCommentDetailTask(task = {}) {
+  const taskType = String(task?.taskType || '').trim();
+  if (!['xhs.batchComments', 'douyin.batchComments', 'douyin.singleComments'].includes(taskType)) {
+    return false;
+  }
+  const payload = task?.payload && typeof task.payload === 'object' && !Array.isArray(task.payload)
+    ? task.payload
+    : {};
+  const strategy = String(task?.taskStrategy || payload.taskStrategy || '').trim();
+  return strategy === 'detail_probe'
+    || Boolean(payload.noteId)
+    || Boolean(payload.platformContentId)
+    || Boolean(payload.awemeId);
+}
+
+function shouldFailCapabilityRejection(reasonCode = '', capability = {}) {
+  const normalizedReasonCode = String(reasonCode || '').trim();
+  if (isTerminalReadinessReason(normalizedReasonCode)) return true;
+  const readinessReasonCode = String(capability?.report?.readiness?.reasonCode || '').trim();
+  if (isTerminalReadinessReason(readinessReasonCode)) return true;
+  return (
+    normalizedReasonCode === REMOTE_ERROR_CODE.UNSUPPORTED_TASK_TYPE &&
+    isCommentDetailTask(capability?.task)
+  );
 }
 
 function buildCapabilityReportDiagnostic(report = {}) {
@@ -229,7 +256,7 @@ function normalizeCapabilityRejection(capability = {}) {
     capability?.error,
     '当前页面暂时不能执行这个任务',
   );
-  const shouldFail = shouldFailCapabilityRejection(reasonCode);
+  const shouldFail = shouldFailCapabilityRejection(reasonCode, capability);
   const payload = {
     status: shouldFail ? 'failed' : 'pending',
     reason: 'capability_rejected',
@@ -323,6 +350,31 @@ function buildAccountBusyPayload({ accountId = '', platform = '', lockResult = {
     platform: String(platform || '').trim(),
   };
   if (normalized.retryAfterMs > 0) payload.retryAfterMs = normalized.retryAfterMs;
+  return payload;
+}
+
+function buildPreDispatchReleasePayload(preCheck = {}) {
+  const reasonCode = firstNonEmptyText(
+    preCheck.reasonCode,
+    preCheck.code,
+    preCheck.reason,
+    'pre_dispatch_check_failed',
+  );
+  const reasonMessage = firstNonEmptyText(
+    preCheck.reasonMessage,
+    preCheck.message,
+    preCheck.reason,
+    reasonCode,
+  );
+  const payload = {
+    status: 'pending',
+    reason: reasonCode,
+    reasonCode,
+    errorMessage: reasonMessage,
+    userMessage: reasonMessage,
+  };
+  const retryAfterMs = toFiniteNumber(preCheck.retryAfterMs, 0);
+  if (retryAfterMs > 0) payload.retryAfterMs = retryAfterMs;
   return payload;
 }
 
@@ -932,7 +984,20 @@ export function createTaskPoller(deps = {}) {
   async function notifyContentScriptToStop(activeTask = {}) {
     const tabId = activeTask?.tabId;
     if (!tabId) return;
+    const taskControl = {
+      taskId: String(activeTask.externalTaskId || activeTask.taskId || '').trim(),
+      taskType: String(activeTask.taskType || '').trim(),
+      collectionRunId: String(activeTask.pluginRunId || '').trim(),
+      action: REMOTE_TASK_CONTROL_ACTION.STOP,
+      protocolVersion: 'v1',
+    };
     try {
+      const result = await chrome.tabs.sendMessage(tabId, {
+        action: 'workbenchTaskControl',
+        command: 'stop',
+        taskControl,
+      });
+      if (result?.success !== false && result?.accepted !== false && !result?.error) return;
       await chrome.tabs.sendMessage(tabId, {
         action: 'workbenchTaskControl',
         command: 'stop',
@@ -1088,12 +1153,39 @@ export function createTaskPoller(deps = {}) {
     if (typeof deps.beforeDispatch === 'function') {
       preCheck = await deps.beforeDispatch(task);
       if (preCheck?.shouldPause) {
+        if (lease) {
+          const payload = buildPreDispatchReleasePayload(preCheck);
+          await patchTask(task.id, {
+            status: 'pending',
+            progress: 0,
+            errorMessage: payload.errorMessage,
+          });
+          if (typeof deps.enqueueEvent === 'function') {
+            const executorInstanceId = await resolveExecutorInstanceId();
+            await deps.enqueueEvent({
+              taskId: task.id,
+              pluginRunId: '',
+              eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_RELEASED,
+              source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+              sequence: Date.now(),
+              ...buildLeaseEventFields({
+                task,
+                lease,
+                executorInstanceId,
+                accountId: preCheck?.accountId,
+              }),
+              payload,
+            });
+            if (typeof deps.flushDeltas === 'function') await deps.flushDeltas();
+          }
+          await clearActiveLease();
+          return { success: false, skipped: true, reason: payload.reasonCode };
+        }
         await patchTask(task.id, {
           status: 'paused',
           progress: 5,
           errorMessage: preCheck.reason || 'pre_dispatch_check_failed',
         });
-        if (lease) await clearActiveLease();
         return { success: false, skipped: true, reason: preCheck.reason };
       }
     }
@@ -1142,6 +1234,7 @@ export function createTaskPoller(deps = {}) {
       const rejection = normalizeCapabilityRejection({
         ...capability,
         taskType: task.taskType,
+        task,
       });
       const executorInstanceId = await resolveExecutorInstanceId();
       const eventFields = buildLeaseEventFields({
@@ -1366,7 +1459,7 @@ export function createTaskPoller(deps = {}) {
       pluginRunId: dispatchCollectionRunId,
       executorInstanceId,
       accountId,
-      tabId: task?.tabId || null,
+      tabId: toOptionalInteger(dispatch?.tabId) || toOptionalInteger(task?.tabId) || null,
       workbenchStatus: dispatchCollectionRunId ? 'running' : 'dispatched',
       resultFingerprint: '',
       controlCursor: '',
@@ -1609,10 +1702,13 @@ export function createTaskPoller(deps = {}) {
 
     let result;
     try {
-        result = await deps.getResultPackage({
+        const lookup = {
           collectionRunId: String(activeTask.pluginRunId || '').trim(),
           externalTaskId: String(activeTask.externalTaskId || '').trim(),
-        });
+        };
+        const tabId = toOptionalInteger(activeTask.tabId);
+        if (tabId) lookup.tabId = tabId;
+        result = await deps.getResultPackage(lookup);
     } catch (error) {
       result = { success: false, error: String(error?.message || error || 'result_lookup_failed') };
     }
@@ -1620,6 +1716,36 @@ export function createTaskPoller(deps = {}) {
     if (!result?.success) {
       if (hasResultLookupError(result)) {
         const now = getNow();
+        if (
+          activeTask.workbenchStatus === 'running' &&
+          now - Number(activeTask.dispatchedAtMs || 0) >= RUNNING_RESULT_LOOKUP_TIMEOUT_MS
+        ) {
+          const handoffErrorMessage = '采集页结果包没有交回工作台：插件没有找到本轮执行页，已停止这条卡住的任务。';
+          await patchTask(activeTask.taskId, {
+            status: 'failed',
+            progress: 100,
+            pluginRunId: activeTask.pluginRunId || null,
+            errorMessage: handoffErrorMessage,
+          });
+          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+            status: 'failed',
+            progress: 100,
+            reason: 'result_package_handoff_lost',
+            reasonCode: 'result_package_handoff_lost',
+            errorMessage: handoffErrorMessage,
+            userMessage: handoffErrorMessage,
+          });
+          await notifyContentScriptToStop(activeTask);
+          state.activeTask = null;
+          state.seenControlIds.clear();
+          await clearActiveLease(activeTask);
+          return {
+            success: false,
+            failed: true,
+            reason: 'result_package_handoff_lost',
+            cleanupTask: cleanupTaskSnapshot(activeTask),
+          };
+        }
         if (
           activeTask.workbenchStatus === 'dispatched' &&
           now - Number(activeTask.dispatchedAtMs || 0) >= DISPATCH_STARTUP_TIMEOUT_MS

@@ -1,9 +1,13 @@
 # 当前待办总表
 
-> 更新日期：2026-05-27
+> 更新日期：2026-05-29
 > 目的：把当前真正仍活跃的待办从验收报告、活跃计划、`progress.txt` 和技术债清单里收拢到同一处，避免状态漂移。
 
 ## 0. 最近完成
+
+- [x] 2.0.26 抖音结果包交接与 Dashboard 评论同步修复完成：线上证据确认抖音执行页本地已经把本轮任务打包为 packaged，但工作台只有心跳没有记录和完成事件。插件现在会保存派单时的执行页，结果包回取直接找本轮页面；如果 running 后仍长期找不到结果包，会失败为可读的“结果包没有交回工作台”，不再无限显示采集中。Dashboard 手动同步小红书评论改为按大批量等待，并按评论登记数展示 50 / 200 / 500 条同步结果，不再用“未知错误”掩盖真实状态。验证：`node --test tests/background-task-target-resolution.test.mjs tests/dashboard-response-envelope.test.mjs tests/dashboard-bridge-sync.test.mjs tests/shared-messaging-send-to-tab.test.mjs tests/workbench-task-poller.test.mjs tests/dashboard-workbench-sync.test.mjs` 通过 67 个用例。
+
+- [x] 2.0.25 评论任务调度回流修复完成：XHS / Douyin 详情评论任务如果能力检查只报“任务类型不支持”，插件现在会把任务标记为失败并释放租约，不再退回 `pending` 造成同一任务反复接单；页面已删除、错误页、无权限访问的准备状态也会继续被当作终态失败处理。本地找不到可用账号时，插件会释放服务端租约并回到待接单池，不再把工位长期占在 paused 任务上。验证：新增失败复现后修复，`node --test tests/workbench-task-poller.test.mjs`、`npm run check:contracts`、`npm run test:douyin`、`npm run build` 和 `npm run release:verify -- --version 2.0.25 --zip releases/linggan-boom-v2.0.25.zip` 均通过。
 
 - [x] 执行可靠性中期补充收口完成：批量任务新增断点续跑 checkpoint，XHS / Douyin 批量笔记与批量评论在页面刷新或后台恢复后会从下一条继续；extractor 输出新增强结构校验，`note / comment / author / media` 不满足最小可用结构时会被同步队列拦下，并转成任务失败和健康计数；平台能力判断新增统一 Adapter contract，`contentDataRuntime` 不再手写两套能力报告；协议边界新增 `npm run check:contracts`，只对协议、运行态、目标身份和 adapter 文件做 `checkJs`；工作台能力不匹配事件已补进插件协议常量，避免严格校验时误判非法事件；新增 `docs/ACCEPTANCE_REPORT_2026-05-24_EXECUTION_FAULT_DRILL.md`，记录 Service Worker 恢复、tab 关闭、页面刷新重注入、同账号互斥、辅助页清理和控制指令演练；发布包已升到 `2.0.19` 并同步工作台下载目录，SHA256 为 `3e1304635807e6d43e205a58591c5560b598d6d9c07db807a3da0d52a88e625b`，大小 `394011` 字节。验证：本轮定向可靠性 / Adapter / schema / 故障演练测试均通过，`npm run check:contracts`、`npm run build`、`npm run release:verify -- --version 2.0.19 --zip releases/linggan-boom-v2.0.19.zip` 通过。
 

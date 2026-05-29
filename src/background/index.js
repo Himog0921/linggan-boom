@@ -322,7 +322,7 @@ function getTaskStrategy(task = {}) {
 
 function isRecoverableConnectionError(error) {
   const message = String(error?.message || error || '');
-  return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout/i.test(message);
+  return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout|Cannot access contents|Extension manifest must request permission/i.test(message);
 }
 
 function buildContentScriptUnavailableCapabilityResponse({ task = {}, error = null } = {}) {
@@ -1756,6 +1756,7 @@ const bgHandlers = {
       success: true,
       accepted: true,
       taskId: internalCommand.taskMeta.externalTaskId,
+      tabId,
       taskType: internalCommand.taskMeta.externalTaskType,
       dispatchAction: internalCommand.action,
       dispatchTarget: internalCommand.dispatchTarget,
@@ -2235,7 +2236,10 @@ const taskPoller = createTaskPoller({
       tabId,
       task: buildTaskEnvelopeFromCollectionTask(preparedTask),
     }, {});
-    return response;
+    return {
+      ...response,
+      tabId: response?.tabId || tabId,
+    };
   },
   getResultPackage: async (lookup = {}) => {
     const normalizedLookup = lookup && typeof lookup === 'object'

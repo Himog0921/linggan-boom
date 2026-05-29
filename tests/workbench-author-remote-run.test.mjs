@@ -4,6 +4,8 @@ import assert from 'node:assert/strict';
 import { normalizeAuthorRecord } from '../src/db/recordNormalization.js';
 import { createContentMessageHandlers } from '../src/content/messageHandlers.js';
 import { MSG } from '../src/shared/constants.js';
+import { mapTaskControlToInternalCommand } from '../src/workbench/runtime/taskControlMapper.js';
+import { REMOTE_TASK_CONTROL_ACTION, WORKBENCH_MESSAGE_TYPE } from '../src/workbench/protocol/schema.js';
 
 test('normalizeAuthorRecord preserves collectionRunId for author records', () => {
   const normalized = normalizeAuthorRecord({
@@ -14,6 +16,21 @@ test('normalizeAuthorRecord preserves collectionRunId for author records', () =>
   });
 
   assert.equal(normalized.collectionRunId, 'run_author_1');
+});
+
+test('collect author task controls route to the active content page', () => {
+  const command = mapTaskControlToInternalCommand({
+    type: WORKBENCH_MESSAGE_TYPE.TASK_CONTROL,
+    taskId: 'wb_task_author_control_1',
+    taskType: 'douyin.collectAuthor',
+    action: REMOTE_TASK_CONTROL_ACTION.STOP,
+    protocolVersion: 'v1',
+  }, { tabId: 42 });
+
+  assert.equal(command.dispatchTarget, 'content');
+  assert.equal(command.action, MSG.WORKBENCH_TASK_CONTROL);
+  assert.equal(command.payload.taskControl.taskId, 'wb_task_author_control_1');
+  assert.equal(command.payload.taskControl.action, REMOTE_TASK_CONTROL_ACTION.STOP);
 });
 
 test('remote author collection creates a collection run and passes collectionRunId into xhs collector', async () => {
@@ -166,6 +183,106 @@ test('remote author collection can acknowledge async dispatch before collector f
 
   assert.equal(calls[1][0], 'markDone');
   assert.equal(calls[1][1], 'run_author_async_1');
+});
+
+test('remote douyin author collection stops and packages the partial author result', async () => {
+  const calls = [];
+  let collectorStarted = false;
+  let collectorOptions = null;
+  let releaseCollector;
+  let resolveStopped;
+  const collectorDone = new Promise((resolve) => {
+    releaseCollector = resolve;
+  });
+  const stoppedDone = new Promise((resolve) => {
+    resolveStopped = resolve;
+  });
+
+  const collectionRunStore = {
+    async createRun(input) {
+      calls.push(['createRun', input]);
+      return { collectionRunId: 'run_douyin_author_stop_1' };
+    },
+    async markDone() {
+      throw new Error('markDone should not be called after stop');
+    },
+    async markStopped(runId, payload) {
+      calls.push(['markStopped', runId, payload]);
+      resolveStopped(payload);
+      return { collectionRunId: runId, ...payload };
+    },
+    async markFailed() {
+      throw new Error('markFailed should not be called after stop');
+    },
+  };
+
+  const handlers = createContentMessageHandlers({
+    MSG,
+    isDouyinPage: () => true,
+    collectAuthor: async () => ({}),
+    collectDouyinAuthor: async (options = {}) => {
+      collectorStarted = true;
+      collectorOptions = options;
+      await collectorDone;
+      return {
+        ok: true,
+        data: {
+          userId: 'dy_author_stop_1',
+          platformAuthorId: 'dy_author_stop_1',
+          name: '抖音作者',
+        },
+      };
+    },
+    noteStore: { count: async () => 0, getAll: async () => [] },
+    commentStore: { count: async () => 0, getAll: async () => [] },
+    authorStore: { count: async () => 0, getAll: async () => [] },
+    reportDone: () => {
+      throw new Error('reportDone should not be called after stop');
+    },
+    batchMessageHandlers: {},
+    extractNoteId: () => '',
+    downloadNoteMediaFromRecord: async () => ({}),
+    generateCsv: () => '',
+    downloadFile: () => {},
+    backfillLegacyAiReadyFields: async () => ({}),
+    getPageContext: async () => ({ platform: 'douyin', pageType: 'profile' }),
+    collectionRunStore,
+  });
+
+  const accepted = await handlers[MSG.COLLECT_AUTHOR]({
+    triggerSource: 'workbench_dispatch',
+    asyncDispatch: true,
+    externalTaskMeta: {
+      externalTaskId: 'wb_task_douyin_author_stop_1',
+      externalTaskType: 'douyin.collectAuthor',
+      protocolVersion: 'v1',
+    },
+  });
+
+  assert.equal(accepted.success, true);
+  assert.equal(accepted.pending, true);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(collectorStarted, true);
+
+  const stopped = await handlers[MSG.WORKBENCH_TASK_CONTROL]({
+    taskControl: {
+      taskId: 'wb_task_douyin_author_stop_1',
+      taskType: 'douyin.collectAuthor',
+      collectionRunId: 'run_douyin_author_stop_1',
+      action: REMOTE_TASK_CONTROL_ACTION.STOP,
+      protocolVersion: 'v1',
+    },
+  });
+
+  assert.equal(stopped.success, true);
+  assert.equal(stopped.status, 'stopping');
+  assert.equal(collectorOptions.shouldStop(), true);
+
+  releaseCollector();
+  const stoppedPayload = await stoppedDone;
+  assert.deepEqual(calls[1], ['markStopped', 'run_douyin_author_stop_1', stoppedPayload]);
+  assert.equal(stoppedPayload.itemsSucceeded, 1);
+  assert.deepEqual(stoppedPayload.targetIds, ['dy_author_stop_1']);
 });
 
 test('remote xhs author baseline waits for profile batch notes and reuses the same collection run', async () => {

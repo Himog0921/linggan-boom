@@ -195,6 +195,47 @@ function pickQualityMeta(item = {}) {
   };
 }
 
+export const DASHBOARD_SYNC_TO_WORKBENCH_TIMEOUT_MS = 45000;
+
+function countValue(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.max(0, Math.floor(parsed)) : fallback;
+}
+
+export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result = {}) {
+  const normalizedTab = String(tab || '').trim();
+  const meta = result?.meta && typeof result.meta === 'object' ? result.meta : {};
+  const total = countValue(selectedCount);
+  let imported = countValue(result?.imported);
+  let skipped = countValue(result?.skipped);
+  let invalid = 0;
+
+  if (normalizedTab === 'comments') {
+    imported = countValue(meta.commentsRegistered, imported);
+    skipped = countValue(meta.commentsSkipped, skipped);
+    invalid = countValue(meta.commentsInvalid);
+  } else if (normalizedTab === 'authors') {
+    const authorsReceived = countValue(meta.authorsReceived, total);
+    imported = countValue(meta.authorsIngested, imported);
+    skipped = countValue(result?.skipped, Math.max(authorsReceived - imported, 0));
+  }
+
+  const details = [];
+  if (meta.notesReceived != null) details.push(`笔记 ${countValue(meta.notesReceived)}`);
+  if (meta.commentsReceived != null) details.push(`评论 ${countValue(meta.commentsReceived)}`);
+  if (meta.authorsReceived != null) details.push(`博主 ${countValue(meta.authorsReceived)}`);
+
+  return {
+    imported,
+    skipped,
+    invalid,
+    total,
+    details,
+    detailText: details.length ? `（${details.join('，')}）` : '',
+    failReason: String(meta.failReason || meta.errorReason || '').trim(),
+  };
+}
+
 export function buildWorkbenchSyncPayload(tab = '', items = [], { extractedAt = Date.now() } = {}) {
   const selectedItems = Array.isArray(items) ? items : [];
   const normalizedTab = String(tab || '').trim();

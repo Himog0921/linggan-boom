@@ -73,11 +73,11 @@
 
 | Action | 发送方 → 接收方 | Payload | 说明 |
 |--------|----------------|---------|------|
-| `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台 |
+| `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台；Dashboard 会按大批量评论同步等待，评论成功数以工作台返回的评论登记数为准 |
 | `WORKBENCH_CAPABILITY_CHECK` | Background → Content | `{ tabId?, task }` | 对远程任务做页面能力检查 |
-| `WORKBENCH_DISPATCH_TASK` | Background → Content | `{ tabId?, task }` | 将工作台任务协议映射到内部动作并派单 |
+| `WORKBENCH_DISPATCH_TASK` | Background → Content | `{ tabId?, task }` | 将工作台任务协议映射到内部动作并派单；成功回包必须保留本次执行页 `tabId` |
 | `WORKBENCH_TASK_CONTROL` | Background → Content | `{ tabId?, taskControl?, command? }` | 对已接单任务执行暂停 / 继续 / 停止；无 `taskControl` 的旧式控制消息也归口到 Content runtime 的工作台处理器 |
-| `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ externalTaskId?, collectionRunId? }` | 从页面侧 `collectionRuns` 打包结果并回传给工作台 |
+| `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ tabId?, externalTaskId?, collectionRunId? }` | 从本次执行页的 `collectionRuns` 打包结果并回传给工作台 |
 | `WORKBENCH_LOCAL_CONTROL_EVENT` | Content → Background | `{ externalTaskId?, collectionRunId?, taskType?, controlAction, status, message?, occurredAt? }` | 插件本地暂停 / 继续 / 停止同步回工作台事件流 |
 | `WORKBENCH_DELTA_FLUSH` | 内部 / 调试 → Background | `{}` | 触发工作台增量 outbox 立即 flush |
 | `AUTHORIZE_PLUGIN_ACCESS` | Popup → Background | `{ serverUrl, authorizationCode, browserLabel? }` | 使用内容工作台设置里生成的授权码激活当前浏览器 |
@@ -87,6 +87,8 @@
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
 > 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Content 入口不再单独截获 `WORKBENCH_TASK_CONTROL`，所有暂停 / 继续 / 停止都进入 runtime 的工作台处理器，再按是否带 `taskControl` 分别控制远程任务登记或旧式页面批量控制器。Background 通过执行工位协议和内容工作台对账，再按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
+>
+> 工作台远程任务的最终结果包必须从执行页读取，不能从 Background 本地库兜底伪装。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
 > 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
 
