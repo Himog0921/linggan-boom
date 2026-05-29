@@ -851,6 +851,16 @@ function deriveExternalRecordId(recordType = WORKBENCH_RECORD_TYPE.NOTE, record 
   return String(record.noteId || record.platformContentId || record.contentId || record.url || record.id || '').trim();
 }
 
+function incrementStreamedRecordCount(counts = {}, recordType = '') {
+  const next = counts && typeof counts === 'object' && !Array.isArray(counts)
+    ? { ...counts }
+    : {};
+  const key = String(recordType || '').trim();
+  if (!key) return next;
+  next[key] = Math.max(0, Number(next[key] || 0) || 0) + 1;
+  return next;
+}
+
 async function enqueueWorkbenchProgressEvent(message = {}, sender = {}) {
   const activeTask = getActiveWorkbenchTaskForMessage(message, sender);
   if (!activeTask) return;
@@ -1591,6 +1601,13 @@ const bgHandlers = {
       sequence: Number(msg.sequence || Date.now()),
       payload: record,
       collectedAt: String(msg.collectedAt || ''),
+    });
+    taskPoller?.updateActiveTask?.((current) => {
+      if (!current || current.taskId !== activeTask.taskId) return null;
+      return {
+        firstRecordSeen: true,
+        streamedRecordCounts: incrementStreamedRecordCount(current.streamedRecordCounts, recordType),
+      };
     });
     return { success: true };
   },

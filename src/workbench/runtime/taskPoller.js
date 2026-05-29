@@ -450,6 +450,39 @@ function normalizeObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
 
+function normalizeStreamedRecordCounts(value = {}) {
+  const source = normalizeObject(value);
+  return {
+    note: Math.max(0, Number(source.note || 0) || 0),
+    comment: Math.max(0, Number(source.comment || 0) || 0),
+    author: Math.max(0, Number(source.author || 0) || 0),
+    media: Math.max(0, Number(source.media || 0) || 0),
+  };
+}
+
+function countStreamedRecords(value = {}) {
+  const counts = normalizeStreamedRecordCounts(value);
+  return counts.note + counts.comment + counts.author + counts.media;
+}
+
+function buildStreamedRecordResultSummary(activeTask = {}) {
+  const counts = normalizeStreamedRecordCounts(activeTask.streamedRecordCounts);
+  return {
+    notes: counts.note,
+    comments: counts.comment,
+    authors: counts.author,
+    mediaAssets: counts.media,
+    streamedRecords: countStreamedRecords(counts),
+    handoffRecovered: true,
+    records: {
+      notes: [],
+      comments: [],
+      authors: [],
+      mediaAssets: [],
+    },
+  };
+}
+
 function normalizePersistedActiveTaskContext(value = {}) {
   const source = normalizeObject(value);
   const taskId = String(source.taskId || source.id || '').trim();
@@ -475,6 +508,7 @@ function normalizePersistedActiveTaskContext(value = {}) {
     dispatchedAtMs: toFiniteNumber(source.dispatchedAtMs, 0),
     pendingAccountUsageId: String(source.pendingAccountUsageId || '').trim(),
     firstRecordSeen: Boolean(source.firstRecordSeen),
+    streamedRecordCounts: normalizeStreamedRecordCounts(source.streamedRecordCounts),
     lease: normalizeObject(source.lease),
   };
 }
@@ -838,6 +872,7 @@ function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null
       || now,
     pendingAccountUsageId: String(matchingPersisted?.pendingAccountUsageId || '').trim(),
     firstRecordSeen: Boolean(matchingPersisted?.firstRecordSeen),
+    streamedRecordCounts: normalizeStreamedRecordCounts(matchingPersisted?.streamedRecordCounts),
     stopRequestedAtMs: toFiniteNumber(matchingPersisted?.stopRequestedAtMs, 0),
     stopControlAction: String(task?.controlAction || matchingPersisted?.stopControlAction || '').trim(),
     deleteRequested: Boolean(task?.deletedAt || matchingPersisted?.deleteRequested),
@@ -1564,6 +1599,7 @@ export function createTaskPoller(deps = {}) {
       dispatchedAtMs: getNow(),
       pendingAccountUsageId: '',
       firstRecordSeen: false,
+      streamedRecordCounts: {},
     };
     state.activeLease = lease
       ? normalizeLeaseSnapshot(lease)
@@ -1832,6 +1868,37 @@ export function createTaskPoller(deps = {}) {
           activeTask.workbenchStatus === 'running' &&
           now - Number(activeTask.dispatchedAtMs || 0) >= RUNNING_RESULT_LOOKUP_TIMEOUT_MS
         ) {
+          if (countStreamedRecords(activeTask.streamedRecordCounts) > 0) {
+            const streamedSummary = buildStreamedRecordResultSummary(activeTask);
+            const recoveredMessage = '采集结果已边采边写回工作台，最后结果包丢失；已按已写回内容完成这条任务。';
+            await patchTask(activeTask.taskId, {
+              status: 'completed',
+              progress: 100,
+              pluginRunId: activeTask.pluginRunId || null,
+              resultSummary: streamedSummary,
+              errorMessage: null,
+            });
+            await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED, {
+              status: 'completed',
+              progress: 100,
+              reason: 'result_package_handoff_lost_streamed_records',
+              reasonCode: 'result_package_handoff_lost_streamed_records',
+              message: recoveredMessage,
+              userMessage: recoveredMessage,
+              latestSummary: streamedSummary,
+            });
+            await notifyContentScriptToStop(activeTask);
+            state.activeTask = null;
+            state.seenControlIds.clear();
+            await clearActiveLease(activeTask);
+            return {
+              success: true,
+              final: true,
+              status: 'completed',
+              reason: 'result_package_handoff_lost_streamed_records',
+              cleanupTask: cleanupTaskSnapshot(activeTask),
+            };
+          }
           const handoffErrorMessage = '采集页结果包没有交回工作台：插件没有找到本轮执行页，已停止这条卡住的任务。';
           await patchTask(activeTask.taskId, {
             status: 'failed',

@@ -2,6 +2,7 @@ import { COMMENT_DEPTH_MODE } from '../../shared/constants.js';
 import {
   MONITOR_RECORD_MODE,
   MONITOR_TASK_STRATEGY,
+  WORKBENCH_RECORD_TYPE,
 } from '../../workbench/protocol/schema.js';
 import {
   buildDouyinSurfaceNoteRecords,
@@ -27,6 +28,50 @@ const buildAuthorBaselineShortfallNote = ({
 };
 
 const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
+
+function firstRecordId(...values) {
+  for (const value of values) {
+    const text = String(value || '').trim();
+    if (text) return text;
+  }
+  return '';
+}
+
+function normalizeCollectedAt(value) {
+  if (!value) return '';
+  if (typeof value === 'string') return value;
+  const timestamp = Number(value);
+  if (!Number.isFinite(timestamp)) return '';
+  return new Date(timestamp).toISOString();
+}
+
+function emitWorkbenchRecordDelta(reportWorkbenchRecord, {
+  recordType = '',
+  record = {},
+  collectionRunId = '',
+  externalTaskId = '',
+  sequence = Date.now(),
+} = {}) {
+  if (typeof reportWorkbenchRecord !== 'function') return;
+  const payload = record && typeof record === 'object' && !Array.isArray(record) ? record : {};
+  if (Object.keys(payload).length === 0) return;
+  const externalRecordId = recordType === WORKBENCH_RECORD_TYPE.AUTHOR
+    ? firstRecordId(payload.platformAuthorId, payload.authorId, payload.userId, payload.profileUrl)
+    : firstRecordId(payload.noteId, payload.platformContentId, payload.contentId, payload.url);
+  try {
+    reportWorkbenchRecord({
+      recordType,
+      externalRecordId,
+      record: payload,
+      collectionRunId,
+      externalTaskId,
+      sequence,
+      collectedAt: normalizeCollectedAt(payload.collectedAt),
+    });
+  } catch (error) {
+    console.warn('[灵感爆爆爆] 工作台记录增量上报失败:', error);
+  }
+}
 
 const inferSingleNoteFailureReasonCode = (message = '') => {
   if (/未稳定就绪|未找到笔记数据|数据结构异常|加载/i.test(message)) {
@@ -109,6 +154,7 @@ export function createCollectionHandlers({
   noteStore,
   reportDone,
   reportProgress,
+  reportWorkbenchRecord,
   reportTaskError,
   batchMessageHandlers,
   extractNoteId,
@@ -505,6 +551,12 @@ export function createCollectionHandlers({
                 throw new Error(result?.error || '抖音博主采集失败');
               }
               douyinAuthor = result.data;
+              emitWorkbenchRecordDelta(reportWorkbenchRecord, {
+                recordType: WORKBENCH_RECORD_TYPE.AUTHOR,
+                record: douyinAuthor,
+                collectionRunId: remoteRun?.collectionRunId || '',
+                externalTaskId: msg.externalTaskMeta?.externalTaskId || '',
+              });
               await waitIfPaused();
               const surfaceRecords = shouldStop()
                 ? []
@@ -514,6 +566,15 @@ export function createCollectionHandlers({
                   shouldStop,
                   waitIfPaused,
                 });
+              surfaceRecords.forEach((record, index) => {
+                emitWorkbenchRecordDelta(reportWorkbenchRecord, {
+                  recordType: WORKBENCH_RECORD_TYPE.NOTE,
+                  record,
+                  collectionRunId: remoteRun?.collectionRunId || '',
+                  externalTaskId: msg.externalTaskMeta?.externalTaskId || '',
+                  sequence: Date.now() + index + 1,
+                });
+              });
               const stopped = shouldStop();
               const surfaceTargetIds = surfaceRecords
                 .map((record) => String(record.platformContentId || record.noteId || '').trim())

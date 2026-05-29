@@ -2457,6 +2457,87 @@ test('task poller fails running task when the result package handoff is lost', a
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller completes running task from streamed records when final result package handoff is lost', async () => {
+  const patches = [];
+  const events = [];
+  const lookups = [];
+  let nowMs = Date.parse('2026-04-20T16:00:00.000Z');
+  const poller = createTaskPoller({
+    now: () => nowMs,
+    claimTaskLease: claimTask([
+      {
+        id: 'task_handoff_streamed',
+        taskType: 'douyin.collectAuthor',
+        platform: 'douyin',
+        source: 'monitor',
+        taskStrategy: 'author_baseline',
+        target: 'https://www.douyin.com/user/demo',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_handoff_streamed',
+      tabId: 790,
+      collectionRunId: 'run_handoff_streamed',
+      resultLookup: {
+        externalTaskId: 'task_handoff_streamed',
+        collectionRunId: 'run_handoff_streamed',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-20T16:20:00.000Z' }),
+    getResultPackage: async (lookup) => {
+      lookups.push(lookup);
+      return {
+        success: false,
+        error: 'collectionRun not found for collectionRunId: run_handoff_streamed',
+      };
+    },
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  await poller.tick();
+  poller.updateActiveTask({
+    firstRecordSeen: true,
+    streamedRecordCounts: {
+      note: 2,
+      author: 1,
+    },
+  });
+  nowMs += 13 * 60 * 1000;
+  const result = await poller.tick();
+
+  assert.equal(result.final, true);
+  assert.equal(result.status, 'completed');
+  assert.equal(result.reason, 'result_package_handoff_lost_streamed_records');
+  assert.deepEqual(lookups[0], {
+    collectionRunId: 'run_handoff_streamed',
+    externalTaskId: 'task_handoff_streamed',
+    tabId: 790,
+  });
+  assert.equal(patches.at(-1)[0], 'task_handoff_streamed');
+  assert.equal(patches.at(-1)[1].status, 'completed');
+  assert.equal(patches.at(-1)[1].progress, 100);
+  assert.equal(patches.at(-1)[1].pluginRunId, 'run_handoff_streamed');
+  assert.equal(patches.at(-1)[1].errorMessage, null);
+  assert.equal(patches.at(-1)[1].resultSummary.notes, 2);
+  assert.equal(patches.at(-1)[1].resultSummary.authors, 1);
+  assert.equal(patches.at(-1)[1].resultSummary.streamedRecords, 3);
+  assert.equal(patches.at(-1)[1].resultSummary.handoffRecovered, true);
+  assert.equal(events.at(-1).eventType, 'task.completed');
+  assert.equal(events.at(-1).payload.reason, 'result_package_handoff_lost_streamed_records');
+  assert.equal(poller.getState().activeTask, null);
+});
+
 test('task poller does not startup-timeout tasks that were locally marked paused', async () => {
   const patches = [];
   let nowMs = Date.parse('2026-04-20T16:00:00.000Z');

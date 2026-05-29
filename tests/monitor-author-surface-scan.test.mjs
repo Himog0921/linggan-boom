@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 
 import {
   buildMonitorTaskMeta,
+  buildDouyinSurfaceNoteRecords,
   buildXhsSurfaceNoteRecords,
 } from '../src/workbench/runtime/monitorTask.js';
+import { buildDouyinBatchTargetFromAweme } from '../src/platforms/douyin/batchDiscovery.js';
 import {
   MONITOR_RECORD_MODE,
   MONITOR_TASK_STRATEGY,
@@ -147,6 +149,40 @@ test('xhs author surface records preserve media candidates for workbench preview
   assert.equal(records[0].thumbnail, 'https://sns-img.example.com/candidate-cover.jpg');
   assert.deepEqual(records[0].images, ['https://sns-img.example.com/candidate-cover.jpg']);
   assert.deepEqual(records[0].imageCandidates, [[{ url: 'https://sns-img.example.com/candidate-cover.jpg' }]]);
+});
+
+test('douyin author surface records preserve aweme cover candidates for workbench previews', () => {
+  const target = buildDouyinBatchTargetFromAweme({
+    aweme_id: '7601151661356158258',
+    desc: '抖音封面候选',
+    statistics: {
+      digg_count: 66,
+      comment_count: 23,
+    },
+    video: {
+      cover: {
+        url_list: ['https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg'],
+      },
+      dynamic_cover: {
+        url_list: ['https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-b.webp'],
+      },
+    },
+  }, 0);
+
+  const records = buildDouyinSurfaceNoteRecords([target], {
+    limit: 1,
+  });
+
+  assert.equal(target.coverImg, 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg');
+  assert.equal(records[0].cover, 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg');
+  assert.equal(records[0].coverImg, 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg');
+  assert.equal(records[0].coverUrl, 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg');
+  assert.equal(records[0].thumbnail, 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg');
+  assert.deepEqual(records[0].images, ['https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg']);
+  assert.deepEqual(records[0].imageCandidates, [
+    { url: 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-a.jpeg' },
+    { url: 'https://p3-sign.douyinpic.com/tos-cn-cover-main/cover-b.webp' },
+  ]);
 });
 
 test('xhs author surface records keep signed share links when xsec_token is already present', () => {

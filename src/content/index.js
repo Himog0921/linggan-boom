@@ -23,7 +23,13 @@ import { loadContentDataRuntimeFactory } from './contentDataRuntimeLoader.js';
 import { loadDouyinRuntime } from './douyinRuntime.js';
 import { createRuntimeMessageListener } from './messageListener.js';
 import { createXhsPageController } from './xhsPageController.js';
-import { reportDone, reportProgress, isContextValid, sendToBackground } from '../shared/messaging.js';
+import {
+  reportDone,
+  reportProgress,
+  reportWorkbenchRecord,
+  isContextValid,
+  sendToBackground,
+} from '../shared/messaging.js';
 import { generateCsv, downloadFile, extractNoteId } from '../shared/utils.js';
 import { createManagedTaskController } from '../shared/managedTaskController.js';
 import { assertActivePluginAuthorization } from '../workbench/runtime/pluginAuthorization.js';
@@ -72,6 +78,7 @@ async function loadContentDataRuntime() {
         BatchNoteController,
         reportDone,
         reportProgress,
+        reportWorkbenchRecord,
         batchMessageHandlers,
         getBatchNoteCtrl: xhsPageController.getBatchNoteCtrl,
         getBatchCommentCtrl: xhsPageController.getBatchCommentCtrl,

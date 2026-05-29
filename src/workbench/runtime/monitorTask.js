@@ -264,6 +264,14 @@ export function buildDouyinSurfaceNoteRecords(targets = [], {
     .map((target, index) => {
       const platformContentId = normalizeString(target.awemeId || target.platformContentId || target.noteId || target.contentId).replace(/^dy_/, '');
       const url = normalizeDouyinUrl(target.href || target.url || (platformContentId ? `/video/${platformContentId}` : ''));
+      const images = Array.isArray(target.images) ? target.images.filter(Boolean) : [];
+      const imageCandidates = Array.isArray(target.imageCandidates) ? target.imageCandidates.filter(Boolean) : [];
+      const cover = firstText(target.cover)
+        || firstText(target.coverImg)
+        || firstText(target.coverUrl)
+        || firstText(target.thumbnail)
+        || pickMediaUrlFromArray(images)
+        || pickMediaUrlFromArray(imageCandidates);
       return withMonitorRecordMeta({
         ...createMonitorSurfaceSeedMeta(),
         noteId: platformContentId,
@@ -275,8 +283,12 @@ export function buildDouyinSurfaceNoteRecords(targets = [], {
         bodyText: normalizeString(target.titleHint || target.title || ''),
         url,
         canonicalUrl: url,
-        cover: normalizeString(target.cover || target.coverImg || target.coverUrl || target.thumbnail),
-        coverImg: normalizeString(target.coverImg || target.cover || target.coverUrl || target.thumbnail),
+        cover,
+        coverImg: firstText(target.coverImg) || cover,
+        coverUrl: firstText(target.coverUrl) || cover,
+        thumbnail: firstText(target.thumbnail) || cover,
+        images: images.length > 0 ? images : (cover ? [cover] : []),
+        imageCandidates,
         likes: parseCount(target.likes),
         comments: parseCount(target.comments),
         collects: parseCount(target.collects),

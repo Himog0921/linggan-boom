@@ -393,6 +393,7 @@ test('collection handlers write douyin author surface records for monitor author
   const discoverCalls = [];
   const bulkUpsertCalls = [];
   const doneCalls = [];
+  const reportedRecords = [];
   const previousWindow = globalThis.window;
 
   globalThis.window = {
@@ -420,6 +421,9 @@ test('collection handlers write douyin author surface records for monitor author
         async bulkUpsert(records) {
           bulkUpsertCalls.push(records);
         },
+      },
+      reportWorkbenchRecord: (record) => {
+        reportedRecords.push(record);
       },
       getPageContext: async () => ({ platform: 'douyin', pageType: 'profile' }),
       collectionRunStore: {
@@ -468,12 +472,27 @@ test('collection handlers write douyin author surface records for monitor author
     });
 
     assert.equal(result.success, true);
-    assert.deepEqual(discoverCalls, [[{ maxCount: 5, topByLikes: false }]]);
+    assert.equal(discoverCalls.length, 1);
+    assert.equal(discoverCalls[0][0].maxCount, 5);
+    assert.equal(discoverCalls[0][0].topByLikes, false);
+    assert.equal(typeof discoverCalls[0][0].shouldStop, 'function');
+    assert.equal(typeof discoverCalls[0][0].waitIfPaused, 'function');
     assert.equal(bulkUpsertCalls.length, 1);
     assert.equal(bulkUpsertCalls[0].length, 2);
     assert.equal(bulkUpsertCalls[0][0].platform, 'douyin');
     assert.equal(bulkUpsertCalls[0][0].collectionRunId, 'run_douyin_author_surface_1');
     assert.equal(bulkUpsertCalls[0][0].qualityReason, 'monitor_surface_seed');
+    assert.equal(reportedRecords.length, 3);
+    assert.equal(reportedRecords[0].recordType, 'author');
+    assert.equal(reportedRecords[0].collectionRunId, 'run_douyin_author_surface_1');
+    assert.equal(reportedRecords[0].externalTaskId, 'task_douyin_author_surface_1');
+    assert.equal(reportedRecords[0].externalRecordId, 'MS4wLjABAAAAauthor_1');
+    assert.equal(reportedRecords[1].recordType, 'note');
+    assert.equal(reportedRecords[1].collectionRunId, 'run_douyin_author_surface_1');
+    assert.equal(reportedRecords[1].externalTaskId, 'task_douyin_author_surface_1');
+    assert.equal(reportedRecords[1].externalRecordId, '7601151661356158258');
+    assert.equal(reportedRecords[2].recordType, 'note');
+    assert.equal(reportedRecords[2].externalRecordId, '7601089919720656178');
     assert.equal(doneCalls[0][0], 'run_douyin_author_surface_1');
     assert.equal(doneCalls[0][1].itemsPlanned, 3);
     assert.equal(doneCalls[0][1].itemsSucceeded, 3);

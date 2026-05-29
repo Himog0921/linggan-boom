@@ -559,15 +559,58 @@ export async function fetchDouyinSearchVideoPage(keyword, { offset = 0, count = 
   throw lastError || new Error('获取搜索结果作品列表失败');
 }
 
+function collectDouyinMediaUrls(value, depth = 0) {
+  if (!value || depth > 4) return [];
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    return trimmed && trimmed !== '[object Object]' ? [trimmed] : [];
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item) => collectDouyinMediaUrls(item, depth + 1));
+  }
+  if (typeof value === 'object') {
+    const urls = [];
+    const listKeys = ['url_list', 'urlList', 'urls', 'origin_url_list', 'originUrlList'];
+    for (const key of listKeys) {
+      urls.push(...collectDouyinMediaUrls(value[key], depth + 1));
+    }
+    const directKeys = ['url', 'src'];
+    for (const key of directKeys) {
+      urls.push(...collectDouyinMediaUrls(value[key], depth + 1));
+    }
+    return urls;
+  }
+  return [];
+}
+
+function getDouyinAwemeCoverCandidates(aweme = {}) {
+  const video = aweme?.video && typeof aweme.video === 'object' ? aweme.video : {};
+  const candidates = [
+    video.cover,
+    video.origin_cover,
+    video.dynamic_cover,
+    video.animated_cover,
+  ].flatMap((value) => collectDouyinMediaUrls(value));
+  return [...new Set(candidates.filter(Boolean))];
+}
+
 export function buildDouyinBatchTargetFromAweme(aweme = {}, index = 0) {
   const awemeId = String(aweme?.aweme_id || '').trim();
   if (!awemeId) return null;
+  const coverCandidates = getDouyinAwemeCoverCandidates(aweme);
+  const cover = coverCandidates[0] || '';
 
   return {
     key: awemeId,
     awemeId,
     href: `https://www.douyin.com/video/${awemeId}`,
     titleHint: String(aweme?.desc || '').trim(),
+    cover,
+    coverImg: cover,
+    coverUrl: cover,
+    thumbnail: cover,
+    images: cover ? [cover] : [],
+    imageCandidates: coverCandidates.map((url) => ({ url })),
     likes: Number(aweme?.statistics?.digg_count || 0),
     comments: Number(aweme?.statistics?.comment_count || 0),
     createTime: Number(aweme?.create_time || 0),
