@@ -743,6 +743,8 @@ body[data-theme="ac-ui"] .batch-settings-overlay {
 body[data-theme="ac-ui"] .batch-settings-dialog {
   width: 100%;
   max-width: calc(var(--w) - 24px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   background: linear-gradient(to right bottom, #e0fefb 0%, #f2e2e0 100%);
   border-radius: var(--ac-radius);
   box-shadow: -30px 150px 150px -150px rgba(0, 0, 0, 0.3);
@@ -813,7 +815,8 @@ body[data-theme="ac-ui"] .batch-checkbox input {
 }
 
 body[data-theme="ac-ui"] .count-options,
-body[data-theme="ac-ui"] .comment-depth-options {
+body[data-theme="ac-ui"] .comment-depth-options,
+body[data-theme="ac-ui"] .search-filter-options {
   display: grid;
   gap: 7px;
   margin-bottom: 10px;
@@ -821,9 +824,11 @@ body[data-theme="ac-ui"] .comment-depth-options {
 
 body[data-theme="ac-ui"] .count-options { grid-template-columns: repeat(4, 1fr); }
 body[data-theme="ac-ui"] .comment-depth-options { grid-template-columns: repeat(2, 1fr); }
+body[data-theme="ac-ui"] .search-filter-options { grid-template-columns: repeat(3, 1fr); }
 
 body[data-theme="ac-ui"] .count-options button,
-body[data-theme="ac-ui"] .comment-depth-options button {
+body[data-theme="ac-ui"] .comment-depth-options button,
+body[data-theme="ac-ui"] .search-filter-options button {
   border: 1px solid #ddd;
   border-radius: var(--ac-radius);
   background: #fff;
@@ -841,13 +846,15 @@ body[data-theme="ac-ui"] .comment-depth-options button {
 }
 
 body[data-theme="ac-ui"] .count-options button:hover,
-body[data-theme="ac-ui"] .comment-depth-options button:hover {
+body[data-theme="ac-ui"] .comment-depth-options button:hover,
+body[data-theme="ac-ui"] .search-filter-options button:hover {
   transform: translateY(-1px);
   box-shadow: var(--ac-shadow-lg);
 }
 
 body[data-theme="ac-ui"] .count-options button.active,
-body[data-theme="ac-ui"] .comment-depth-options button.active {
+body[data-theme="ac-ui"] .comment-depth-options button.active,
+body[data-theme="ac-ui"] .search-filter-options button.active {
   background: linear-gradient(to right, rgba(102, 195, 255, 0.3), rgba(171, 237, 198, 0.2));
   border-color: var(--ac-blue);
 }

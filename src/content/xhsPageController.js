@@ -1,6 +1,6 @@
 import { createCommentTaskController } from './commentTaskController.js';
 import { createCommentImageTaskController } from './commentImageTask.js';
-import { COMMENT_DEPTH_MODE, TASK_STATE } from '../shared/constants.js';
+import { COLLECT_MODE, COMMENT_DEPTH_MODE, TASK_STATE } from '../shared/constants.js';
 import { consumeSelectorHealthAlertMessage } from '../shared/selectorHealth.js';
 import { isTerminalTaskState, resolveTaskState } from '../shared/taskUi.js';
 import {
@@ -80,6 +80,7 @@ export function createXhsPageController({
     });
 
     if (progress.status === TASK_STATE.DONE || isTerminalTaskState(taskState)) {
+      toggleStopButton(false);
       activeTaskType = null;
       lastTaskSnapshot = null;
       hideTaskControlBar();
@@ -273,7 +274,8 @@ export function createXhsPageController({
           try {
             batchSettings = await showBatchSettingsDialog({
               title: '批量采集笔记',
-              enableTopLikes: true,
+              enableTopLikes: params.mode !== COLLECT_MODE.SEARCH,
+              enableSearchFilters: params.mode === COLLECT_MODE.SEARCH,
             });
           } catch {
             break;
@@ -303,7 +305,8 @@ export function createXhsPageController({
           try {
             batchSettings = await showBatchSettingsDialog({
               title: '批量采集评论',
-              enableTopLikes: true,
+              enableTopLikes: params.mode !== COLLECT_MODE.SEARCH,
+              enableSearchFilters: params.mode === COLLECT_MODE.SEARCH,
               enableCommentDepth: true,
               enableCommentLimit: true,
             });
@@ -328,6 +331,7 @@ export function createXhsPageController({
           }, {
             count: batchSettings.count || 10,
             topByLikes: Boolean(batchSettings.topByLikes),
+            searchFilters: batchSettings.searchFilters,
             commentLimit: Number(batchSettings.commentLimit || 0) || 0,
             commentDepthMode: batchSettings.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL,
           });
@@ -370,6 +374,11 @@ export function createXhsPageController({
       if (/Extension context invalidated|context invalidated/i.test(errMsg) || isContextValid() === false) {
         showToast(XHS_CONTEXT_REFRESH_MESSAGE, 'warning');
         return;
+      }
+      if (action === 'batchNotes' || action === 'batchComments') {
+        toggleStopButton(false);
+        hideTaskControlBar();
+        activeTaskType = null;
       }
       showToast(`操作失败：${err.message}`, 'error');
     }

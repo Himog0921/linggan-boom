@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { COMMENT_DEPTH_MODE } from '../../shared/constants.js';
-import { PLATFORM } from '../utils.js';
+import { PAGE_MODE, PLATFORM } from '../utils.js';
 import {
   getPopupBatchSettingsStorageKey,
   inferPopupBatchDefaults,
@@ -8,6 +8,11 @@ import {
   summarizeBatchPlan,
   writePopupBatchSettings,
 } from '../../shared/feedback.js';
+import {
+  XHS_SEARCH_FILTERS,
+  normalizeXhsSearchFilters,
+  summarizeXhsSearchFilters,
+} from '../../platforms/xhs/searchFilters.js';
 
 const COUNT_OPTIONS = [5, 10, 20, 50];
 
@@ -22,13 +27,16 @@ export default function BatchSettingsModal({
 }) {
   const [count, setCount] = useState(10);
   const [topByLikes, setTopByLikes] = useState(false);
+  const [searchFilters, setSearchFilters] = useState(() => normalizeXhsSearchFilters());
   const [commentLimit, setCommentLimit] = useState('');
   const [commentDepthMode, setCommentDepthMode] = useState(COMMENT_DEPTH_MODE.TWO_LEVEL);
 
   const isDouyin = platform === PLATFORM.DOUYIN;
   const isDyCommentBatch = isDouyin && type === 'comments';
   const isSingleComment = mode === 'single';
-  const showTopByLikes = (type === 'notes' || isDyCommentBatch) && !isSingleComment;
+  const isXhsSearchBatch = platform === PLATFORM.XHS && mode === PAGE_MODE.SEARCH && !isSingleComment;
+  const showTopByLikes = (type === 'notes' || isDyCommentBatch) && !isSingleComment && !isXhsSearchBatch;
+  const showXhsSearchFilters = isXhsSearchBatch && (type === 'notes' || type === 'comments');
   const showCommentDepth = type === 'comments';
   const showCommentLimit = type === 'comments';
   const showCountOptions = !isSingleComment;
@@ -49,7 +57,9 @@ export default function BatchSettingsModal({
     ? '批量采集评论'
     : (isDouyin ? '批量采集视频' : '批量采集笔记'));
 
-  const dialogSubtitle = commentLimitOptions?.subtitle || (type === 'comments'
+  const dialogSubtitle = commentLimitOptions?.subtitle || (showXhsSearchFilters
+    ? '选择采集数量和小红书搜索筛选'
+    : type === 'comments'
     ? (isDyCommentBatch ? '选择采集数量、选取方式、评论上限与采集深度' : '选择采集数量、评论上限与采集深度')
     : '选择采集数量和排序方式');
 
@@ -60,6 +70,7 @@ export default function BatchSettingsModal({
       const remembered = readPopupBatchSettings(settingsStorageKey) || {};
       setCount(Number(remembered.count || inferredDefaults.count || 10));
       setTopByLikes(Boolean(remembered.topByLikes ?? inferredDefaults.topByLikes));
+      setSearchFilters(normalizeXhsSearchFilters(remembered.searchFilters || XHS_SEARCH_FILTERS.defaults));
       setCommentLimit(String(remembered.commentLimit ?? inferredDefaults.commentLimit ?? ''));
       setCommentDepthMode(
         remembered.commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES
@@ -75,6 +86,7 @@ export default function BatchSettingsModal({
     const nextSettings = {
       count,
       topByLikes: showTopByLikes ? topByLikes : false,
+      searchFilters: showXhsSearchFilters ? searchFilters : normalizeXhsSearchFilters(),
       commentLimit: showCommentLimit ? Math.max(0, parseInt(String(commentLimit).trim(), 10) || 0) : 0,
       commentDepthMode: showCommentDepth ? commentDepthMode : COMMENT_DEPTH_MODE.TWO_LEVEL,
       maxTotal: isSingleComment ? Math.max(0, parseInt(String(commentLimit).trim(), 10) || 0) : undefined,
@@ -92,6 +104,13 @@ export default function BatchSettingsModal({
     commentDepthMode,
     isSingleComment,
   });
+  const searchFilterSummary = showXhsSearchFilters ? summarizeXhsSearchFilters(searchFilters) : '';
+  const planDetail = searchFilterSummary
+    ? `${plan.detail} · ${searchFilterSummary}`
+    : plan.detail;
+  const updateSearchFilter = (groupKey, value) => {
+    setSearchFilters((prev) => normalizeXhsSearchFilters({ ...prev, [groupKey]: value }));
+  };
 
   return (
     <div id="batchSettingsOverlay" className="batch-settings-overlay" style={{ display: 'flex' }} aria-hidden="false">
@@ -101,7 +120,7 @@ export default function BatchSettingsModal({
         <div className="batch-plan-card">
           <span className="batch-plan-badge">智能默认值</span>
           <strong>{plan.title}</strong>
-          <p>{plan.detail}</p>
+          <p>{planDetail}</p>
         </div>
 
         {showCountOptions && (
@@ -121,6 +140,27 @@ export default function BatchSettingsModal({
               ))}
             </div>
           </>
+        )}
+
+        {showXhsSearchFilters && (
+          <div className="xhs-search-filter-panel">
+            {Object.entries(XHS_SEARCH_FILTERS.groups).map(([groupKey, group]) => (
+              <div key={groupKey}>
+                <label className="batch-label">{group.title}</label>
+                <div className="search-filter-options">
+                  {group.options.map((option) => (
+                    <button
+                      key={option.value}
+                      className={searchFilters[groupKey] === option.value ? 'active' : ''}
+                      onClick={() => updateSearchFilter(groupKey, option.value)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
         )}
 
         {showTopByLikes && (

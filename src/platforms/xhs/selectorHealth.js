@@ -9,6 +9,7 @@ import { PAGE_TYPE } from '../../shared/constants.js';
 const PROFILE_FEED_SELECTOR = '#userPostedFeeds';
 const FEEDS_CONTAINER_SELECTOR = '.feeds-container';
 const SELECTOR_VERIFIED_AT = '2026-04-28T00:00:00+08:00';
+const SEARCH_FEED_VERIFIED_AT = '2026-06-01T00:00:00+08:00';
 const NOTE_DETAIL_SIGNAL_SELECTORS = POPUP_SELECTORS;
 const COMMENTS_CONTAINER_SELECTORS = [
   '.comments-container',
@@ -61,6 +62,7 @@ export function runXhsSelectorBootstrapProbe({ document = window.document, win =
         'feed_container',
         [FEEDS_CONTAINER_SELECTOR],
         '笔记流容器',
+        SEARCH_FEED_VERIFIED_AT,
       );
       return publishSelectorHealthSnapshot(
         finalizeSelectorPreflight('xhs', 'bootstrap', check.ok
@@ -145,6 +147,7 @@ function runBatchPreflight(action, label, params, document, win) {
     isProfileMode ? 'profile_feed_container' : 'feed_container',
     [selector],
     isProfileMode ? '博主页笔记流容器' : '笔记流容器',
+    isProfileMode ? SELECTOR_VERIFIED_AT : SEARCH_FEED_VERIFIED_AT,
   );
 
   return publishSelectorHealthSnapshot(
@@ -214,7 +217,7 @@ function runAuthorPreflight(document, win) {
   );
 }
 
-function buildPresenceCheck(document, name, selectors, detail) {
+function buildPresenceCheck(document, name, selectors, detail, verifiedAt = SELECTOR_VERIFIED_AT) {
   const selectorList = Array.isArray(selectors) ? selectors : [selectors];
   const matchedSelector = selectorList.find((selector) => hasSelector(document, selector)) || '';
   return buildSelectorCheck({
@@ -222,7 +225,7 @@ function buildPresenceCheck(document, name, selectors, detail) {
     ok: Boolean(matchedSelector),
     selector: matchedSelector || selectorList.join(' | '),
     detail,
-    verifiedAt: SELECTOR_VERIFIED_AT,
+    verifiedAt,
   });
 }
 

@@ -906,6 +906,8 @@ main {
 .batch-settings-dialog {
   width: 100%;
   max-width: calc(var(--w) - 24px);
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
   background: var(--paper);
   border: var(--line);
   box-shadow: var(--shadow);
@@ -997,7 +999,8 @@ main {
 }
 
 .count-options,
-.comment-depth-options {
+.comment-depth-options,
+.search-filter-options {
   display: grid;
   gap: 7px;
   margin-bottom: 10px;
@@ -1005,9 +1008,11 @@ main {
 
 .count-options { grid-template-columns: repeat(4, 1fr); }
 .comment-depth-options { grid-template-columns: repeat(2, 1fr); }
+.search-filter-options { grid-template-columns: repeat(3, 1fr); }
 
 .count-options button,
-.comment-depth-options button {
+.comment-depth-options button,
+.search-filter-options button {
   border: 2px solid var(--ink);
   border-radius: 8px;
   background: #fff;
@@ -1024,12 +1029,14 @@ main {
 }
 
 .count-options button:hover,
-.comment-depth-options button:hover {
+.comment-depth-options button:hover,
+.search-filter-options button:hover {
   transform: translate(-1px, -1px);
 }
 
 .count-options button.active,
-.comment-depth-options button.active {
+.comment-depth-options button.active,
+.search-filter-options button.active {
   background: var(--brand);
 }
 

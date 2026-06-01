@@ -9,12 +9,16 @@
 |------|-------------|---------|---------|------|
 | 笔记数据 | `window.__INITIAL_STATE__.note.noteDetailMap` | ✅ 已验证 | 2026-04-18 | 通过注入脚本 noteMap.js 读取。注意 detailMap 中可能含 `"undefined"` 幽灵 key，需按真实 noteId 过滤 |
 | 笔记新增字段 | `note.ipLocation / note.lastUpdateTime / note.atUserList / note.tagList[].id / note.shareInfo.unShare / note.interactInfo.followed` | ✅ 已验证 | 2026-04-18 | 14 个字段全部正常。detailMap 含幽灵 key `"undefined"` 和 `""`，需用正则过滤真实 noteId |
-| 笔记卡片（列表页） | `section`（在 `.feeds-container` 或 `#userPostedFeeds` 下） | ✅ 已验证 | 2026-04-18 | class 为 `note-item`，21-28 张卡片 |
-| 卡片封面链接 | `a.cover` | ✅ 已验证 | 2026-04-18 | class 为 `cover mask ld`。博主页 href 格式变为 `/user/profile/{userId}/{noteId}?xsec_token=...`，`extractNoteId` 兜底逻辑可正确提取 |
-| 卡片封面图 | `a.cover` 内 `img / picture img / source`，读取 `currentSrc / src / data-src / srcset`，兜底 `background-image` | ⚠️ 代码兼容，待实机复验 | 2026-04-28 | 为监控首轮建档补封面：先从卡片图取封面，详情数据没有图片时用卡片封面兜底 |
-| 卡片标题 | `.footer span` 或 `.title` | ⚠️ 可用但过于宽泛 | 2026-04-18 | 匹配 105-140 个元素（混入了作者名/点赞数），需限定在 section 内且排除 `.name` 和 `.like-wrapper` |
-| 卡片点赞数 | `.like-wrapper .count` | ✅ 已验证 | 2026-04-18 | 21-46 个匹配（博主页 21 卡片准确，笔记页混入评论区点赞数） |
-| 视频标识 | `.play-icon` | ✅ 已验证 | 2026-04-18 | 该博主仅 1 个视频笔记，选择器正常 |
+| 笔记流容器（搜索页） | `.feeds-container` | ✅ 已验证 | 2026-06-01 | 关键词“课题分离”搜索页实测存在 1 个可见容器；首屏 30 个 `section.note-item`，其中 27 个为真实笔记、3 个为“相关搜索” |
+| 笔记卡片（列表页） | `section`（在 `.feeds-container` 或 `#userPostedFeeds` 下） | ✅ 已验证 | 2026-06-01 | 搜索页 class 仍为 `note-item`；不要只按 section 数量计数，必须继续要求卡片内存在 `a.cover` 和真实 noteId |
+| 卡片封面链接 | `a.cover` | ✅ 已验证 | 2026-06-01 | 搜索页 href 当前为 `/search_result/{noteId}?xsec_token=...`，打开后会进入 `/explore/{noteId}`；博主页 `/user/profile/{userId}/{noteId}?xsec_token=...` 仍需保留 |
+| 卡片封面图 | `a.cover` 内 `img / picture img / source`，读取 `currentSrc / src / data-src / srcset`，兜底 `background-image` | ✅ 已验证 | 2026-06-01 | 搜索页首屏真实笔记均可从卡片图取到封面；详情数据没有图片时继续用卡片封面兜底 |
+| 卡片标题 | `.title` 或 `.footer span` | ✅ 已验证 | 2026-06-01 | 搜索页 `.title` 更干净；`.footer span` 全页匹配 108 个元素，仍必须限定在单个 section 内读取 |
+| 卡片点赞数 | `.like-wrapper .count` | ✅ 已验证 | 2026-06-01 | 搜索页首屏 27 个真实笔记均可读到点赞；详情页同名选择器会混入评论点赞，必须限定在卡片 section 内 |
+| 视频标识 | `.play-icon` | ✅ 已验证 | 2026-06-01 | 搜索页首屏 3 个视频标识，选择器仍可用 |
+| 搜索筛选入口 | 可见按钮文字 `筛选` / `已筛选` | ✅ 已验证 | 2026-06-01 | 搜索页右侧筛选面板入口仍可用；插件只操作“排序依据 / 笔记类型 / 发布时间”，不操作“搜索范围 / 位置距离”。面板选项存在重复渲染层，必须点击实际变为 active 的内层选项，并在点击后校验选中状态 |
+| 搜索筛选后结果稳定 | `.feeds-container section` + `a.cover` 提取前若干真实笔记签名 | ✅ 已验证 | 2026-06-01 | 筛选点击生效后，插件会等待笔记流刷新且连续稳定，再开始扫描；稳定前不打开笔记，避免网络延迟时采到筛选前的旧列表 |
+| 搜索筛选状态 | `window.__INITIAL_STATE__.search.filterParams` | ✅ 已验证 | 2026-06-01 | 当前筛选项按 `sort_type`、`filter_note_type`、`filter_note_time` 映射；采集任务会记录筛选快照，便于回溯本轮采集口径 |
 
 ## 评论采集 (commentCollector.js)
 
@@ -60,8 +64,8 @@
 | 用途 | 选择器 / 方式 | 验证状态 | 验证日期 | 备注 |
 |------|-------------|---------|---------|------|
 | 笔记卡片定位 | 通过 noteId 在 DOM 中查找 `a.cover[href*="{noteId}"]` | ✅ 已验证 | 2026-04-18 | 博主页 href 新格式 `/user/profile/{userId}/{noteId}?xsec_token=...`，`extractNoteId` 兜底逻辑可用。建议增加显式正则 |
-| 打开笔记 | 点击卡片 → SPA 路由跳转到 `/explore/{noteId}` | ❓ 未验证 | - | 废弃 iframe 方式，改为点击卡片触发路由 |
-| 笔记数据就绪 | 监听 URL 变化 + 等待 `__INITIAL_STATE__` 中对应 noteId 数据 | ❓ 未验证 | - | |
+| 打开笔记 | 点击/打开搜索卡片 → 路由跳转到 `/explore/{noteId}` | ✅ 已验证 | 2026-06-01 | 搜索页 `/search_result/{noteId}` 链接实际打开为 `/explore/{noteId}` |
+| 笔记数据就绪 | 监听 URL 变化 + 等待 `__INITIAL_STATE__` 中对应 noteId 数据 | ✅ 已验证 | 2026-06-01 | 详情页 `note.noteDetailMap[{noteId}]` 命中当前笔记，含标题、正文、互动数、图片、作者等字段 |
 | 返回列表 | `history.back()` | ❓ 未验证 | - | 需确认 SPA 路由能正确返回 |
 | 关闭弹窗按钮（旧方案，备用） | `.close-circle, .close-btn, [class*="close"]` | ❓ 未验证 | - | `[class*="close"]` 过于模糊，需收窄 |
 | 关闭弹窗备用 | `chrome.debugger` 模拟 Esc | ✅ 已验证 | 2026-03-20 | |

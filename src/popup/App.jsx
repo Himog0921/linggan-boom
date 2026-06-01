@@ -548,6 +548,7 @@ export default function App() {
           mode,
           count: settings.count,
           topByLikes: settings.topByLikes,
+          searchFilters: settings.searchFilters,
         });
         setProgressVisible(true);
         setProgressCurrent(0);
@@ -581,6 +582,7 @@ export default function App() {
           mode,
           count: settings.count,
           topByLikes: settings.topByLikes,
+          searchFilters: settings.searchFilters,
           commentLimit: settings.commentLimit,
           commentDepthMode: settings.commentDepthMode,
         });
@@ -959,10 +961,10 @@ export default function App() {
       batchModalResolveRef.current = resolve;
       setBatchModalType(type);
       setBatchModalPlatform(plat);
-      setBatchModalMode('batch');
+      setBatchModalMode(mode);
       setBatchModalOpen(true);
     });
-  }, []);
+  }, [mode]);
 
   const openCommentLimitSettings = useCallback((options) => {
     return new Promise((resolve) => {

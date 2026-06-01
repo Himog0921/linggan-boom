@@ -1,6 +1,9 @@
 import { MSG, COMMENT_DEPTH_MODE, TASK_STATE } from '../shared/constants.js';
 import { sendToBackground } from '../shared/messaging.js';
 import { isPausedTaskState, resolveTaskState } from '../shared/taskUi.js';
+import { hasExplicitXhsSearchFilters, normalizeXhsSearchFilters } from '../platforms/xhs/searchFilters.js';
+
+const XHS_FILTERED_REMOTE_STARTUP_TIMEOUT_MS = 30_000;
 
 async function defaultReleaseExecutionLock(lock = {}) {
   if (!lock || typeof lock !== 'object' || Array.isArray(lock)) return;
@@ -251,6 +254,7 @@ function createXhsBatchStartHandler({
     const controller = new ControllerClass();
     setController(controller);
     startBatchTask(taskType);
+    const mode = msg.mode || 'search';
     const options = buildOptions(msg);
     const handleProgress = (progress) => {
       const taskState = resolveTaskState({
@@ -276,7 +280,7 @@ function createXhsBatchStartHandler({
     };
 
     const startPromise = Promise.resolve()
-      .then(() => controller.start(msg.mode || 'search', handleProgress, options))
+      .then(() => controller.start(mode, handleProgress, options))
       .catch((error) => {
         finalizeXhsBatchStartFailure({
           taskType,
@@ -301,7 +305,10 @@ function createXhsBatchStartHandler({
       return { success: true };
     }
 
-    const startup = await waitForControllerStartup(controller, startPromise);
+    const startupTimeoutMs = mode === 'search' && hasExplicitXhsSearchFilters(options.searchFilters)
+      ? XHS_FILTERED_REMOTE_STARTUP_TIMEOUT_MS
+      : undefined;
+    const startup = await waitForControllerStartup(controller, startPromise, startupTimeoutMs);
     void startPromise.catch(() => {});
     return {
       success: true,
@@ -568,6 +575,7 @@ export function createBatchMessageHandlers({
     buildOptions: (msg) => ({
       count: msg.count || 10,
       topByLikes: Boolean(msg.topByLikes),
+      searchFilters: normalizeXhsSearchFilters(msg.searchFilters || {}),
       triggerSource: String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual',
       externalTaskMeta: msg.externalTaskMeta || {},
       monitorMeta: msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null,
@@ -589,6 +597,7 @@ export function createBatchMessageHandlers({
     buildOptions: (msg) => ({
       count: msg.count || 10,
       topByLikes: Boolean(msg.topByLikes),
+      searchFilters: normalizeXhsSearchFilters(msg.searchFilters || {}),
       commentLimit: Math.max(0, Number(msg.commentLimit || 0) || 0),
       commentDepthMode: normalizeCommentDepthMode(msg.commentDepthMode),
       triggerSource: String(msg.triggerSource || 'popup_manual').trim() || 'popup_manual',

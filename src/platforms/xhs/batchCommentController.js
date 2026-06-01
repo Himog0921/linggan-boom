@@ -14,6 +14,13 @@ import {
   buildXhsBatchCommentsProgressPatch,
   buildXhsBatchCommentsRunPatch,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import {
+  applyXhsSearchFilters,
+  hasExplicitXhsSearchFilters,
+  normalizeXhsSearchFilters,
+  readCurrentXhsSearchFilterSnapshot,
+  summarizeXhsSearchFilters,
+} from './searchFilters.js';
 import { resolveBatchResumeState } from '../../workbench/runtime/batchResume.js';
 import {
   CLOSE_SELECTORS,
@@ -83,6 +90,8 @@ export class BatchCommentController extends BaseBatchController {
     this._noteCollectionTimeoutMs = 0;
     this._blockingError = null;
     this._noteTimedOut = false;
+    this._searchFilters = normalizeXhsSearchFilters();
+    this._searchFilterSnapshot = null;
     this.reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
     this.heartbeatLoop = createCollectionRunHeartbeatLoop({ reporter: this.reportHeartbeat });
   }
@@ -103,6 +112,56 @@ export class BatchCommentController extends BaseBatchController {
     this._allowNavigationFallback = mode !== COLLECT_MODE.PROFILE;
     this._commentLimit = Math.max(0, Number(settings.commentLimit || 0) || 0);
     this._commentDepthMode = String(settings.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() || COMMENT_DEPTH_MODE.TWO_LEVEL;
+    this._searchFilters = normalizeXhsSearchFilters(settings.searchFilters || {});
+    this._searchFilterSnapshot = mode === COLLECT_MODE.SEARCH
+      ? readCurrentXhsSearchFilterSnapshot(window)
+      : null;
+    const searchFilterSummary = summarizeXhsSearchFilters(this._searchFilters);
+    if (mode === COLLECT_MODE.SEARCH && hasExplicitXhsSearchFilters(this._searchFilters)) {
+      try {
+        this._emitProgress({
+          status: 'filtering',
+          total: 0,
+          current: 0,
+          message: `正在应用小红书筛选：${searchFilterSummary}`,
+        });
+        const filterResult = await applyXhsSearchFilters(this._searchFilters, {
+          document,
+          win: window,
+          onResultsWait: () => {
+            this._emitProgress({
+              status: 'filtering',
+              total: 0,
+              current: 0,
+              message: `等待筛选结果加载：${searchFilterSummary}`,
+            });
+          },
+        });
+        this._searchFilterSnapshot = filterResult.snapshot;
+      } catch (error) {
+        const message = `小红书筛选失败：${String(error?.message || '请刷新搜索页后重试')}`;
+        this.isRunning = false;
+        this.isPaused = false;
+        this._setState(TASK_STATE.ERROR, 'filtering');
+        this._emitProgress({
+          status: TASK_STATE.ERROR,
+          phase: 'filtering',
+          total: 0,
+          current: 0,
+          message,
+          errorCode: 'xhs_search_filter_failed',
+          reasonCode: 'xhs_search_filter_failed',
+        });
+        reportProgress(0, 0, message, {
+          taskType: this.type,
+          taskState: TASK_STATE.ERROR,
+          phase: 'filtering',
+          errorCode: 'xhs_search_filter_failed',
+          reasonCode: 'xhs_search_filter_failed',
+        });
+        throw new Error(message);
+      }
+    }
     const safeCount = Math.min(Math.max(1, Number(settings.count || 10) || 10), BATCH_CONFIG.maxPerSession);
     const triggerSource = String(settings.triggerSource || 'popup_manual').trim() || 'popup_manual';
     const externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
@@ -134,6 +193,9 @@ export class BatchCommentController extends BaseBatchController {
           topByLikes: this._topByLikes,
           commentLimit: this._commentLimit,
           commentDepthMode: this._commentDepthMode,
+          searchFilters: mode === COLLECT_MODE.SEARCH ? this._searchFilters : undefined,
+          searchFilterSummary: mode === COLLECT_MODE.SEARCH ? searchFilterSummary : undefined,
+          searchFilterSnapshot: mode === COLLECT_MODE.SEARCH ? this._searchFilterSnapshot : undefined,
         },
         externalTaskMeta: settings.externalTaskMeta || {},
       });
@@ -222,7 +284,7 @@ export class BatchCommentController extends BaseBatchController {
       current: 0,
       message: this._topByLikes
         ? `发现 ${this.noteList.length} 篇作品，按点赞 Top ${this.noteList.length} 依次进入详情页采集评论`
-        : `发现 ${this.noteList.length} 篇作品，按当前顺位依次进入详情页采集评论`,
+        : `发现 ${this.noteList.length} 篇作品，按当前顺位依次进入详情页采集评论${mode === COLLECT_MODE.SEARCH && hasExplicitXhsSearchFilters(this._searchFilters) ? `（页面筛选：${searchFilterSummary}）` : ''}`,
     });
 
     try {

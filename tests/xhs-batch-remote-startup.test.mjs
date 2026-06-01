@@ -92,6 +92,88 @@ test('xhs remote batch start waits for collectionRunId before acknowledging succ
   assert.equal(result.collectionRunId, 'run_xhs_remote_1');
 });
 
+test('xhs batch start forwards search filters to the page controller', async () => {
+  let received = null;
+
+  class SearchFilterBatchNoteController {
+    constructor() {
+      this.collectionRunId = 'run_xhs_filter_1';
+    }
+
+    async start(mode, onProgress, settings) {
+      received = { mode, settings };
+    }
+  }
+
+  const { handlers } = createHandlers({
+    BatchNoteController: SearchFilterBatchNoteController,
+  });
+
+  await handlers[MSG.START_BATCH_NOTES]({
+    count: 5,
+    mode: 'search',
+    searchFilters: {
+      sortBasis: 'most_commented',
+      noteType: 'image',
+      publishTime: 'one_week',
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(received.mode, 'search');
+  assert.deepEqual(received.settings.searchFilters, {
+    sortBasis: 'most_commented',
+    noteType: 'image',
+    publishTime: 'one_week',
+  });
+});
+
+test('xhs remote search batch allows filter settling before startup timeout', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'], now: 0 });
+
+  class SlowFilteredStartupController {
+    constructor() {
+      this.collectionRunId = '';
+    }
+
+    async start() {
+      await new Promise((resolve) => setTimeout(resolve, 8500));
+      this.collectionRunId = 'run_xhs_filtered_remote_1';
+      await new Promise(() => {});
+    }
+  }
+
+  const { handlers } = createHandlers({
+    BatchNoteController: SlowFilteredStartupController,
+  });
+
+  const resultPromise = handlers[MSG.START_BATCH_NOTES]({
+    count: 5,
+    mode: 'search',
+    searchFilters: {
+      sortBasis: 'most_commented',
+      noteType: 'image',
+      publishTime: 'one_week',
+    },
+    externalTaskMeta: {
+      externalTaskId: 'wb_xhs_filter_slow_1',
+    },
+  });
+
+  await Promise.resolve();
+  t.mock.timers.tick(8500);
+  await Promise.resolve();
+  t.mock.timers.tick(50);
+
+  const result = await resultPromise;
+
+  assert.equal(result.success, true);
+  assert.equal(result.accepted, true);
+  assert.equal(result.pending, true);
+  assert.equal(result.collectionRunId, 'run_xhs_filtered_remote_1');
+});
+
 test('xhs remote batch start throws startup errors instead of faking dispatch success', async () => {
   const progressCalls = [];
   const syncCalls = [];

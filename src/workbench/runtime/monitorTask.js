@@ -216,6 +216,8 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
   sourcePageUrl = '',
   searchKeyword = '',
   searchPageUrl = '',
+  searchFilters = null,
+  searchFilterSnapshot = null,
 } = {}) {
   const max = ensurePositiveInteger(limit, ensurePositiveInteger(monitorMeta?.limit, cards.length));
   return (Array.isArray(cards) ? cards : [])
@@ -258,6 +260,8 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
         sourcePageUrl: normalizeString(sourcePageUrl),
         searchKeyword: normalizeString(searchKeyword || monitorMeta?.keyword),
         searchPageUrl: normalizeString(searchPageUrl),
+        searchFilters: searchFilters && typeof searchFilters === 'object' ? searchFilters : undefined,
+        searchFilterSnapshot: searchFilterSnapshot && typeof searchFilterSnapshot === 'object' ? searchFilterSnapshot : undefined,
         batchRank: index + 1,
         collectionRunId: normalizeString(collectionRunId),
         dataSource: 'monitor_surface_card',

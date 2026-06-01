@@ -14,6 +14,13 @@ import {
   buildXhsBatchNotesProgressPatch,
   buildXhsBatchNotesRunPatch,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import {
+  applyXhsSearchFilters,
+  hasExplicitXhsSearchFilters,
+  normalizeXhsSearchFilters,
+  readCurrentXhsSearchFilterSnapshot,
+  summarizeXhsSearchFilters,
+} from './searchFilters.js';
 import { resolveBatchResumeState } from '../../workbench/runtime/batchResume.js';
 import {
   CLOSE_SELECTORS,
@@ -315,6 +322,8 @@ export class BatchNoteController extends BaseBatchController {
     this.targetNoteId = '';
     this.surfaceOnly = false;
     this._stoppedByUser = false;
+    this._searchFilters = normalizeXhsSearchFilters();
+    this._searchFilterSnapshot = null;
     this.reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
   }
 
@@ -369,11 +378,66 @@ export class BatchNoteController extends BaseBatchController {
 
     const { count = 10, topByLikes = false } = settings;
     this._topByLikes = Boolean(topByLikes);
+    this._searchFilters = normalizeXhsSearchFilters(settings.searchFilters || {});
+    this._searchFilterSnapshot = mode === COLLECT_MODE.SEARCH
+      ? readCurrentXhsSearchFilterSnapshot(window)
+      : null;
+    const searchFilterSummary = summarizeXhsSearchFilters(this._searchFilters);
+    if (mode === COLLECT_MODE.SEARCH && hasExplicitXhsSearchFilters(this._searchFilters)) {
+      try {
+        this._emitProgress({
+          status: 'filtering',
+          total: 0,
+          current: 0,
+          message: `正在应用小红书筛选：${searchFilterSummary}`,
+        });
+        const filterResult = await applyXhsSearchFilters(this._searchFilters, {
+          document,
+          win: window,
+          onResultsWait: () => {
+            this._emitProgress({
+              status: 'filtering',
+              total: 0,
+              current: 0,
+              message: `等待筛选结果加载：${searchFilterSummary}`,
+            });
+          },
+        });
+        this._searchFilterSnapshot = filterResult.snapshot;
+      } catch (error) {
+        const message = `小红书筛选失败：${String(error?.message || '请刷新搜索页后重试')}`;
+        this.isRunning = false;
+        this.isPaused = false;
+        this._setState(TASK_STATE.ERROR, 'filtering');
+        this._emitProgress({
+          status: TASK_STATE.ERROR,
+          phase: 'filtering',
+          total: 0,
+          current: 0,
+          message,
+          errorCode: 'xhs_search_filter_failed',
+          reasonCode: 'xhs_search_filter_failed',
+        });
+        reportProgress(0, 0, message, {
+          taskType: this.type,
+          taskState: TASK_STATE.ERROR,
+          phase: 'filtering',
+          errorCode: 'xhs_search_filter_failed',
+          reasonCode: 'xhs_search_filter_failed',
+        });
+        throw new Error(message);
+      }
+    }
     const triggerSource = String(settings.triggerSource || 'popup_manual').trim() || 'popup_manual';
     const runConfig = {
       count: this.targetNoteId ? 1 : count,
       topByLikes: this._topByLikes,
     };
+    if (mode === COLLECT_MODE.SEARCH) {
+      runConfig.searchFilters = this._searchFilters;
+      runConfig.searchFilterSummary = searchFilterSummary;
+      runConfig.searchFilterSnapshot = this._searchFilterSnapshot;
+    }
     if (this.monitorMeta) {
       runConfig.surfaceOnly = this.surfaceOnly;
       runConfig.monitorMeta = this.monitorMeta;
@@ -489,7 +553,7 @@ export class BatchNoteController extends BaseBatchController {
       status: 'started',
       total: maxNotes,
       current: 0,
-      message: `发现 ${maxNotes} 篇笔记，开始采集${topByLikes ? `（已按点赞筛选 Top ${maxNotes}${topLikeText}）` : ''}`,
+      message: `发现 ${maxNotes} 篇笔记，开始采集${topByLikes ? `（已按点赞筛选 Top ${maxNotes}${topLikeText}）` : ''}${mode === COLLECT_MODE.SEARCH && hasExplicitXhsSearchFilters(this._searchFilters) ? `（页面筛选：${searchFilterSummary}）` : ''}`,
     });
 
     // 5. 逐篇采集
@@ -510,6 +574,8 @@ export class BatchNoteController extends BaseBatchController {
       sourcePageUrl,
       searchKeyword: mode === COLLECT_MODE.SEARCH ? this.monitorMeta?.keyword : '',
       searchPageUrl: mode === COLLECT_MODE.SEARCH ? sourcePageUrl : '',
+      searchFilters: mode === COLLECT_MODE.SEARCH ? this._searchFilters : undefined,
+      searchFilterSnapshot: mode === COLLECT_MODE.SEARCH ? this._searchFilterSnapshot : undefined,
     });
     this.collected = records;
 
