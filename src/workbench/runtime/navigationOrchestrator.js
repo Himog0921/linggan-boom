@@ -22,6 +22,12 @@ function buildXhsSearchUrl(target, options = {}) {
   return `https://www.xiaohongshu.com/search_result?keyword=${encodeURIComponent(keyword)}${sortParam}`;
 }
 
+function buildXhsProfileUrl(target) {
+  const value = String(target || '').trim();
+  if (!value) return null;
+  return isHttpUrl(value) ? value : `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(value)}`;
+}
+
 function isHttpUrl(value = '') {
   return /^https?:\/\//i.test(String(value || '').trim());
 }
@@ -44,16 +50,23 @@ function shouldPreserveDetailTarget(taskType, target, options = {}) {
 }
 
 const TASK_URL_BUILDERS = {
-  'xhs.batchNotes': (target, options = {}) =>
-    isHttpUrl(target)
+  'xhs.batchNotes': (target, options = {}) => {
+    if (isHttpUrl(target)) return String(target || '').trim();
+    if (String(options.targetPageType || '').trim() === 'profile') {
+      return buildXhsProfileUrl(target);
+    }
+    return shouldPreserveDetailTarget('xhs.batchNotes', target, options)
       ? String(target || '').trim()
-      : shouldPreserveDetailTarget('xhs.batchNotes', target, options)
-        ? String(target || '').trim()
-        : buildXhsSearchUrl(target, options),
+      : buildXhsSearchUrl(target, options);
+  },
   'xhs.batchComments': (target, options = {}) =>
-    /^https?:\/\//i.test(target) ? target : buildXhsSearchUrl(target, options),
+    /^https?:\/\//i.test(target)
+      ? target
+      : String(options.targetPageType || '').trim() === 'profile'
+        ? buildXhsProfileUrl(target)
+        : buildXhsSearchUrl(target, options),
   'xhs.collectAuthor': (target) =>
-    /^https?:\/\//i.test(target) ? target : `https://www.xiaohongshu.com/user/profile/${target}`,
+    /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
   'douyin.batchNotes': (target, options = {}) =>
     shouldPreserveDetailTarget('douyin.batchNotes', target, options)
       ? String(target || '').trim()

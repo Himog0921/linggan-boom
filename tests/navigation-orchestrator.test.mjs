@@ -50,6 +50,24 @@ test('batchNotes still builds search urls for keyword targets', () => {
   );
 });
 
+test('xhs batch tasks build profile urls for author targets when requested', () => {
+  assert.equal(
+    buildTaskNavigationUrl('xhs.batchNotes', '6926d8f4000000003702c666', { targetPageType: 'profile' }),
+    'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+  );
+  assert.equal(
+    buildTaskNavigationUrl('xhs.batchComments', '6926d8f4000000003702c666', { targetPageType: 'profile' }),
+    'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+  );
+});
+
+test('xhs batch tasks keep keyword urls for search targets', () => {
+  assert.equal(
+    buildTaskNavigationUrl('xhs.batchComments', 'A娃的启动困难', { targetPageType: 'search' }),
+    'https://www.xiaohongshu.com/search_result?keyword=A%E5%A8%83%E7%9A%84%E5%90%AF%E5%8A%A8%E5%9B%B0%E9%9A%BE',
+  );
+});
+
 test('xhs search urls do not double encode already encoded keyword targets', () => {
   assert.equal(
     buildTaskNavigationUrl('xhs.batchNotes', '%E6%9D%8E%E8%80%81%E5%A4%B4'),

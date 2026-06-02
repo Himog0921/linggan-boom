@@ -230,6 +230,67 @@ test('mapTaskEnvelopeToCapabilityCheck converts task envelope into capability ch
   });
 });
 
+test('mapTaskEnvelopeToInternalCommand forwards xhs batch note search filters', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'task_xhs_filtered_notes',
+    taskType: 'xhs.batchNotes',
+    platform: 'xhs',
+    target: {
+      pageType: 'search',
+      url: 'https://www.xiaohongshu.com/search_result?keyword=A',
+    },
+    payload: {
+      limit: 30,
+      searchFilters: {
+        sortBasis: 'most_commented',
+        noteType: 'image',
+        publishTime: 'one_week',
+      },
+    },
+  });
+
+  assert.equal(command.action, 'startBatchNotes');
+  assert.equal(command.payload.mode, 'search');
+  assert.deepEqual(command.payload.searchFilters, {
+    sortBasis: 'most_commented',
+    noteType: 'image',
+    publishTime: 'one_week',
+  });
+});
+
+test('mapTaskEnvelopeToInternalCommand forwards xhs batch comment search filters', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'task_xhs_filtered_comments',
+    taskType: 'xhs.batchComments',
+    platform: 'xhs',
+    target: {
+      pageType: 'search',
+      url: 'https://www.xiaohongshu.com/search_result?keyword=A',
+    },
+    payload: {
+      limit: 20,
+      commentLimit: 40,
+      searchFilters: {
+        sortBasis: 'latest',
+        noteType: 'video',
+        publishTime: 'one_day',
+      },
+    },
+  });
+
+  assert.equal(command.action, 'startBatchComments');
+  assert.equal(command.payload.mode, 'search');
+  assert.deepEqual(command.payload.searchFilters, {
+    sortBasis: 'latest',
+    noteType: 'video',
+    publishTime: 'one_day',
+  });
+});
+
 test('mapTaskEnvelopeToInternalCommand scopes xhs detail comment probes to the target note', () => {
   const command = mapTaskEnvelopeToInternalCommand({
     type: 'task.envelope',

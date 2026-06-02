@@ -22,6 +22,12 @@ function normalizeCommentDepthMode(value) {
     : COMMENT_DEPTH_MODE.TWO_LEVEL;
 }
 
+function normalizeSearchFiltersPayload(value) {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : undefined;
+}
+
 function inferModeFromTarget(target = {}) {
   const pageType = String(target.pageType || '').trim();
   if (pageType === REMOTE_TARGET_PAGE_TYPE.SEARCH) return 'search';
@@ -57,6 +63,7 @@ function buildBatchNotesPayload(task = {}) {
     ),
     topByLikes: Boolean(payload.topByLikes),
     sortMode: String(payload.sortMode || '').trim() || undefined,
+    searchFilters: normalizeSearchFiltersPayload(payload.searchFilters),
     triggerSource: String(task.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
     surfaceOnly: monitorMeta ? Boolean(monitorMeta.surfaceOnly) : undefined,
     targetNoteId: targetNoteId || undefined,
@@ -84,6 +91,7 @@ function buildBatchCommentsPayload(task = {}) {
     commentLimit: ensurePositiveInteger(payload.commentLimit, 0),
     commentDepthMode: normalizeCommentDepthMode(payload.commentDepthMode),
     sortMode: String(payload.sortMode || '').trim() || undefined,
+    searchFilters: normalizeSearchFiltersPayload(payload.searchFilters),
     triggerSource: String(task.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
     noteList: mode === 'detail' && targetNoteId
       ? [{ noteId: targetNoteId, url: targetUrl }]
