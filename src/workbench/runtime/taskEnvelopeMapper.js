@@ -53,6 +53,8 @@ function buildBatchNotesPayload(task = {}) {
     || '',
   ).trim().replace(/^xhs_/, '');
   const isMonitorDetailProbe = String(monitorMeta?.monitorMode || '').trim() === 'detail_probe';
+  const includeComments = task.taskType === REMOTE_TASK_TYPE.XHS_BATCH_NOTES
+    && Boolean(payload.includeComments || payload.collectComments);
   return {
     mode: inferModeFromTarget(task.target),
     count: ensurePositiveInteger(
@@ -64,6 +66,13 @@ function buildBatchNotesPayload(task = {}) {
     topByLikes: Boolean(payload.topByLikes),
     sortMode: String(payload.sortMode || '').trim() || undefined,
     searchFilters: normalizeSearchFiltersPayload(payload.searchFilters),
+    ...(includeComments
+      ? {
+          includeComments: true,
+          commentLimit: ensurePositiveInteger(payload.commentLimit, 20),
+          commentDepthMode: normalizeCommentDepthMode(payload.commentDepthMode),
+        }
+      : {}),
     triggerSource: String(task.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
     surfaceOnly: monitorMeta ? Boolean(monitorMeta.surfaceOnly) : undefined,
     targetNoteId: targetNoteId || undefined,

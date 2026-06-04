@@ -81,6 +81,25 @@ test('buildXhsBatchNotesRunPatch keeps valid content id when note id is absent',
   assert.deepEqual(patch.contentIds, ['xhs_n1']);
 });
 
+test('buildXhsBatchNotesRunPatch keeps attached comments separate from note success', () => {
+  const patch = buildXhsBatchNotesRunPatch({
+    noteList: [{ noteId: 'n1' }, { noteId: 'n2' }],
+    collected: [{ noteId: 'n1' }, { noteId: 'n2' }],
+    commentResults: [
+      { noteId: 'n1', total: 20 },
+      { noteId: 'n2', total: 0, error: 'comments_not_ready' },
+    ],
+  });
+
+  assert.equal(patch.itemsSucceeded, 2);
+  assert.equal(patch.itemsFailed, 0);
+  assert.equal(patch.totalComments, 20);
+  assert.deepEqual(patch.attachedCommentResults, [
+    { noteId: 'n1', total: 20, error: '' },
+    { noteId: 'n2', total: 0, error: 'comments_not_ready' },
+  ]);
+});
+
 test('buildXhsBatchNotesProgressPatch only counts processed targets during a running task', () => {
   const patch = buildXhsBatchNotesProgressPatch({
     noteList: [{ noteId: 'n1' }, { noteId: 'n2' }, { noteId: 'n3' }],

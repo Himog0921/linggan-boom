@@ -1,7 +1,8 @@
 import { collectNote, discoverWithScroll, resolveExpectedNoteFromMap } from './noteCollector.js';
+import { collectComments } from './commentCollector.js';
 import { throttle, watchCaptcha, showCaptchaPauseOverlay } from './antiDetect.js';
 import { sendToBackground, reportProgress, reportDone, reportWorkbenchRecord } from '../../shared/messaging.js';
-import { BATCH_CONFIG, COLLECT_MODE, MSG, TASK_STATE } from '../../shared/constants.js';
+import { BATCH_CONFIG, COLLECT_MODE, COMMENT_DEPTH_MODE, MSG, TASK_STATE } from '../../shared/constants.js';
 import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { randomDelay, parseCount } from '../../shared/utils.js';
 import { noteStore } from '../../db/noteStore.js';
@@ -31,6 +32,7 @@ import {
   waitForNoteState,
   findNoteElementById,
   formatCompactCount,
+  getActiveCommentsContext,
 } from './batchShared.js';
 import { BaseBatchController } from '../../shared/baseBatchController.js';
 export { BatchCommentController } from './batchCommentController.js';
@@ -281,7 +283,15 @@ function hydrateXhsNoteResumeState(runRecord = {}, completedTargetIds = []) {
       error: String(item?.error || 'failed').trim() || 'failed',
     }))
     .filter((item) => item.noteId && completedSet.has(item.noteId));
-  return { collected, failed };
+  const commentResults = (Array.isArray(runRecord.attachedCommentResults) ? runRecord.attachedCommentResults : [])
+    .map((item) => ({
+      noteId: String(item?.noteId || item?.targetId || '').trim().replace(/^xhs_/, ''),
+      total: Math.max(0, Number(item?.total || 0) || 0),
+      error: String(item?.error || '').trim(),
+    }))
+    .filter((item) => item.noteId && completedSet.has(item.noteId));
+  const totalComments = commentResults.reduce((sum, item) => sum + item.total, 0);
+  return { collected, failed, commentResults, totalComments };
 }
 
 // 小红书弹窗/详情页相关选择器（兼容多版本）
@@ -309,6 +319,7 @@ export class BatchNoteController extends BaseBatchController {
     this.noteList = [];
     this.collected = [];
     this.failed = [];
+    this.commentResults = [];
     this.captchaWatcher = null;
     this._containerSelector = '.feeds-container';
     this._mode = COLLECT_MODE.SEARCH;
@@ -322,6 +333,10 @@ export class BatchNoteController extends BaseBatchController {
     this.targetNoteId = '';
     this.surfaceOnly = false;
     this._stoppedByUser = false;
+    this._includeComments = false;
+    this._commentLimit = 0;
+    this._commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL;
+    this._totalCommentsCollected = 0;
     this._searchFilters = normalizeXhsSearchFilters();
     this._searchFilterSnapshot = null;
     this.reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
@@ -335,6 +350,8 @@ export class BatchNoteController extends BaseBatchController {
     this.currentIndex = 0;
     this.collected = [];
     this.failed = [];
+    this.commentResults = [];
+    this._totalCommentsCollected = 0;
     this._originUrl = window.location.href;
     this.onStateChange = typeof onProgress === 'function' ? onProgress : null;
     this.externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
@@ -378,6 +395,14 @@ export class BatchNoteController extends BaseBatchController {
 
     const { count = 10, topByLikes = false } = settings;
     this._topByLikes = Boolean(topByLikes);
+    this._includeComments = Boolean(settings.includeComments || settings.collectComments) && !this.surfaceOnly;
+    const configuredCommentLimit = Number(settings.commentLimit ?? 20);
+    this._commentLimit = this._includeComments && Number.isFinite(configuredCommentLimit)
+      ? Math.max(0, Math.floor(configuredCommentLimit))
+      : 0;
+    this._commentDepthMode = String(settings.commentDepthMode || COMMENT_DEPTH_MODE.TWO_LEVEL).trim() === COMMENT_DEPTH_MODE.ALL_REPLIES
+      ? COMMENT_DEPTH_MODE.ALL_REPLIES
+      : COMMENT_DEPTH_MODE.TWO_LEVEL;
     this._searchFilters = normalizeXhsSearchFilters(settings.searchFilters || {});
     this._searchFilterSnapshot = mode === COLLECT_MODE.SEARCH
       ? readCurrentXhsSearchFilterSnapshot(window)
@@ -433,6 +458,11 @@ export class BatchNoteController extends BaseBatchController {
       count: this.targetNoteId ? 1 : count,
       topByLikes: this._topByLikes,
     };
+    if (this._includeComments) {
+      runConfig.includeComments = true;
+      runConfig.commentLimit = this._commentLimit;
+      runConfig.commentDepthMode = this._commentDepthMode;
+    }
     if (mode === COLLECT_MODE.SEARCH) {
       runConfig.searchFilters = this._searchFilters;
       runConfig.searchFilterSummary = searchFilterSummary;
@@ -530,6 +560,8 @@ export class BatchNoteController extends BaseBatchController {
       const hydrated = hydrateXhsNoteResumeState(existingRun, resumeState.completedTargetIds);
       this.collected = hydrated.collected;
       this.failed = hydrated.failed;
+      this.commentResults = hydrated.commentResults;
+      this._totalCommentsCollected = hydrated.totalComments;
       this._emitProgress({
         status: 'resuming',
         total: this.noteList.length,
@@ -590,6 +622,7 @@ export class BatchNoteController extends BaseBatchController {
         noteList: this.noteList,
         collected: this.collected,
         failed: this.failed,
+        commentResults: this.commentResults,
       })).catch(() => {});
     }
     this._setState(TASK_STATE.DONE, 'done');
@@ -674,12 +707,14 @@ export class BatchNoteController extends BaseBatchController {
         noteList: this.noteList,
         collected: this.collected,
         failed: this.failed,
+        commentResults: this.commentResults,
       })).catch(() => {});
     } else if (this.collectionRunId) {
       await collectionRunStore.markDone(this.collectionRunId, buildXhsBatchNotesRunPatch({
         noteList: this.noteList,
         collected: this.collected,
         failed: this.failed,
+        commentResults: this.commentResults,
       })).catch(() => {});
     }
     this._setState(TASK_STATE.DONE, stopped ? 'stopped' : 'done');
@@ -689,8 +724,8 @@ export class BatchNoteController extends BaseBatchController {
       current: this.collected.length,
       failed: this.failed.length,
       message: stopped
-        ? `批量笔记已停止：成功 ${this.collected.length}，失败 ${this.failed.length}`
-        : `采集完成：成功 ${this.collected.length}，失败 ${this.failed.length}`,
+        ? `批量笔记已停止：成功 ${this.collected.length}，评论 ${this._totalCommentsCollected} 条，失败 ${this.failed.length}`
+        : `采集完成：成功 ${this.collected.length}，评论 ${this._totalCommentsCollected} 条，失败 ${this.failed.length}`,
     });
     reportDone('batchNotes', this.collected.length, {
       taskType: this.type,
@@ -734,6 +769,7 @@ export class BatchNoteController extends BaseBatchController {
       noteList: this.noteList,
       collected: this.collected,
       failed: this.failed,
+      commentResults: this.commentResults,
       processedCount: this.currentIndex,
     });
     await collectionRunStore.updateById(this.collectionRunId, runPatch).catch(() => {});
@@ -744,6 +780,7 @@ export class BatchNoteController extends BaseBatchController {
       noteList: this.noteList,
       collected: this.collected,
       failed: this.failed,
+      commentResults: this.commentResults,
       processedCount: this.collected.length + this.failed.length,
     });
   }
@@ -816,6 +853,7 @@ export class BatchNoteController extends BaseBatchController {
 
       // 7. 采集笔记数据（含重试）
       let collected = false;
+      let collectedNote = null;
       for (let attempt = 0; attempt < 3; attempt++) {
         try {
           await this._waitIfPaused();
@@ -834,12 +872,17 @@ export class BatchNoteController extends BaseBatchController {
           }
           this.collected.push(result);
           this._reportCollectedNote(result);
+          collectedNote = result;
           collected = true;
           console.log(`[灵感爆爆爆] 采集成功: ${noteInfo.noteId} (${result.title})`);
           break;
         } catch (err) {
           console.warn(`[灵感爆爆爆] 采集第 ${attempt + 1} 次失败: ${noteInfo.noteId}`, err.message);
         }
+      }
+
+      if (collected) {
+        await this._collectAttachedComments(noteInfo, collectedNote?.url || collectedNote?.canonicalUrl || noteInfo.url || window.location.href);
       }
 
       // 8. 返回列表页
@@ -881,6 +924,8 @@ export class BatchNoteController extends BaseBatchController {
       this._reportCollectedNote(result);
       console.log(`[灵感爆爆爆] Fallback 采集成功: ${noteInfo.noteId} (${result.title})`);
 
+      await this._collectAttachedComments(noteInfo, result?.url || result?.canonicalUrl || fullUrl);
+
       await this._goBackToList(urlBefore);
 
       return true;
@@ -910,6 +955,127 @@ export class BatchNoteController extends BaseBatchController {
       collectionRunId: this.collectionRunId,
       externalTaskId: this.externalTaskId,
       sequence: Date.now(),
+      collectedAt: new Date().toISOString(),
+    });
+  }
+
+  async _collectAttachedComments(noteInfo = {}, noteUrl = '') {
+    if (!this._includeComments || this._commentLimit <= 0) return { total: 0, comments: [] };
+    if (!this.isRunning) return { total: 0, comments: [] };
+
+    const noteId = String(noteInfo?.noteId || '').trim().replace(/^xhs_/, '');
+    if (!noteId) return { total: 0, comments: [] };
+
+    try {
+      this._emitProgress({
+        status: 'collecting_comments',
+        total: this.noteList.length,
+        current: this.currentIndex,
+        message: `正在顺手采集第 ${this.currentIndex}/${this.noteList.length} 篇前 ${this._commentLimit} 条评论`,
+      });
+      const ready = await this._waitForAttachedCommentContext(noteId, 8000);
+      if (!ready) {
+        const result = { noteId, total: 0, error: 'comments_not_ready' };
+        this.commentResults.push(result);
+        return result;
+      }
+
+      await randomDelay(120, 220);
+      const result = await collectComments({
+        noteId,
+        noteUrl: noteUrl || noteInfo.url || window.location.href,
+        maxTotal: this._commentLimit,
+        maxSubComments: this._commentDepthMode === COMMENT_DEPTH_MODE.ALL_REPLIES ? 0 : BATCH_CONFIG.maxSubComments,
+        commentDepthMode: this._commentDepthMode,
+        shouldStop: () => !this.isRunning,
+        waitIfPaused: () => this._waitIfPaused(),
+        collectionRunId: this.collectionRunId,
+        onProgress: (progress) => {
+          const message = progress?.message || `正在顺手采集第 ${this.currentIndex}/${this.noteList.length} 篇评论`;
+          void this.reportHeartbeat.report(this.collectionRunId, {
+            taskState: this.state,
+            stage: 'collecting_comments',
+            current: this.currentIndex,
+            total: this.noteList.length,
+            message,
+          }).catch(() => {});
+        },
+      });
+      const comments = Array.isArray(result?.comments) ? result.comments : [];
+      const total = Number(result?.total ?? comments.length) || 0;
+      this._totalCommentsCollected += total;
+      this.commentResults.push({ noteId, total });
+      comments.forEach((comment, index) => this._reportCollectedComment(comment, noteInfo, index));
+      return { total, comments };
+    } catch (error) {
+      const result = {
+        noteId,
+        total: 0,
+        error: String(error?.message || error || 'comments_failed'),
+      };
+      this.commentResults.push(result);
+      console.warn(`[灵感爆爆爆] 附带评论采集失败: ${noteId}`, error);
+      return result;
+    }
+  }
+
+  async _waitForAttachedCommentContext(noteId, timeout = 8000) {
+    const startedAt = Date.now();
+    let stableRounds = 0;
+    while (Date.now() - startedAt < timeout) {
+      await this._waitIfPaused();
+      if (!this.isRunning) return false;
+      if (await this._pauseForRiskControl()) {
+        await this._waitIfPaused();
+        if (!this.isRunning) return false;
+        continue;
+      }
+
+      const pathname = window.location.pathname || '';
+      const inDetail = pathname.includes(noteId) || isPopupOpen() || isNoteDetailReady();
+      const context = getActiveCommentsContext();
+      const hasContainer = Boolean(context.container);
+      const hasCommentItems = Boolean(context.hasCommentItems);
+      const hasCommentMeta = Boolean(context.hasCommentMeta || context.hasExplicitEmptyState);
+
+      if (inDetail && hasContainer && (hasCommentItems || hasCommentMeta)) {
+        stableRounds += 1;
+        if (stableRounds >= 2) return true;
+      } else {
+        stableRounds = 0;
+      }
+
+      void this.reportHeartbeat.report(this.collectionRunId, {
+        taskState: this.state,
+        stage: 'context_check',
+        current: this.currentIndex,
+        total: this.noteList.length,
+        message: `正在等待第 ${this.currentIndex}/${this.noteList.length} 篇评论区稳定`,
+      }).catch(() => {});
+      await randomDelay(140, 220);
+    }
+    return false;
+  }
+
+  _reportCollectedComment(comment = {}, noteInfo = {}, offset = 0) {
+    if (!this.collectionRunId) return;
+    const noteId = String(comment.noteId || noteInfo.noteId || '').trim().replace(/^xhs_/, '');
+    const record = withMonitorRecordMeta({
+      ...comment,
+      platform: String(comment.platform || 'xhs').trim() || 'xhs',
+      noteId,
+      platformContentId: String(comment.platformContentId || noteId || '').trim(),
+      contentId: String(comment.contentId || (noteId ? `xhs_${noteId}` : '')).trim(),
+    }, this.monitorMeta || comment.monitorMeta, comment.monitorMode);
+    const externalRecordId = String(record.commentId || record.id || record.commentEntityId || '').trim();
+    if (!externalRecordId || !String(record.text || record.content || record.commentText || '').trim()) return;
+    reportWorkbenchRecord({
+      recordType: WORKBENCH_RECORD_TYPE.COMMENT,
+      externalRecordId,
+      record,
+      collectionRunId: this.collectionRunId,
+      externalTaskId: this.externalTaskId,
+      sequence: Date.now() + offset,
       collectedAt: new Date().toISOString(),
     });
   }
@@ -1241,6 +1407,7 @@ export class BatchNoteController extends BaseBatchController {
         noteList: this.noteList,
         collected: this.collected,
         failed: this.failed,
+        commentResults: this.commentResults,
       }),
       error: String(error?.message || error),
     }).catch(() => {});

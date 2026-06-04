@@ -260,6 +260,32 @@ test('mapTaskEnvelopeToInternalCommand forwards xhs batch note search filters', 
   });
 });
 
+test('mapTaskEnvelopeToInternalCommand forwards attached comments for xhs batch notes', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'task_xhs_notes_with_comments',
+    taskType: 'xhs.batchNotes',
+    platform: 'xhs',
+    target: {
+      pageType: 'search',
+      url: 'https://www.xiaohongshu.com/search_result?keyword=A',
+    },
+    payload: {
+      limit: 30,
+      includeComments: true,
+      commentLimit: 20,
+      commentDepthMode: 'allReplies',
+    },
+  });
+
+  assert.equal(command.action, 'startBatchNotes');
+  assert.equal(command.payload.mode, 'search');
+  assert.equal(command.payload.includeComments, true);
+  assert.equal(command.payload.commentLimit, 20);
+  assert.equal(command.payload.commentDepthMode, 'allReplies');
+});
+
 test('mapTaskEnvelopeToInternalCommand forwards xhs batch comment search filters', () => {
   const command = mapTaskEnvelopeToInternalCommand({
     type: 'task.envelope',

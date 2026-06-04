@@ -54,10 +54,27 @@ function buildContentIdsFromNotes(collected = []) {
     .filter(Boolean);
 }
 
+function buildAttachedCommentSummary(commentResults = []) {
+  const results = (Array.isArray(commentResults) ? commentResults : [])
+    .map((item) => ({
+      noteId: normalizeText(item?.noteId),
+      total: Math.max(0, Number(item?.total || 0) || 0),
+      error: normalizeText(item?.error),
+    }))
+    .filter((item) => item.noteId);
+  if (results.length === 0) return {};
+
+  return {
+    totalComments: results.reduce((sum, item) => sum + item.total, 0),
+    attachedCommentResults: results,
+  };
+}
+
 export function buildXhsBatchNotesRunPatch({
   noteList = [],
   collected = [],
   failed = [],
+  commentResults = [],
 } = {}) {
   const targets = (Array.isArray(noteList) ? noteList : [])
     .map((item) => normalizeText(item?.noteId))
@@ -70,6 +87,7 @@ export function buildXhsBatchNotesRunPatch({
     targetIds: targets,
     contentIds: buildContentIdsFromNotes(collected),
     failedTargets: Array.isArray(failed) ? failed : [],
+    ...buildAttachedCommentSummary(commentResults),
   };
 }
 
@@ -77,6 +95,7 @@ export function buildXhsBatchNotesProgressPatch({
   noteList = [],
   collected = [],
   failed = [],
+  commentResults = [],
   processedCount = 0,
 } = {}) {
   const allTargets = (Array.isArray(noteList) ? noteList : [])
@@ -88,10 +107,13 @@ export function buildXhsBatchNotesProgressPatch({
     .filter((item) => processedSet.has(normalizeText(item?.noteId)));
   const scopedFailed = (Array.isArray(failed) ? failed : [])
     .filter((item) => processedSet.has(normalizeText(item?.noteId)));
+  const scopedCommentResults = (Array.isArray(commentResults) ? commentResults : [])
+    .filter((item) => processedSet.has(normalizeText(item?.noteId)));
   const summary = buildXhsBatchNotesRunPatch({
     noteList: processedTargets.map((noteId) => ({ noteId })),
     collected: scopedCollected,
     failed: scopedFailed,
+    commentResults: scopedCommentResults,
   });
   const resume = buildBatchResumeCheckpoint({
     targetIds: allTargets,
