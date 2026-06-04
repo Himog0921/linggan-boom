@@ -75,7 +75,7 @@ test('plugin authorization guard throws a user-facing error when authorization i
       assert.equal(error.code, 'plugin_authorization_required');
       assert.equal(
         error.message,
-        '当前浏览器还没有插件授权。请先去内容工作台设置生成授权码，再回到插件激活。',
+        '当前浏览器还没有插件授权。可以从内容工作台重新下载安装，或在插件里发起授权申请。',
       );
       return true;
     },
@@ -85,4 +85,109 @@ test('plugin authorization guard throws a user-facing error when authorization i
     getPluginAuthorizationBlockedMessage({ status: 'revoked' }),
     '插件授权已被撤销，请联系管理员重新授权。',
   );
+  assert.equal(
+    getPluginAuthorizationBlockedMessage({ status: 'pending' }),
+    '授权申请已发送，等待内容工作台审批。',
+  );
+  assert.equal(
+    getPluginAuthorizationBlockedMessage({ status: 'approved' }),
+    '授权已通过，请在插件里点击检查审批结果完成激活。',
+  );
+});
+
+test('plugin authorization client creates a pending workbench approval request', async () => {
+  const storageArea = createMemoryStorage();
+  const requests = [];
+  const client = createPluginAuthorizationClient({
+    storageArea,
+    randomUUID: () => 'device-external-1',
+    resolveServerUrl: async () => 'https://lingganboom.fun',
+    fetchFn: async (url, options = {}) => {
+      requests.push([url, options]);
+      return {
+        ok: true,
+        status: 202,
+        async json() {
+          return {
+            requestId: 'request-1',
+            status: 'pending',
+            message: '授权申请已发送，请等待内容工作台审批。',
+          };
+        },
+      };
+    },
+  });
+
+  const authorization = await client.requestWorkbenchApproval({
+    pluginVersion: '2.0.30',
+    browserLabel: 'Chrome 外部安装',
+  });
+
+  assert.equal(authorization.authorizationId, 'request-1');
+  assert.equal(authorization.status, 'pending');
+  assert.equal(authorization.deviceId, 'device-external-1');
+  assert.equal(hasActivePluginAuthorization(authorization), false);
+  assert.equal(requests[0][0], 'https://lingganboom.fun/api/plugin-authorizations/requests');
+  assert.deepEqual(JSON.parse(requests[0][1].body), {
+    deviceId: 'device-external-1',
+    pluginVersion: '2.0.30',
+    browserLabel: 'Chrome 外部安装',
+  });
+});
+
+test('plugin authorization client claims an approved request and stores active authorization', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchPluginAuthorization: {
+      deviceId: 'device-external-1',
+      authorizationId: 'request-1',
+      status: 'pending',
+    },
+  });
+  const requests = [];
+  const client = createPluginAuthorizationClient({
+    storageArea,
+    resolveServerUrl: async () => 'https://lingganboom.fun',
+    fetchFn: async (url, options = {}) => {
+      requests.push([url, options]);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            status: 'active',
+            authorizationId: 'request-1',
+            authorizationToken: 'auth-token-1',
+            memberName: '程烈',
+            seatName: '程烈 Chrome 执行设备',
+            expiresAt: '2026-08-03T08:00:00.000Z',
+            station: {
+              stationId: 'station-1',
+              stationToken: 'station-token-1',
+              displayName: '程烈 Chrome 执行设备',
+              role: 'execution',
+            },
+          };
+        },
+      };
+    },
+  });
+
+  const result = await client.claimApprovedRequest({
+    stationKey: 'station-key-1',
+    pluginVersion: '2.0.30',
+    browserLabel: 'Chrome 外部安装',
+    capabilities: ['xhs.authorSurfaceScan'],
+  });
+
+  assert.equal(result.authorization.authorizationToken, 'auth-token-1');
+  assert.equal(result.authorization.status, 'active');
+  assert.equal(result.station.stationId, 'station-1');
+  assert.equal(requests[0][0], 'https://lingganboom.fun/api/plugin-authorizations/requests/request-1/claim');
+  assert.deepEqual(JSON.parse(requests[0][1].body), {
+    deviceId: 'device-external-1',
+    stationKey: 'station-key-1',
+    pluginVersion: '2.0.30',
+    browserLabel: 'Chrome 外部安装',
+    capabilities: ['xhs.authorSurfaceScan'],
+  });
 });

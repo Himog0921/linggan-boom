@@ -77,6 +77,41 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
 });
 
+test('execution station client reuses stable station key before registration', async () => {
+  const storageArea = createMemoryStorage();
+  const client = createExecutionStationClient({
+    storageArea,
+    randomUUID: () => 'station-key-approval',
+  });
+
+  const first = await client.ensureStationKey();
+  const second = await client.ensureStationKey();
+  const stored = await client.getStoredStationIdentity();
+
+  assert.equal(first, 'station-key-approval');
+  assert.equal(second, 'station-key-approval');
+  assert.equal(stored.stationKey, 'station-key-approval');
+});
+
+test('execution station client keeps existing station key when clearing identity', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchExecutionStation: {
+      stationKey: 'station-key-existing',
+      stationId: 'station-1',
+      stationToken: 'token-1',
+    },
+  });
+  const client = createExecutionStationClient({ storageArea });
+
+  await client.clearStationIdentity();
+  const stationKey = await client.ensureStationKey();
+  const stored = await client.getStoredStationIdentity();
+
+  assert.equal(stationKey, 'station-key-existing');
+  assert.equal(stored.stationKey, 'station-key-existing');
+  assert.equal(stored.stationId, undefined);
+});
+
 test('execution station heartbeat respects server retry-after backpressure', async () => {
   const storageArea = createMemoryStorage({
     workbenchExecutionStation: {

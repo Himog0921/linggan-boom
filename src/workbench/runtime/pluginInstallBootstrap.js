@@ -69,7 +69,7 @@ export async function applyPackagedInstallBootstrap({
     await saveFlywheelConfig({ serverUrl: config.serverUrl, enabled: true });
   }
 
-  const shouldAuthorizeWithPackagedCode = !hasAuthorization || !hasStation;
+  const shouldAuthorizeWithPackagedCode = !hasAuthorization;
   const nextAuthorization = shouldAuthorizeWithPackagedCode
     ? await authorizationClient.authorizeWithCode({
       authorizationCode: config.authorizationCode,

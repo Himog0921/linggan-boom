@@ -78,10 +78,16 @@ export function getPluginAuthorizationBlockedMessage(authorization = {}) {
   if (status === 'revoked') {
     return '插件授权已被撤销，请联系管理员重新授权。';
   }
+  if (status === 'pending') {
+    return '授权申请已发送，等待内容工作台审批。';
+  }
+  if (status === 'approved') {
+    return '授权已通过，请在插件里点击检查审批结果完成激活。';
+  }
   if (status === 'suspended' || status === 'disabled') {
     return '插件授权当前不可用，请联系管理员恢复。';
   }
-  return '当前浏览器还没有插件授权。请先去内容工作台设置生成授权码，再回到插件激活。';
+  return '当前浏览器还没有插件授权。可以从内容工作台重新下载安装，或在插件里发起授权申请。';
 }
 
 export async function readStoredPluginAuthorization({
@@ -203,10 +209,80 @@ export function createPluginAuthorizationClient({
     });
   }
 
+  async function requestWorkbenchApproval({
+    pluginVersion = '',
+    browserLabel = '',
+  } = {}) {
+    const deviceId = await ensureDeviceId();
+    const data = await postJson('/api/plugin-authorizations/requests', {
+      deviceId,
+      pluginVersion: normalizeString(pluginVersion),
+      browserLabel: normalizeString(browserLabel),
+    });
+    return saveAuthorization({
+      deviceId,
+      authorizationId: normalizeString(data.requestId || data.authorizationId || data.id),
+      authorizationToken: '',
+      status: normalizeString(data.status || 'pending') || 'pending',
+      authorizationMessage: normalizeString(data.message),
+      requestedAt: now(),
+    });
+  }
+
+  async function claimApprovedRequest({
+    stationKey = '',
+    pluginVersion = '',
+    browserLabel = '',
+    capabilities = [],
+  } = {}) {
+    const existing = await getStoredAuthorization();
+    const authorizationId = normalizeString(existing.authorizationId || existing.id);
+    const deviceId = normalizeString(existing.deviceId) || await ensureDeviceId();
+    if (!authorizationId) {
+      const error = new Error('authorization_request_missing');
+      error.code = 'authorization_request_missing';
+      throw error;
+    }
+    const data = await postJson(`/api/plugin-authorizations/requests/${authorizationId}/claim`, {
+      deviceId,
+      stationKey: normalizeString(stationKey),
+      pluginVersion: normalizeString(pluginVersion),
+      browserLabel: normalizeString(browserLabel),
+      capabilities: normalizeScope(capabilities),
+    });
+    if (normalizeString(data.status) !== 'active') {
+      const authorization = await saveAuthorization({
+        deviceId,
+        authorizationId,
+        status: normalizeString(data.status || existing.status || 'pending') || 'pending',
+        authorizationMessage: normalizeString(data.message),
+      });
+      return { authorization, station: null, claimed: false };
+    }
+    const authorization = await saveAuthorization({
+      deviceId,
+      authorizationId: normalizeString(data.authorizationId || authorizationId),
+      authorizationToken: normalizeString(data.authorizationToken || data.apiToken || data.token),
+      status: 'active',
+      teamName: normalizeString(data.teamName),
+      memberName: normalizeString(data.memberName),
+      seatName: normalizeString(data.seatName),
+      expiresAt: normalizeString(data.expiresAt),
+      authorizedAt: now(),
+    });
+    return {
+      authorization,
+      station: data.station && typeof data.station === 'object' ? data.station : null,
+      claimed: true,
+    };
+  }
+
   return {
     getStoredAuthorization,
     saveAuthorization,
     clearAuthorization,
     authorizeWithCode,
+    requestWorkbenchApproval,
+    claimApprovedRequest,
   };
 }

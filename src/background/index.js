@@ -1408,6 +1408,107 @@ const bgHandlers = {
     }
   },
 
+  [MSG.REQUEST_PLUGIN_AUTHORIZATION]: async (msg = {}) => {
+    const serverUrl = String(msg.serverUrl || '').trim();
+    if (serverUrl) {
+      await saveFlywheelConfig({ serverUrl, enabled: true });
+    }
+    if (!serverUrl) {
+      return { success: false, error: 'workbench_url_required' };
+    }
+    try {
+      const authorization = await pluginAuthorizationClient.requestWorkbenchApproval({
+        pluginVersion: getPluginVersion(),
+        browserLabel: String(msg.browserLabel || '').trim(),
+      });
+      return {
+        success: true,
+        authorized: false,
+        authorization,
+        message: authorization.authorizationMessage || '授权申请已发送，请等待内容工作台审批。',
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error?.message || error || 'request_plugin_authorization_failed'),
+      };
+    }
+  },
+
+  [MSG.CLAIM_PLUGIN_AUTHORIZATION_REQUEST]: async (msg = {}) => {
+    const serverUrl = String(msg.serverUrl || '').trim();
+    if (serverUrl) {
+      await saveFlywheelConfig({ serverUrl, enabled: true });
+    }
+    if (!serverUrl) {
+      return { success: false, error: 'workbench_url_required' };
+    }
+    try {
+      const previousAuthorization = await pluginAuthorizationClient.getStoredAuthorization();
+      const stationKey = await executionStationClient.ensureStationKey();
+      const currentIdentity = await executionStationClient.getStoredStationIdentity();
+      const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(currentIdentity);
+      const result = await pluginAuthorizationClient.claimApprovedRequest({
+        stationKey,
+        pluginVersion: getPluginVersion(),
+        browserLabel: String(msg.browserLabel || '').trim(),
+        capabilities: runtimeSnapshot.capabilities,
+      });
+      if (!result?.claimed) {
+        return {
+          success: true,
+          authorized: false,
+          authorization: result?.authorization || null,
+          message: result?.authorization?.authorizationMessage || '申请还在等待工作台审批。',
+        };
+      }
+      await saveFlywheelConfig({
+        enabled: true,
+        apiToken: String(result.authorization?.authorizationToken || '').trim(),
+        dataToken: '',
+        dataTokenExpiresAt: '',
+        dataWorkspaceId: '',
+        dataUserEmail: '',
+        dataUserName: '',
+      });
+      if (
+        previousAuthorization?.authorizationId
+        && result.authorization?.authorizationId
+        && previousAuthorization.authorizationId !== result.authorization.authorizationId
+      ) {
+        await taskLeaseStore.clear();
+      }
+      if (result.station) {
+        await executionStationClient.saveStationIdentity({
+          stationKey,
+          stationId: String(result.station.stationId || '').trim(),
+          stationToken: String(result.station.stationToken || '').trim(),
+          displayName: String(result.station.displayName || '').trim(),
+          role: String(result.station.role || 'execution').trim(),
+          capabilities: runtimeSnapshot.capabilities,
+          pairedAt: Date.now(),
+        });
+      }
+      const identity = await executionStationClient.getStoredStationIdentity();
+      const heartbeat = await sendExecutionStationHeartbeat('online');
+      void registerWorkbenchPushSubscriptionTick();
+      const { platformAccounts } = await collectExecutionStationRuntimeSnapshot(identity);
+      return {
+        success: true,
+        authorized: true,
+        authorization: result.authorization,
+        identity,
+        heartbeat,
+        platformAccounts,
+      };
+    } catch (error) {
+      return {
+        success: false,
+        error: String(error?.message || error || 'claim_plugin_authorization_request_failed'),
+      };
+    }
+  },
+
   [MSG.CLEAR_PLUGIN_AUTHORIZATION]: async () => {
     await pluginAuthorizationClient.clearAuthorization();
     await saveFlywheelConfig({

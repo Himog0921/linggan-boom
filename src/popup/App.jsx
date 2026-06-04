@@ -404,7 +404,7 @@ export default function App() {
     if (stationStatus?.authorized) return true;
     setActiveTab('tab-config');
     showNotice(
-      stationStatus?.authorizationMessage || '当前浏览器还没有插件授权。请先去内容工作台设置生成授权码，再回到插件激活。',
+      stationStatus?.authorizationMessage || '当前浏览器还没有插件授权。可以从内容工作台重新下载安装，或在插件里发起授权申请。',
       'warning',
     );
     return false;
@@ -743,6 +743,52 @@ export default function App() {
       }
     });
   }, [authorizationCode, flywheelUrl, hideNotice, loadStationStatus, showNotice, withBusyAction]);
+
+  const handlePluginAuthorizationRequest = useCallback(async () => {
+    const serverUrl = flywheelUrl.trim();
+    if (!serverUrl) {
+      showNotice('请先配置工作台地址。', 'warning');
+      return;
+    }
+    await withBusyAction('requestPluginAuthorization', async () => {
+      hideNotice();
+      try {
+        const result = await sendToBackground(MSG.REQUEST_PLUGIN_AUTHORIZATION, {
+          serverUrl,
+          browserLabel: navigator.userAgent || '',
+        });
+        await loadStationStatus();
+        showNotice(result?.message || '授权申请已发送，请等待内容工作台审批。', 'success');
+      } catch (err) {
+        showNotice(`申请失败：${toFriendlyError(err)}`, 'warning');
+      }
+    });
+  }, [flywheelUrl, hideNotice, loadStationStatus, showNotice, withBusyAction]);
+
+  const handlePluginAuthorizationClaim = useCallback(async () => {
+    const serverUrl = flywheelUrl.trim();
+    if (!serverUrl) {
+      showNotice('请先配置工作台地址。', 'warning');
+      return;
+    }
+    await withBusyAction('claimPluginAuthorization', async () => {
+      hideNotice();
+      try {
+        const result = await sendToBackground(MSG.CLAIM_PLUGIN_AUTHORIZATION_REQUEST, {
+          serverUrl,
+          browserLabel: navigator.userAgent || '',
+        });
+        await loadStationStatus();
+        if (result?.authorized) {
+          showNotice('授权已生效，执行设备也已自动绑定。', 'success');
+          return;
+        }
+        showNotice(result?.message || '申请还在等待工作台审批。', 'info');
+      } catch (err) {
+        showNotice(`检查失败：${toFriendlyError(err)}`, 'warning');
+      }
+    });
+  }, [flywheelUrl, hideNotice, loadStationStatus, showNotice, withBusyAction]);
 
   const handleClearPluginAuthorization = useCallback(async () => {
     const confirmed = await showConfirmDialog({
@@ -1212,6 +1258,8 @@ export default function App() {
               onUsePresetUrl={handleUseWorkbenchPreset}
               onAuthorizationCodeChange={setAuthorizationCode}
               onAuthorize={handlePluginAuthorize}
+              onRequestAuthorization={handlePluginAuthorizationRequest}
+              onClaimAuthorization={handlePluginAuthorizationClaim}
               onClearAuthorization={handleClearPluginAuthorization}
               onPairingCodeChange={setStationPairingCode}
               onTest={handleFlywheelTest}
@@ -1219,6 +1267,8 @@ export default function App() {
               onSync={handleSyncToFlywheel}
               testing={Boolean(busyActions.flywheelTest)}
               authorizing={Boolean(busyActions.pluginAuthorize)}
+              requestingAuthorization={Boolean(busyActions.requestPluginAuthorization)}
+              claimingAuthorization={Boolean(busyActions.claimPluginAuthorization)}
               clearingAuthorization={Boolean(busyActions.clearPluginAuthorization)}
               pairing={Boolean(busyActions.stationPair)}
               syncing={Boolean(busyActions.syncFlywheel)}

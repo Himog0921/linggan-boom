@@ -290,6 +290,7 @@ export function createExecutionStationClient({
   return {
     getStoredStationIdentity,
     saveStationIdentity,
+    ensureStationKey,
     clearStationIdentity,
     registerWithPairingCode,
     sendHeartbeat,

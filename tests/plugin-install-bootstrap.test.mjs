@@ -98,7 +98,7 @@ test('packaged install bootstrap skips when authorization and station already ex
   assert.deepEqual(result, { applied: false, reason: 'already_configured' });
 });
 
-test('packaged install bootstrap refreshes authorization when station identity is missing', async () => {
+test('packaged install bootstrap preserves existing authorization when only station identity is missing', async () => {
   const calls = [];
   const result = await applyPackagedInstallBootstrap({
     readConfig: async () => ({
@@ -144,23 +144,9 @@ test('packaged install bootstrap refreshes authorization when station identity i
   });
 
   assert.equal(result.applied, true);
-  assert.equal(result.authorization.authorizationId, 'new-auth');
+  assert.equal(result.authorization.authorizationId, 'old-auth');
   assert.deepEqual(calls, [
     ['config', { serverUrl: 'https://lingganboom.fun', enabled: true }],
-    ['authorize', {
-      authorizationCode: 'LGBOOM-NEW',
-      pluginVersion: '2.0.2',
-      browserLabel: 'Chrome',
-    }],
-    ['config', {
-      enabled: true,
-      apiToken: 'new-token',
-      dataToken: '',
-      dataTokenExpiresAt: '',
-      dataWorkspaceId: '',
-      dataUserEmail: '',
-      dataUserName: '',
-    }],
     ['register', {
       pairingCode: '654321',
       capabilities: ['xhs.noteDetailProbe'],

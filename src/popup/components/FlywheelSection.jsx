@@ -106,6 +106,8 @@ export default function FlywheelSection({
   presetUrls = {},
   testing = false,
   authorizing = false,
+  requestingAuthorization = false,
+  claimingAuthorization = false,
   clearingAuthorization = false,
   pairing = false,
   syncing = false,
@@ -113,6 +115,8 @@ export default function FlywheelSection({
   onUsePresetUrl,
   onAuthorizationCodeChange,
   onAuthorize,
+  onRequestAuthorization,
+  onClaimAuthorization,
   onClearAuthorization,
   onPairingCodeChange,
   onTest,
@@ -128,15 +132,27 @@ export default function FlywheelSection({
   }[flywheelStatus] || flywheelStatus;
 
   const authorization = authorizationStatus.authorization || {};
+  const rawAuthorizationStatus = text(authorization.status || authorization.authorizationStatus);
+  const isAuthorizationPending = rawAuthorizationStatus === 'pending';
+  const isAuthorizationApproved = rawAuthorizationStatus === 'approved';
   const authorizationState = authorizationStatus.authorized
     ? 'connected'
-    : (authorization.status === 'expired' || authorization.status === 'revoked' ? 'disconnected' : 'unconfigured');
+    : (authorization.status === 'expired' || authorization.status === 'revoked'
+      ? 'disconnected'
+      : (isAuthorizationPending || isAuthorizationApproved ? 'testing' : 'unconfigured'));
   const authorizationLabel = authorizationStatus.authorized
     ? (authorization.memberName || authorization.teamName || authorization.authorizationId || '已授权')
-    : '未授权';
+    : (isAuthorizationPending ? '待审批' : isAuthorizationApproved ? '可领取' : '未授权');
   const authorizationHint = authorizationStatus.authorized
     ? `当前浏览器已授权给${authorization.memberName || '团队成员'}使用${authorization.teamName ? `，归属 ${authorization.teamName}` : ''}${authorization.expiresAt ? `，有效期至 ${authorization.expiresAt}` : ''}。`
-    : (authorizationStatus.authorizationMessage || '先去内容工作台设置生成授权码，再回到插件激活；未授权时插件不会开放采集、同步和工位绑定。');
+    : (authorizationStatus.authorizationMessage || '从内容工作台下载的插件会自动授权；其他来源安装时，可以在这里发起授权申请。');
+  const canRequestAuthorization = !authorizationStatus.authorized
+    && !isAuthorizationPending
+    && !isAuthorizationApproved
+    && typeof onRequestAuthorization === 'function';
+  const canClaimAuthorization = !authorizationStatus.authorized
+    && (isAuthorizationPending || isAuthorizationApproved)
+    && typeof onClaimAuthorization === 'function';
 
   const stationName = stationStatus.registered
     ? (stationStatus.identity?.displayName || stationStatus.identity?.stationId || '已绑定')
@@ -256,6 +272,30 @@ export default function FlywheelSection({
             </button>
           ) : null}
         </div>
+        {canRequestAuthorization || canClaimAuthorization ? (
+          <div className="flywheel-url-row">
+            {canRequestAuthorization ? (
+              <button
+                id="btnPluginAuthorizationRequest"
+                className={`popup-btn outline small${requestingAuthorization ? ' is-busy' : ''}`}
+                onClick={onRequestAuthorization}
+                disabled={requestingAuthorization || authorizing || clearingAuthorization}
+              >
+                {requestingAuthorization ? '发送中...' : '发起授权申请'}
+              </button>
+            ) : null}
+            {canClaimAuthorization ? (
+              <button
+                id="btnPluginAuthorizationClaim"
+                className={`popup-btn primary small${claimingAuthorization ? ' is-busy' : ''}`}
+                onClick={onClaimAuthorization}
+                disabled={claimingAuthorization || authorizing || clearingAuthorization}
+              >
+                {claimingAuthorization ? '检查中...' : '检查审批结果'}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div className="station-panel">
