@@ -91,6 +91,7 @@
 > 工作台远程任务的最终结果包必须从执行页读取，不能从 Background 本地库兜底伪装。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
 > 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
+> 笔记记录进入 outbox 前会补齐数据地基出站字段，包括 `standardContentCode`、`standardAuthorCode`、`keywords`、`authorFans`、`authorFansCollectedAt`、`mediaUnderstanding`、`sourceRun` 和 `dataFoundation` 摘要，供内容工作台做低粉爆文、爆款聚类和 Claude Agent 打标。
 
 ### 2.7 工作台 HTTP 协议补充
 

@@ -4,6 +4,7 @@
  */
 
 import { normalizeServerUrl } from '../shared/utils.js';
+import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFoundationPayload.js';
 
 const API_BASE_URL = 'https://lingganboom.fun';
 const FLYWHEEL_STORAGE_KEY = 'flywheelConfig';
@@ -409,7 +410,7 @@ async function throwForWorkbenchHttpError(response, fallbackMessage = 'workbench
 function normalizeSource(s) {
   const rawData = s.rawData || s;
   const qualityReason = s?.qualityReason ?? rawData?.qualityReason;
-  return {
+  const normalized = {
     platform: s.platform || 'xhs',
     platformId: s.noteId || s.platformId || s.id,
     url: s.url,
@@ -429,6 +430,11 @@ function normalizeSource(s) {
     rawData,
     commentsData: s.comments || s.commentsData,
   };
+  return enrichNoteWithDataFoundationPayload(normalized, {
+    source: 'plugin_manual_sync',
+    taskId: normalized.collectionRunId || 'manual_sync',
+    externalRecordId: normalized.platformId || normalized.url,
+  });
 }
 
 async function sendBatch(batchSources, tag, operator) {

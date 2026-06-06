@@ -50,6 +50,22 @@ AI 可用的数据契约，必须同时满足 4 件事：
 - `language`
 - `riskFlags`
 
+### 2.4 Data Foundation 出站层
+
+同步到内容工作台前，插件会把已有采集结果整理成数据地基字段。该层不做业务判断，只保证工作台能稳定识别、归并和分析：
+
+- `standardContentCode`：内容唯一编码，格式 `cw-content:global:<platform>:<contentType>:<platformContentId>`
+- `standardAuthorCode`：作者唯一编码，格式 `cw-author:global:<platform>:<platformAuthorId>`
+- `contentType`：统一为 `video` / `image_text` / `note` 等工作台可识别类型
+- `keywords`：由平台关键词、话题、搜索词合并去重
+- `authorFans`：作者粉丝数快照
+- `authorFansCollectedAt`：粉丝数采集时间
+- `mediaUnderstanding`：视频转写、画面摘要、OCR 文本等素材理解结果
+- `sourceRun`：本次来源运行记录，包含 `source`、`taskId`、`recordId`
+- `dataFoundation`：上述字段的摘要，包含 schema 版本和证据字段可用性
+
+这些字段会进入内容工作台的“今日低粉爆文”“爆款聚类”“证据完整性”和 Claude Agent 打标输入。
+
 ## 3. 核心表建议
 
 ## 3.1 contents
@@ -61,6 +77,7 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `contentId` | 全局主键，建议格式：`{platform}_{platformContentId}` |
 | `platform` | `xhs` / `douyin` |
 | `platformContentId` | 平台原始内容 ID |
+| `standardContentCode` | 内容工作台数据地基编码 |
 | `url` | 当前内容链接 |
 | `canonicalUrl` | 去噪后的标准链接 |
 | `contentType` | `image_post` / `video_post` / `mixed_post` |
@@ -69,6 +86,8 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `hashtags` | 话题列表 |
 | `mentions` | @对象列表 |
 | `keywords` | 平台原始关键词 |
+| `sourceRun` | 本次回传来源运行记录 |
+| `dataFoundation` | 数据地基出站摘要 |
 | `topicIds` | 平台原始话题 ID |
 | `authorEntityId` | 关联到 authors 表 |
 | `authorName` | 作者名快照 |

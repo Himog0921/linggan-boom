@@ -74,6 +74,7 @@ import {
   hasActivePluginAuthorization,
 } from '../workbench/runtime/pluginAuthorization.js';
 import { applyPackagedInstallBootstrap } from '../workbench/runtime/pluginInstallBootstrap.js';
+import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFoundationPayload.js';
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
 import { accountStore } from '../db/accountStore.js';
@@ -2121,7 +2122,12 @@ const taskDeltaReporter = createTaskDeltaReporter({
     if (String(record?.recordType || '').trim() !== WORKBENCH_RECORD_TYPE.NOTE) {
       return record?.payload || {};
     }
-    return prepareRecordWithStableCover(config, record?.payload || {});
+    const prepared = await prepareRecordWithStableCover(config, record?.payload || {});
+    return enrichNoteWithDataFoundationPayload(prepared, {
+      taskId: record?.taskId,
+      pluginRunId: record?.pluginRunId,
+      externalRecordId: record?.externalRecordId,
+    });
   },
   shouldPollWorkbenchTasks,
   getExecutorInstanceId: getPersistentExecutorInstanceId,

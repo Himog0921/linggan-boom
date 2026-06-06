@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { createDeltaOutbox } from '../src/workbench/runtime/deltaOutbox.js';
+import { enrichNoteWithDataFoundationPayload } from '../src/workbench/runtime/dataFoundationPayload.js';
 import {
   WORKBENCH_EVENT_SOURCE,
   WORKBENCH_RECORD_TYPE,
@@ -287,6 +288,43 @@ test('delta outbox prepares record payloads before storing them', async () => {
   await outbox.flush();
 
   assert.equal(envelopes[0][1].records[0].payload.coverUrl, 'https://blob.example.com/stable-cover.webp');
+});
+
+test('delta outbox can attach data foundation payload before storing note records', async () => {
+  const store = createMemoryOutboxStore();
+  const outbox = createDeltaOutbox({
+    store,
+    ingestDelta: async () => ({ success: true }),
+    prepareRecordPayload: async (record) => enrichNoteWithDataFoundationPayload(record.payload, record),
+    executorInstanceId: 'plugin_1',
+    autoFlush: false,
+  });
+
+  await outbox.enqueueRecord({
+    taskId: 'task_data_foundation',
+    pluginRunId: 'run_data_foundation',
+    recordType: WORKBENCH_RECORD_TYPE.NOTE,
+    externalRecordId: 'note_1',
+    sequence: 5,
+    payload: {
+      platform: 'xhs',
+      noteId: 'note_1',
+      title: '低粉爆文',
+      authorId: 'author_1',
+      authorFans: 900,
+      hashtags: ['#ADHD'],
+      coverUrl: 'https://images.example.com/cover.webp',
+    },
+  });
+
+  const queued = [...store.rows.values()][0];
+  assert.equal(queued.payload.payload.standardContentCode, 'cw-content:global:xhs:image_text:note_1');
+  assert.equal(queued.payload.payload.standardAuthorCode, 'cw-author:global:xhs:author_1');
+  assert.deepEqual(queued.payload.payload.sourceRun, {
+    source: 'plugin_task_delta',
+    taskId: 'task_data_foundation',
+    recordId: 'note_1',
+  });
 });
 
 test('delta outbox rejects invalid extractor records before they enter the queue', async () => {
