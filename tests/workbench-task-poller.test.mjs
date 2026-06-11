@@ -313,7 +313,7 @@ test('task poller attaches runtime observability to terminal workbench events', 
   assert.equal(terminalEvent.payload.observability.report, true);
 });
 
-test('task poller fails the task with schema health when extractor records are invalid', async () => {
+test('task poller fails the task with schema health when extractor note records are invalid', async () => {
   const patches = [];
   const events = [];
   const poller = createTaskPoller({
@@ -346,31 +346,31 @@ test('task poller fails the task with schema health when extractor records are i
         status: 'done',
         resultSummary: { itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
         records: {
-          notes: [],
-          comments: [{ commentId: 'c1', text: '缺少父级作品' }],
+          notes: [{ noteId: 'n1' }],
+          comments: [],
           authors: [],
           mediaAssets: [],
         },
       },
     }),
     enqueueRecords: async () => {
-      const error = new Error('comment payload must include the parent note or video id');
-      error.code = 'missing_comment_parent';
-      error.reasonCode = 'missing_comment_parent';
+      const error = new Error('note payload must include visible content or media');
+      error.code = 'missing_note_body';
+      error.reasonCode = 'missing_note_body';
       error.retryable = false;
       error.validationErrors = [{
-        field: 'payload.noteId',
-        code: 'missing_comment_parent',
-        message: 'comment payload must include the parent note or video id',
+        field: 'payload',
+        code: 'missing_note_body',
+        message: 'note payload must include visible content or media',
       }];
       error.observability = {
-        recordType: 'comment',
+        recordType: 'note',
         schemaValidationAttemptCount: 1,
         schemaValidationFailureCount: 1,
         schemaValidationFailureRate: 1,
         recordSchemaFailed: true,
-        invalidRecordField: 'payload.noteId',
-        reasonCode: 'missing_comment_parent',
+        invalidRecordField: 'payload',
+        reasonCode: 'missing_note_body',
       };
       throw error;
     },
@@ -385,12 +385,73 @@ test('task poller fails the task with schema health when extractor records are i
 
   assert.equal(result.failed, true);
   assert.equal(patches.at(-1)[1].status, 'failed');
-  assert.equal(patches.at(-1)[1].errorMessage, 'comment payload must include the parent note or video id');
+  assert.equal(patches.at(-1)[1].errorMessage, 'note payload must include visible content or media');
   const failedEvent = events.find((event) => event.eventType === 'task.failed');
-  assert.equal(failedEvent.payload.reasonCode, 'missing_comment_parent');
-  assert.equal(failedEvent.payload.observability.recordType, 'comment');
+  assert.equal(failedEvent.payload.reasonCode, 'missing_note_body');
+  assert.equal(failedEvent.payload.observability.recordType, 'note');
   assert.equal(failedEvent.payload.observability.schemaValidationFailureCount, 1);
   assert.equal(failedEvent.payload.observability.recordSchemaFailed, true);
+});
+
+test('task poller drops invalid comment records before remote writeback', async () => {
+  const patches = [];
+  const recordBatches = [];
+  const poller = createTaskPoller({
+    claimTaskLease: claimTask([
+      {
+        id: 'task_comment_filter_1',
+        taskType: 'xhs.batchComments',
+        platform: 'xhs',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_comment_filter_1',
+      collectionRunId: 'run_comment_filter_1',
+      resultLookup: {
+        externalTaskId: 'task_comment_filter_1',
+        collectionRunId: 'run_comment_filter_1',
+      },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_comment_filter_1',
+        status: 'done',
+        resultSummary: { itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
+        records: {
+          notes: [],
+          comments: [
+            { commentId: 'c-valid', noteId: 'note-1', text: '有效评论' },
+            { commentId: 'c-empty-text', noteId: 'note-1', text: '' },
+            { commentId: 'c-missing-parent', text: '缺少父级作品' },
+          ],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueRecords: async (records) => {
+      recordBatches.push(records);
+      return records;
+    },
+  });
+
+  await poller.tick();
+  const result = await poller.tick();
+
+  assert.equal(result.status, 'completed');
+  assert.equal(patches.at(-1)[1].status, 'completed');
+  assert.equal(recordBatches.length, 1);
+  assert.equal(recordBatches[0].length, 1);
+  assert.equal(recordBatches[0][0].payload.commentId, 'c-valid');
+  assert.equal(recordBatches[0][0].payload.text, '有效评论');
 });
 
 test('task poller exposes lease credentials and page fingerprint for server ingest', async () => {
@@ -1951,7 +2012,7 @@ test('task poller maps paused status and keeps polling active task', async () =>
         records: {
           notes: [],
           comments: [
-            { commentId: 'comment_1', text: '已采到的评论' },
+            { commentId: 'comment_1', noteId: 'note_1', text: '已采到的评论' },
           ],
           authors: [],
           mediaAssets: [],
@@ -1980,7 +2041,7 @@ test('task poller maps paused status and keeps polling active task', async () =>
           comments: [
             {
               commentId: 'comment_1',
-              noteId: '',
+              noteId: 'note_1',
               text: '已采到的评论',
               author: '',
               authorId: '',
@@ -2039,7 +2100,7 @@ test('task poller maps stopped status to final stopped patch with partial result
         records: {
           notes: [],
           comments: [
-            { commentId: 'comment_9', text: '停止前已采评论' },
+            { commentId: 'comment_9', noteId: '7001', text: '停止前已采评论' },
           ],
           authors: [],
           mediaAssets: [],
@@ -2072,7 +2133,7 @@ test('task poller maps stopped status to final stopped patch with partial result
           comments: [
             {
               commentId: 'comment_9',
-              noteId: '',
+              noteId: '7001',
               text: '停止前已采评论',
               author: '',
               authorId: '',

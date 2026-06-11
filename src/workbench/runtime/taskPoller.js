@@ -687,6 +687,10 @@ function sanitizeCommentRecord(comment = {}) {
   };
 }
 
+function isValidCommentRecordForWriteback(comment = {}) {
+  return Boolean(comment.commentId && comment.noteId && comment.text);
+}
+
 function sanitizeAuthorRecord(author = {}) {
   const authorId = String(author.authorId || author.platformAuthorId || author.authorPlatformId || author.userId || author.id || '').trim();
   const platformAuthorId = String(author.platformAuthorId || author.authorPlatformId || authorId).trim();
@@ -749,7 +753,7 @@ function buildWorkbenchResultSummary(run = {}) {
     ? records.notes.map(sanitizeNoteRecord).filter((note) => note.noteId || note.title || note.content)
     : [];
   const comments = Array.isArray(records.comments)
-    ? records.comments.map(sanitizeCommentRecord).filter((comment) => comment.commentId || comment.text)
+    ? records.comments.map(sanitizeCommentRecord).filter(isValidCommentRecordForWriteback)
     : [];
   const authors = Array.isArray(records.authors)
     ? records.authors.map(sanitizeAuthorRecord).filter((author) => author.authorId || author.name)
