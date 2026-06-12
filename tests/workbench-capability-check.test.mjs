@@ -6,6 +6,7 @@ import {
   mapTaskEnvelopeToCapabilityCheck,
   mapTaskEnvelopeToInternalCommand,
 } from '../src/workbench/runtime/taskEnvelopeMapper.js';
+import { buildCapabilityReport } from '../src/workbench/runtime/capabilityReportBuilder.js';
 
 test('canDispatchTaskFromCapabilityReport accepts ready task types', () => {
   const result = canDispatchTaskFromCapabilityReport({
@@ -17,6 +18,26 @@ test('canDispatchTaskFromCapabilityReport accepts ready task types', () => {
 
   assert.equal(result.accepted, true);
   assert.equal(result.reasonCode, '');
+});
+
+test('capability report exposes xhs author note link discovery on profile pages', () => {
+  const report = buildCapabilityReport({
+    platform: 'xhs',
+    mode: 'profile',
+    pageType: 'profile',
+    url: 'https://www.xiaohongshu.com/user/profile/author_1',
+    capabilities: {
+      canBatchNotes: true,
+      canCollectAuthor: true,
+    },
+  });
+
+  assert.deepEqual(report.capabilities.canRunTaskTypes, [
+    'xhs.batchNotes',
+    'xhs.collectAuthor',
+    'xhs.authorNoteLinks',
+  ]);
+  assert.equal(report.readiness.ready, true);
 });
 
 test('canDispatchTaskFromCapabilityReport rejects unsupported task types', () => {
@@ -228,6 +249,41 @@ test('mapTaskEnvelopeToCapabilityCheck converts task envelope into capability ch
       url: 'https://www.xiaohongshu.com/user/profile/demo',
     },
   });
+});
+
+test('mapTaskEnvelopeToInternalCommand maps xhs author note link discovery to async content task', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'task_author_links_1',
+    taskType: 'xhs.authorNoteLinks',
+    platform: 'xhs',
+    taskStrategy: 'deep_collect',
+    target: {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/author_1',
+    },
+    payload: {
+      authorArchiveJobId: 'archive_job_1',
+      authorArchiveStage: 'link_discovery',
+      authorPlatformId: 'author_1',
+      authorName: '目标博主',
+      limit: 214,
+      maxScrolls: 35,
+    },
+  });
+
+  assert.equal(command.dispatchTarget, 'content');
+  assert.equal(command.action, 'discoverAuthorNoteLinks');
+  assert.equal(command.payload.asyncDispatch, true);
+  assert.equal(command.payload.maxLinks, 214);
+  assert.equal(command.payload.maxScrolls, 35);
+  assert.equal(command.payload.authorArchiveJobId, 'archive_job_1');
+  assert.equal(command.payload.authorArchiveStage, 'link_discovery');
+  assert.equal(command.payload.authorPlatformId, 'author_1');
+  assert.equal(command.payload.authorName, '目标博主');
+  assert.equal(command.payload.externalTaskMeta.externalTaskId, 'task_author_links_1');
+  assert.equal(command.payload.externalTaskMeta.monitorMeta, undefined);
 });
 
 test('mapTaskEnvelopeToInternalCommand forwards xhs batch note search filters', () => {

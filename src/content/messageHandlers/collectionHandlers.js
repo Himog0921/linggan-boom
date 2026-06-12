@@ -8,6 +8,7 @@ import {
   buildDouyinSurfaceNoteRecords,
   buildXhsSurfaceNoteRecords,
 } from '../../workbench/runtime/monitorTask.js';
+import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { buildDouyinSingleCommentRunPatch } from '../../platforms/douyin/commentTaskSupport.js';
 import { checkXhsAuthorMonitorTarget } from '../../platforms/xhs/batchController.js';
 import { checkDouyinAuthorMonitorTarget } from '../../platforms/douyin/batchController.js';
@@ -28,6 +29,12 @@ const buildAuthorBaselineShortfallNote = ({
 };
 
 const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
+
+function ensurePositiveInteger(value, fallback = 0) {
+  const num = Number(value);
+  if (!Number.isFinite(num) || num <= 0) return fallback;
+  return Math.floor(num);
+}
 
 function firstRecordId(...values) {
   for (const value of values) {
@@ -122,6 +129,100 @@ const buildSingleNoteFailureDiagnostic = ({
 const resolveXhsSurfaceContainerSelector = () => {
   const pathname = String(globalThis.window?.location?.pathname || '').trim();
   return /\/user\/profile\//i.test(pathname) ? '#userPostedFeeds' : '.feeds-container';
+};
+
+function extractXsecTokenFromUrl(url = '') {
+  try {
+    return String(new URL(String(url || ''), globalThis.window?.location?.origin || 'https://www.xiaohongshu.com').searchParams.get('xsec_token') || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function resolveCurrentPageUrl() {
+  return String(globalThis.window?.location?.href || '').trim();
+}
+
+function resolveAuthorPlatformIdFromMessage(msg = {}, pageUrl = '') {
+  return String(
+    msg.authorPlatformId
+    || msg.platformAuthorId
+    || msg.authorId
+    || extractProfileIdentityFromUrl(msg.profileUrl || pageUrl, {
+      baseUrl: globalThis.window?.location?.origin || 'https://www.xiaohongshu.com',
+    })
+    || '',
+  ).trim();
+}
+
+function assertAuthorNoteLinkTarget(msg = {}, pageUrl = '') {
+  const targetAuthorId = resolveAuthorPlatformIdFromMessage(msg, msg.profileUrl || pageUrl);
+  const currentAuthorId = extractProfileIdentityFromUrl(pageUrl, {
+    baseUrl: globalThis.window?.location?.origin || 'https://www.xiaohongshu.com',
+  });
+  if (!targetAuthorId || !currentAuthorId || targetAuthorId === currentAuthorId) return;
+
+  const error = new Error('当前小红书主页和深度建档任务目标不一致');
+  error.code = 'target_mismatch';
+  error.reasonCode = 'target_mismatch';
+  error.eventType = 'target_mismatch';
+  error.userMessage = error.message;
+  error.targetAuthorId = targetAuthorId;
+  error.currentAuthorId = currentAuthorId;
+  throw error;
+}
+
+function buildAuthorNoteLinkRecords(cards = [], {
+  collectionRunId = '',
+  limit = 0,
+  sourcePageUrl = '',
+  authorPlatformId = '',
+  authorName = '',
+  authorArchiveJobId = '',
+  authorArchiveStage = '',
+} = {}) {
+  return buildXhsSurfaceNoteRecords(cards, {
+    collectionRunId,
+    mode: MONITOR_RECORD_MODE.AUTHOR_SURFACE,
+    limit,
+    sourcePageUrl,
+  }).map((record, index) => {
+    const sourceUrl = String(record.url || record.canonicalUrl || '').trim();
+    const xsecToken = extractXsecTokenFromUrl(sourceUrl);
+    const signedUrl = xsecToken ? sourceUrl : '';
+    const identityText = String(record.title || record.content || record.bodyText || record.platformContentId || record.noteId || sourceUrl).trim();
+    return {
+      ...record,
+      title: String(record.title || identityText).trim(),
+      content: String(record.content || identityText).trim(),
+      bodyText: String(record.bodyText || identityText).trim(),
+      sourceUrl,
+      rawUrl: sourceUrl,
+      signedUrl: signedUrl || undefined,
+      xsecToken: xsecToken || undefined,
+      authorId: String(record.authorId || authorPlatformId).trim(),
+      authorPlatformId: String(record.authorPlatformId || authorPlatformId).trim(),
+      platformAuthorId: String(record.platformAuthorId || authorPlatformId).trim(),
+      authorName: String(record.authorName || authorName).trim(),
+      profileUrl: String(record.profileUrl || sourcePageUrl).trim(),
+      batchRank: index + 1,
+      rank: index + 1,
+      dataSource: 'author_note_link_discovery',
+      qualityReason: 'author_note_link_discovery',
+      authorArchiveJobId: String(authorArchiveJobId || '').trim() || undefined,
+      authorArchiveStage: String(authorArchiveStage || '').trim() || undefined,
+    };
+  });
+}
+
+const buildAuthorNoteLinksShortfallNote = ({
+  requestedCount = 0,
+  discoveredCount = 0,
+} = {}) => {
+  const requested = Math.max(0, Number(requestedCount || 0) || 0);
+  const discovered = Math.max(0, Number(discoveredCount || 0) || 0);
+  if (requested <= 0 || discovered >= requested) return '';
+  return `这轮原计划发现 ${requested} 条博主历史笔记链接，但当前主页最终只发现 ${discovered} 条可采作品，所以先按现有链接进入后续补采。`;
 };
 
 function assertAuthorMonitorTarget({ isDouyinPage, monitorMeta = null } = {}) {
@@ -368,6 +469,162 @@ export function createCollectionHandlers({
       });
       reportDone('comment', result.total);
       return { success: true, total: result.total };
+    },
+
+    [MSG.DISCOVER_AUTHOR_NOTE_LINKS]: async (msg = {}) => {
+      await ensurePluginAuthorized();
+      if (isDouyinPage()) {
+        throw new Error('深度博主历史笔记发现当前只支持小红书主页');
+      }
+
+      const triggerSource = String(msg.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch';
+      const limit = ensurePositiveInteger(msg.maxLinks ?? msg.limit ?? msg.count, 200);
+      const maxScrolls = ensurePositiveInteger(msg.maxScrolls, 30);
+      const currentPageUrl = resolveCurrentPageUrl();
+      const profileUrl = String(msg.profileUrl || currentPageUrl).trim();
+      const authorPlatformId = resolveAuthorPlatformIdFromMessage(msg, profileUrl);
+      const authorName = String(msg.authorName || '').trim();
+      const authorArchiveJobId = String(msg.authorArchiveJobId || '').trim();
+      const authorArchiveStage = String(msg.authorArchiveStage || '').trim();
+
+      const createRemoteAuthorNoteLinkRun = () => createRemoteRun({
+        platform: 'xhs',
+        triggerSource,
+        remoteTaskMeta: msg.externalTaskMeta,
+        taskType: 'authorNoteLinks',
+        config: {
+          requestedCount: limit,
+          maxScrolls,
+          profileUrl,
+          authorPlatformId,
+          authorName,
+          authorArchiveJobId: authorArchiveJobId || undefined,
+          authorArchiveStage: authorArchiveStage || undefined,
+        },
+      });
+
+      const runAuthorNoteLinkDiscovery = async (remoteRun = null) => {
+        const controlBinding = remoteRun && remoteControlRegistry?.bindRemoteControl
+          ? remoteControlRegistry.bindRemoteControl({
+            remoteRun,
+            remoteTaskMeta: msg.externalTaskMeta,
+          })
+          : null;
+        const shouldStop = typeof controlBinding?.control?.shouldStop === 'function'
+          ? controlBinding.control.shouldStop
+          : () => false;
+        const waitIfPaused = typeof controlBinding?.control?.waitIfPaused === 'function'
+          ? controlBinding.control.waitIfPaused
+          : async () => {};
+
+        try {
+          if (typeof discoverXhsSurfaceNotes !== 'function') {
+            throw new Error('当前插件缺少博主主页笔记发现能力');
+          }
+          assertAuthorNoteLinkTarget({ ...msg, authorPlatformId, profileUrl }, currentPageUrl);
+          await waitIfPaused();
+          if (shouldStop()) {
+            await finalizeRemoteRun(remoteRun, 'stopped', {
+              itemsPlanned: 0,
+              itemsSucceeded: 0,
+              itemsFailed: 0,
+              requestedCount: limit,
+              discoveredCount: 0,
+              shortfallCount: limit,
+            });
+            return {
+              success: true,
+              stopped: true,
+              total: 0,
+              collectionRunId: remoteRun?.collectionRunId || '',
+            };
+          }
+
+          const cards = await discoverXhsSurfaceNotes(resolveXhsSurfaceContainerSelector(), maxScrolls, {
+            expectedCount: limit,
+          });
+          const records = buildAuthorNoteLinkRecords(cards, {
+            collectionRunId: remoteRun?.collectionRunId || '',
+            limit,
+            sourcePageUrl: profileUrl || currentPageUrl,
+            authorPlatformId,
+            authorName,
+            authorArchiveJobId,
+            authorArchiveStage,
+          });
+          if (records.length > 0) await noteStore.bulkUpsert(records);
+          records.forEach((record, index) => {
+            emitWorkbenchRecordDelta(reportWorkbenchRecord, {
+              recordType: WORKBENCH_RECORD_TYPE.NOTE,
+              record,
+              collectionRunId: remoteRun?.collectionRunId || '',
+              externalTaskId: msg.externalTaskMeta?.externalTaskId || '',
+              sequence: Date.now() + index,
+            });
+          });
+          const targetIds = records
+            .map((record) => String(record.platformContentId || record.noteId || '').trim())
+            .filter(Boolean);
+          const contentIds = records
+            .map((record) => String(record.contentId || '').trim())
+            .filter(Boolean);
+          const stopped = shouldStop();
+          await finalizeRemoteRun(remoteRun, stopped ? 'stopped' : 'done', {
+            itemsPlanned: records.length,
+            itemsSucceeded: records.length,
+            itemsFailed: 0,
+            targetIds,
+            contentIds,
+            requestedCount: limit,
+            discoveredCount: records.length,
+            shortfallCount: Math.max(0, limit - records.length),
+            completionNote: buildAuthorNoteLinksShortfallNote({
+              requestedCount: limit,
+              discoveredCount: records.length,
+            }) || undefined,
+          });
+          if (!stopped) reportDone('note', records.length, { platform: 'xhs', taskType: 'authorNoteLinks' });
+          return {
+            success: true,
+            stopped,
+            total: records.length,
+            records,
+            collectionRunId: remoteRun?.collectionRunId || '',
+          };
+        } catch (error) {
+          await finalizeRemoteRun(remoteRun, 'failed', {
+            error: String(error?.message || error),
+            itemsPlanned: limit,
+            itemsSucceeded: 0,
+            itemsFailed: limit,
+            requestedCount: limit,
+            discoveredCount: 0,
+            shortfallCount: limit,
+          });
+          throw error;
+        } finally {
+          controlBinding?.release?.();
+        }
+      };
+
+      if (msg.asyncDispatch) {
+        const remoteRun = await createRemoteAuthorNoteLinkRun();
+        Promise.resolve()
+          .then(() => runAuthorNoteLinkDiscovery(remoteRun))
+          .catch((error) => {
+            console.error('[灵感爆爆爆] 远程小红书博主历史笔记链接发现失败:', error);
+            reportTaskError?.(error, { collectionRunId: remoteRun?.collectionRunId, phase: 'author_note_link_discovery' });
+          });
+        return {
+          success: true,
+          accepted: true,
+          pending: true,
+          collectionRunId: remoteRun?.collectionRunId || '',
+        };
+      }
+
+      const remoteRun = await createRemoteAuthorNoteLinkRun();
+      return runAuthorNoteLinkDiscovery(remoteRun);
     },
 
     [MSG.COLLECT_AUTHOR]: async (msg = {}) => {

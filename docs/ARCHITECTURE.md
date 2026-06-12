@@ -315,6 +315,7 @@ linggan-boom 插件
 | xhs.batchNotes | XHS | 批量采集笔记 |
 | xhs.batchComments | XHS | 批量采集评论 |
 | xhs.collectAuthor | XHS | 采集博主信息 |
+| xhs.authorNoteLinks | XHS | 发现博主主页历史笔记链接，供工作台拆分后续详情补采 |
 | douyin.batchNotes | Douyin | 批量采集视频 |
 | douyin.batchComments | Douyin | 批量采集评论 |
 | douyin.collectAuthor | Douyin | 采集博主信息 |

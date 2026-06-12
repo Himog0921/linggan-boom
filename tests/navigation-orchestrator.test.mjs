@@ -61,6 +61,17 @@ test('xhs batch tasks build profile urls for author targets when requested', () 
   );
 });
 
+test('xhs.authorNoteLinks always navigates to an author profile page', () => {
+  assert.equal(
+    buildTaskNavigationUrl('xhs.authorNoteLinks', '6926d8f4000000003702c666'),
+    'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+  );
+  assert.equal(
+    buildTaskNavigationUrl('xhs.authorNoteLinks', 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666'),
+    'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+  );
+});
+
 test('xhs batch tasks keep keyword urls for search targets', () => {
   assert.equal(
     buildTaskNavigationUrl('xhs.batchComments', 'A娃的启动困难', { targetPageType: 'search' }),

@@ -40,6 +40,7 @@ test('execution station runtime reports generic execution accounts and surface c
   ]);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.authorSurfaceScan'), true);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.keywordSurfaceScan'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.authorNoteLinks'), true);
 });
 
 test('monitor station runtime reports cooling accounts with explicit cooldown metadata', () => {

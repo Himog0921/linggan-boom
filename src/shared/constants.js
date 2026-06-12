@@ -5,6 +5,7 @@ export const MSG = {
   COLLECT_SINGLE_COMMENT: 'collectSingleComment',
   DOWNLOAD_CURRENT_COMMENT_IMAGES: 'downloadCurrentCommentImages',
   COLLECT_AUTHOR: 'collectAuthor',
+  DISCOVER_AUTHOR_NOTE_LINKS: 'discoverAuthorNoteLinks',
 
   // 批量操作
   START_BATCH_NOTES: 'startBatchNotes',

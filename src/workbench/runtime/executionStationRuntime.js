@@ -6,6 +6,7 @@ export const MONITOR_STATION_CAPABILITIES = [
   'xhs.batchNotes',
   'xhs.batchComments',
   'xhs.collectAuthor',
+  'xhs.authorNoteLinks',
   'douyin.authorSurfaceScan',
   'douyin.keywordSurfaceScan',
   'douyin.noteDetailProbe',

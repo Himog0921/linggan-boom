@@ -28,6 +28,7 @@
 | `COLLECT_SINGLE_COMMENT` | Popup → Content | `{ maxTotal?, maxSubComments?, sortMode?, triggerSource? }` | 小红书采当前笔记评论；抖音采当前视频评论 |
 | `DOWNLOAD_CURRENT_COMMENT_IMAGES` | Popup → Content | `{ maxTotal?, maxSubComments? }` | 当前视频评论图片区下载（当前仅抖音 Popup 使用） |
 | `COLLECT_AUTHOR` | Popup → Content | `{}` | 采当前博主 |
+| `DISCOVER_AUTHOR_NOTE_LINKS` | Background → Content | `{ maxLinks?, maxScrolls?, profileUrl?, authorArchiveJobId? }` | 小红书博主主页历史笔记链接发现，只回传作品卡片链接，不打开详情 |
 
 ### 2.2 批量内容
 

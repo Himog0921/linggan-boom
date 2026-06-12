@@ -389,6 +389,119 @@ test('collection handlers pass profile selector and scan limit into xhs surface 
   }
 });
 
+test('collection handlers discover xhs author note links and report each link record', async () => {
+  const createRunCalls = [];
+  const discoverCalls = [];
+  const bulkUpsertCalls = [];
+  const reportedRecords = [];
+  const doneCalls = [];
+  const previousWindow = globalThis.window;
+
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/user/profile/target_author',
+      pathname: '/user/profile/target_author',
+      origin: 'https://www.xiaohongshu.com',
+    },
+  };
+
+  try {
+    const handlers = createCollectionHandlerSet({
+      noteStore: {
+        async bulkUpsert(records) {
+          bulkUpsertCalls.push(records);
+        },
+      },
+      reportWorkbenchRecord: (record) => {
+        reportedRecords.push(record);
+      },
+      getPageContext: async () => ({ platform: 'xhs', pageType: 'profile' }),
+      collectionRunStore: {
+        async createRun(input) {
+          createRunCalls.push(input);
+          return { collectionRunId: 'run_author_note_links_1' };
+        },
+        async markDone(runId, patch) {
+          doneCalls.push([runId, patch]);
+        },
+        async markStopped() {
+          throw new Error('markStopped should not be called');
+        },
+        async markFailed() {
+          throw new Error('markFailed should not be called');
+        },
+      },
+      discoverXhsSurfaceNotes: async (...args) => {
+        discoverCalls.push(args);
+        return [
+          {
+            noteId: 'note_1',
+            url: 'https://www.xiaohongshu.com/explore/note_1?xsec_token=token_1&xsec_source=pc_user',
+            title: '第一条历史笔记',
+            likes: '1,234',
+            cover: 'https://img.example.com/1.jpg',
+          },
+          {
+            noteId: 'note_2',
+            url: '/explore/note_2',
+            title: '第二条历史笔记',
+            likes: '99',
+          },
+        ];
+      },
+    });
+
+    const result = await handlers[MSG.DISCOVER_AUTHOR_NOTE_LINKS]({
+      triggerSource: 'workbench_dispatch',
+      maxLinks: 3,
+      maxScrolls: 12,
+      profileUrl: 'https://www.xiaohongshu.com/user/profile/target_author',
+      authorPlatformId: 'target_author',
+      authorName: '目标博主',
+      authorArchiveJobId: 'archive_job_1',
+      authorArchiveStage: 'link_discovery',
+      externalTaskMeta: {
+        externalTaskId: 'task_author_note_links_1',
+        externalTaskType: 'xhs.authorNoteLinks',
+        executorInstanceId: 'executor_1',
+        protocolVersion: 'v1',
+      },
+    });
+
+    assert.equal(result.success, true);
+    assert.equal(result.total, 2);
+    assert.equal(createRunCalls[0].taskType, 'authorNoteLinks');
+    assert.equal(createRunCalls[0].config.requestedCount, 3);
+    assert.equal(createRunCalls[0].config.authorArchiveJobId, 'archive_job_1');
+    assert.deepEqual(discoverCalls, [['#userPostedFeeds', 12, { expectedCount: 3 }]]);
+    assert.equal(bulkUpsertCalls.length, 1);
+    assert.equal(bulkUpsertCalls[0].length, 2);
+    assert.equal(bulkUpsertCalls[0][0].dataSource, 'author_note_link_discovery');
+    assert.equal(bulkUpsertCalls[0][0].signedUrl, 'https://www.xiaohongshu.com/explore/note_1?xsec_token=token_1&xsec_source=pc_user');
+    assert.equal(bulkUpsertCalls[0][0].xsecToken, 'token_1');
+    assert.equal(bulkUpsertCalls[0][0].authorPlatformId, 'target_author');
+    assert.equal(bulkUpsertCalls[0][0].authorArchiveJobId, 'archive_job_1');
+    assert.equal(bulkUpsertCalls[0][1].sourceUrl, 'https://www.xiaohongshu.com/explore/note_2');
+    assert.equal(bulkUpsertCalls[0][1].signedUrl, undefined);
+    assert.equal(reportedRecords.length, 2);
+    assert.equal(reportedRecords[0].recordType, 'note');
+    assert.equal(reportedRecords[0].externalRecordId, 'note_1');
+    assert.equal(reportedRecords[0].externalTaskId, 'task_author_note_links_1');
+    assert.equal(reportedRecords[0].collectionRunId, 'run_author_note_links_1');
+    assert.equal(doneCalls[0][0], 'run_author_note_links_1');
+    assert.equal(doneCalls[0][1].itemsPlanned, 2);
+    assert.equal(doneCalls[0][1].itemsSucceeded, 2);
+    assert.deepEqual(doneCalls[0][1].targetIds, ['note_1', 'note_2']);
+    assert.deepEqual(doneCalls[0][1].contentIds, ['xhs_note_1', 'xhs_note_2']);
+    assert.equal(doneCalls[0][1].requestedCount, 3);
+    assert.equal(doneCalls[0][1].discoveredCount, 2);
+    assert.equal(doneCalls[0][1].shortfallCount, 1);
+    assert.match(doneCalls[0][1].completionNote, /只发现 2 条/);
+  } finally {
+    globalThis.window = previousWindow;
+  }
+});
+
 test('collection handlers write douyin author surface records for monitor author tasks', async () => {
   const discoverCalls = [];
   const bulkUpsertCalls = [];

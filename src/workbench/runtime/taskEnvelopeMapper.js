@@ -126,6 +126,28 @@ function buildCollectAuthorPayload(task = {}) {
   };
 }
 
+function buildAuthorNoteLinksPayload(task = {}) {
+  const payload = task.payload || {};
+  const targetUrl = String(task.target?.url || payload.profileUrl || payload.authorProfileUrl || '').trim();
+  const limit = ensurePositiveInteger(
+    payload.maxLinks ?? payload.linkLimit ?? payload.limit ?? payload.count,
+    200,
+  );
+  return {
+    triggerSource: String(task.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
+    asyncDispatch: true,
+    count: limit,
+    limit,
+    maxLinks: limit,
+    maxScrolls: ensurePositiveInteger(payload.maxScrolls, 30),
+    authorArchiveJobId: String(payload.authorArchiveJobId || '').trim() || undefined,
+    authorArchiveStage: String(payload.authorArchiveStage || '').trim() || undefined,
+    profileUrl: String(payload.profileUrl || payload.authorProfileUrl || targetUrl).trim() || undefined,
+    authorName: String(payload.authorName || payload.authorNickname || payload.nickname || '').trim() || undefined,
+    authorPlatformId: String(payload.authorPlatformId || payload.platformAuthorId || payload.authorId || '').trim() || undefined,
+  };
+}
+
 function buildSingleCommentsPayload(task = {}) {
   const payload = task.payload || {};
   const commentDepthMode = normalizeCommentDepthMode(payload.commentDepthMode);
@@ -163,6 +185,8 @@ function buildInternalPayload(task = {}) {
     case REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR:
     case REMOTE_TASK_TYPE.DOUYIN_COLLECT_AUTHOR:
       return buildCollectAuthorPayload(task);
+    case REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS:
+      return buildAuthorNoteLinksPayload(task);
     case REMOTE_TASK_TYPE.DOUYIN_SINGLE_COMMENTS:
       return buildSingleCommentsPayload(task);
     case REMOTE_TASK_TYPE.DOUYIN_COMMENT_IMAGE_DOWNLOAD:
@@ -182,13 +206,17 @@ export function mapTaskEnvelopeToInternalCommand(taskEnvelope = {}, { tabId = nu
 
   const taskConfig = validation.taskConfig || getSupportedRemoteTask(taskEnvelope.taskType);
   const internalPayload = buildInternalPayload(taskEnvelope);
-  const monitorMeta = internalPayload.monitorMeta || buildMonitorTaskMeta({
-    platform: taskEnvelope.platform,
-    taskType: taskEnvelope.taskType,
-    taskStrategy: taskEnvelope.taskStrategy,
-    payload: taskEnvelope.payload || {},
-    target: taskEnvelope.target || {},
-  });
+  const monitorMeta = internalPayload.monitorMeta || (
+    taskEnvelope.taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS
+      ? null
+      : buildMonitorTaskMeta({
+          platform: taskEnvelope.platform,
+          taskType: taskEnvelope.taskType,
+          taskStrategy: taskEnvelope.taskStrategy,
+          payload: taskEnvelope.payload || {},
+          target: taskEnvelope.target || {},
+        })
+  );
   const externalTaskMeta = {
     externalTaskId: String(taskEnvelope.taskId || '').trim(),
     externalTaskType: String(taskEnvelope.taskType || '').trim(),

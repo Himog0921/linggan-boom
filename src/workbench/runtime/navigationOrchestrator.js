@@ -67,6 +67,8 @@ const TASK_URL_BUILDERS = {
         : buildXhsSearchUrl(target, options),
   'xhs.collectAuthor': (target) =>
     /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
+  'xhs.authorNoteLinks': (target) =>
+    /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
   'douyin.batchNotes': (target, options = {}) =>
     shouldPreserveDetailTarget('douyin.batchNotes', target, options)
       ? String(target || '').trim()

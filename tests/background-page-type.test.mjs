@@ -128,6 +128,27 @@ test('declared targetPageType from payload wins when monitor detail probe uses p
   );
 });
 
+test('xhs author note link tasks map to profile page type', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.authorNoteLinks',
+      target: 'https://www.xiaohongshu.com/user/profile/author_1',
+    }),
+    'profile',
+  );
+  assert.deepEqual(
+    normalizeWorkbenchTaskTarget({
+      platform: 'xhs',
+      taskType: 'xhs.authorNoteLinks',
+      target: 'https://www.xiaohongshu.com/user/profile/author_1',
+    }),
+    {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/author_1',
+    },
+  );
+});
+
 test('xhs detail probe uses profile dispatch page type when target is an unsigned profile relay url', () => {
   assert.deepEqual(
     normalizeWorkbenchTaskTarget({

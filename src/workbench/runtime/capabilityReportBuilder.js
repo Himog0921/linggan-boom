@@ -21,6 +21,12 @@ function inferCanRunTaskTypes(pageContext = {}) {
       taskTypes.push(REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS);
     }
     if (capabilities.canCollectAuthor) taskTypes.push(REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR);
+    if (
+      String(pageContext.pageType || pageContext.mode || '').trim() === REMOTE_TARGET_PAGE_TYPE.PROFILE
+      && capabilities.canBatchNotes
+    ) {
+      taskTypes.push(REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS);
+    }
     return taskTypes;
   }
 

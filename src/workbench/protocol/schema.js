@@ -20,6 +20,7 @@ export const REMOTE_TASK_TYPE = {
   XHS_BATCH_NOTES: 'xhs.batchNotes',
   XHS_BATCH_COMMENTS: 'xhs.batchComments',
   XHS_COLLECT_AUTHOR: 'xhs.collectAuthor',
+  XHS_AUTHOR_NOTE_LINKS: 'xhs.authorNoteLinks',
   DOUYIN_BATCH_NOTES: 'douyin.batchNotes',
   DOUYIN_BATCH_COMMENTS: 'douyin.batchComments',
   DOUYIN_COLLECT_AUTHOR: 'douyin.collectAuthor',
@@ -196,6 +197,19 @@ export const SUPPORTED_REMOTE_TASKS = {
       [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
     },
     capabilityKey: 'canCollectAuthor',
+  },
+  [REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.DISCOVER_AUTHOR_NOTE_LINKS,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
+    },
+    capabilityKey: 'canBatchNotes',
   },
   [REMOTE_TASK_TYPE.DOUYIN_BATCH_NOTES]: {
     platform: 'douyin',

@@ -419,7 +419,7 @@ function inferPageTypeFromTask(task = {}) {
   if (taskType === 'douyin.singleComments' || taskType === 'douyin.commentImageDownload') {
     return 'detail';
   }
-  if (taskType === 'xhs.collectAuthor' || taskType === 'douyin.collectAuthor') {
+  if (taskType === 'xhs.collectAuthor' || taskType === 'xhs.authorNoteLinks' || taskType === 'douyin.collectAuthor') {
     return 'profile';
   }
   if (taskType === 'xhs.batchComments' && isXhsDetailUrl(targetUrl)) {
