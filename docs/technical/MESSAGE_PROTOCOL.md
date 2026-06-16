@@ -115,7 +115,7 @@ POST /api/plugin-authorizations/activate
 POST /api/execution-stations/register
 POST /api/execution-stations/heartbeat
 POST /api/execution-stations/reconcile
-POST /api/collection-tasks/claim
+POST /api/execution-stations/dispatch
 POST /api/collection-tasks/:taskId/lease
 ```
 

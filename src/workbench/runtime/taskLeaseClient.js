@@ -170,6 +170,66 @@ function createHttpError(message, { status = 0, reasonCode = '', nextPollAfterMs
   return error;
 }
 
+function isDispatchEnvelope(data = {}) {
+  return Boolean(
+    data
+    && typeof data === 'object'
+    && !Array.isArray(data)
+    && (
+      Object.prototype.hasOwnProperty.call(data, 'heartbeat')
+      || Object.prototype.hasOwnProperty.call(data, 'reconcile')
+      || Object.prototype.hasOwnProperty.call(data, 'claim')
+    )
+  );
+}
+
+function normalizeDispatchClaimResponse(data = {}) {
+  if (!isDispatchEnvelope(data)) return data;
+  if (data?.claim) {
+    return {
+      ...data.claim,
+      dispatch: data,
+      heartbeat: data.heartbeat || null,
+      reconcile: data.reconcile || null,
+    };
+  }
+
+  const reconcile = data?.reconcile || null;
+  const action = normalizeString(reconcile?.action || '');
+  if (action === 'resume') {
+    return {
+      task: null,
+      lease: null,
+      resumeLease: normalizeLeaseSnapshot({
+        task: reconcile?.task,
+        lease: reconcile?.lease || reconcile?.serverLease,
+      }),
+      reason: {
+        code: 'server_task_resume_required',
+        message: '服务端已有执行中任务，先恢复本地任务后再继续。',
+      },
+      nextPollAfterMs: 1000,
+      dispatch: data,
+      heartbeat: data.heartbeat || null,
+      reconcile,
+    };
+  }
+
+  return {
+    task: null,
+    reason: {
+      code: action === 'clear_local' ? 'server_cleared_local_task' : 'no_pending_task',
+      message: action === 'clear_local'
+        ? '服务端没有当前任务，本地任务状态已清理。'
+        : '当前没有可领取任务。',
+    },
+    nextPollAfterMs: 0,
+    dispatch: data,
+    heartbeat: data.heartbeat || null,
+    reconcile,
+  };
+}
+
 async function postJson({
   serverUrl = '',
   path = '',
@@ -256,22 +316,31 @@ export async function claimCollectionTaskLease({
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
+  pluginVersion = '',
   fetchFn,
   store = null,
 } = {}) {
-  const data = await postJson({
+  const localLease = typeof store?.read === 'function' ? await store.read() : null;
+  const rawData = await postJson({
     serverUrl,
-    path: '/api/collection-tasks/claim',
+    path: '/api/execution-stations/dispatch',
     fetchFn,
     authorizationToken,
     body: {
       authorizationId: normalizeString(authorizationId),
+      pluginAuthorizationId: normalizeString(authorizationId),
       stationId: normalizeString(stationId),
       stationToken: normalizeString(stationToken),
+      status: 'online',
       capabilities: toStringArray(capabilities),
       platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
+      pluginVersion: normalizeString(pluginVersion),
+      localLease: localLease && typeof localLease === 'object'
+        ? normalizeLeaseSnapshot({ fallback: localLease })
+        : null,
     },
   });
+  const data = normalizeDispatchClaimResponse(rawData);
 
   if (data?.task && data?.lease && store?.write) {
     await store.write(normalizeLeaseSnapshot({
@@ -279,6 +348,8 @@ export async function claimCollectionTaskLease({
       lease: data.lease,
       attempt: data.attempt,
     }));
+  } else if (data?.resumeLease?.taskId && data?.resumeLease?.leaseToken && store?.write) {
+    await store.write(data.resumeLease);
   } else if (store?.write) {
     const idleSnapshot = createTaskLeaseIdleSnapshot(data);
     if (idleSnapshot) {

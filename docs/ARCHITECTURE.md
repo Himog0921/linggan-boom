@@ -256,7 +256,7 @@ idle → running ⇄ paused → stopping → done / error
   POST /api/collect/batch                     ← 插件推送数据
   POST /api/media-assets/cover                ← 插件上传封面图片本体，工作台返回稳定资产地址
   POST /api/execution-stations/reconcile      → 工位唤醒对账 / 恢复租约
-  POST /api/collection-tasks/claim            → 执行工位认领任务租约
+  POST /api/execution-stations/dispatch       → 工位心跳、对账与接单
   POST /api/collection-tasks/[id]/lease       ← 执行工位续租
   POST /api/collection-tasks/[id]/ingest      ← 增量上传
   POST /api/execution-stations/register       → 配对绑定执行工位

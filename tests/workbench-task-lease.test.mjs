@@ -28,28 +28,32 @@ function createMemoryStorage(initial = {}) {
   };
 }
 
-test('task lease client claims and renews through workbench lease endpoints', async () => {
+test('task lease client claims through station dispatch and renews through lease endpoints', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
-    if (url.endsWith('/api/collection-tasks/claim')) {
+    if (url.endsWith('/api/execution-stations/dispatch')) {
       return {
         ok: true,
         status: 200,
         async json() {
           return {
-            task: {
-              id: 'task-lease-1',
-              taskStrategy: 'author_patrol',
-              leaseEpoch: 3,
-            },
-            lease: {
-              leaseToken: 'lease-token-1',
-              expiresAt: '2026-04-17T12:05:00.000Z',
-            },
-            attempt: {
-              attemptId: 'attempt-1',
-              attemptNumber: 2,
+            heartbeat: { success: true },
+            reconcile: { action: 'idle', serverLease: null },
+            claim: {
+              task: {
+                id: 'task-lease-1',
+                taskStrategy: 'author_patrol',
+                leaseEpoch: 3,
+              },
+              lease: {
+                leaseToken: 'lease-token-1',
+                expiresAt: '2026-04-17T12:05:00.000Z',
+              },
+              attempt: {
+                attemptId: 'attempt-1',
+                attemptNumber: 2,
+              },
             },
           };
         },
@@ -73,6 +77,7 @@ test('task lease client claims and renews through workbench lease endpoints', as
     authorizationToken: 'auth_token_1',
     capabilities: ['xhs.authorSurfaceScan'],
     platformAccounts: [{ platform: 'xhs', purpose: 'author_monitor', healthStatus: 'healthy' }],
+    pluginVersion: '2.0.35',
     fetchFn,
     store,
   });
@@ -101,8 +106,13 @@ test('task lease client claims and renews through workbench lease endpoints', as
   assert.equal(renewal.expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal((await store.read()).expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal(requests.length, 2);
+  assert.ok(requests[0][0].endsWith('/api/execution-stations/dispatch'));
+  assert.equal(requests[0][0].includes('/api/collection-tasks/claim'), false);
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
+  assert.equal(JSON.parse(requests[0][1].body).pluginAuthorizationId, 'auth_1');
+  assert.equal(JSON.parse(requests[0][1].body).pluginVersion, '2.0.35');
+  assert.deepEqual(JSON.parse(requests[0][1].body).localLease, null);
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
   assert.equal(JSON.parse(requests[1][1].body).attemptId, 'attempt-1');
@@ -182,12 +192,16 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
     status: 200,
     async json() {
       return {
-        task: null,
-        reason: {
-          code: 'no_available_account',
-          message: '没有可用账号',
+        heartbeat: { success: true },
+        reconcile: { action: 'idle', serverLease: null },
+        claim: {
+          task: null,
+          reason: {
+            code: 'no_available_account',
+            message: '没有可用账号',
+          },
+          nextPollAfterMs: 45000,
         },
-        nextPollAfterMs: 45000,
       };
     },
   });
@@ -229,6 +243,48 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
       visible: true,
     },
   );
+});
+
+test('task lease client stores server resume lease from station dispatch without redispatching', async () => {
+  const store = createTaskLeaseMemoryStore();
+  const fetchFn = async () => ({
+    ok: true,
+    status: 200,
+    async json() {
+      return {
+        heartbeat: { success: true },
+        reconcile: {
+          action: 'resume',
+          task: { id: 'task-resume-1' },
+          serverLease: {
+            taskId: 'task-resume-1',
+            leaseToken: 'lease-resume-1',
+            expiresAt: '2026-04-17T12:05:00.000Z',
+          },
+        },
+        claim: null,
+      };
+    },
+  });
+
+  const claim = await claimCollectionTaskLease({
+    serverUrl: 'http://localhost:3000',
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.35',
+    fetchFn,
+    store,
+  });
+
+  assert.equal(claim.task, null);
+  assert.equal(claim.reason.code, 'server_task_resume_required');
+  assert.deepEqual(await store.read(), {
+    taskId: 'task-resume-1',
+    leaseToken: 'lease-resume-1',
+    expiresAt: '2026-04-17T12:05:00.000Z',
+  });
 });
 
 test('task lease client reconciles a server lease into local storage', async () => {

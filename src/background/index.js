@@ -2255,6 +2255,7 @@ const taskPoller = createTaskPoller({
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
+      pluginVersion: getPluginVersion(),
       store: taskLeaseStore,
     });
   },

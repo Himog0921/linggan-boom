@@ -123,7 +123,7 @@ Authorization: Bearer <authorizationToken>
 以下请求都必须携带插件授权 Bearer Token，且服务端同时校验 `authorizationId`：
 
 - `POST /api/execution-stations/heartbeat`
-- `POST /api/collection-tasks/claim`
+- `POST /api/execution-stations/dispatch`
 - `POST /api/collection-tasks/:taskId/lease`
 - `POST /api/collect/batch`
 - `POST /api/media-assets/cover`（上传采集封面图片本体，返回工作台稳定 `publicUrl`）
