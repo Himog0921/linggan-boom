@@ -89,6 +89,21 @@ export function shouldRunWorkbenchTaskPollAfterHeartbeat({
   return normalizedNextPollAtMs <= Number(nowMs);
 }
 
+export function shouldRunWorkbenchTaskPollAfterHeartbeatResult({
+  heartbeat = null,
+  activeTask = null,
+  nextPollAtMs = 0,
+  nowMs = Date.now(),
+} = {}) {
+  if (!heartbeat?.success) return false;
+  return shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask,
+    forcePoll: Boolean(heartbeat?.shouldPollNow),
+    nextPollAtMs,
+    nowMs,
+  });
+}
+
 export function scheduleWorkbenchTaskPollAlarm({
   alarmsApi = globalThis.chrome?.alarms,
   alarmName = 'workbench-task-poll',

@@ -9,6 +9,7 @@ import {
   SLOW_TASK_POLL_INTERVAL_MS,
   scheduleWorkbenchTaskPollAlarm,
   shouldRunWorkbenchTaskPollAfterHeartbeat,
+  shouldRunWorkbenchTaskPollAfterHeartbeatResult,
 } from '../src/workbench/runtime/taskPollSchedule.js';
 
 test('task poll scheduler uses claim idle wait time for the next alarm', async () => {
@@ -201,6 +202,20 @@ test('heartbeat-triggered task polling runs immediately when server reports pend
   assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
     activeTask: null,
     forcePoll: true,
+    nextPollAtMs: 120_000,
+    nowMs: 60_000,
+  }), true);
+});
+
+test('heartbeat result only wakes task polling after a successful heartbeat', async () => {
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeatResult({
+    heartbeat: { success: false, shouldPollNow: true },
+    nextPollAtMs: 120_000,
+    nowMs: 60_000,
+  }), false);
+
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeatResult({
+    heartbeat: { success: true, shouldPollNow: true },
     nextPollAtMs: 120_000,
     nowMs: 60_000,
   }), true);

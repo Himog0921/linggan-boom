@@ -50,7 +50,7 @@ import {
 import { createManualExecutionLockCoordinator } from '../workbench/runtime/manualExecutionLock.js';
 import {
   scheduleWorkbenchTaskPollAlarm,
-  shouldRunWorkbenchTaskPollAfterHeartbeat,
+  shouldRunWorkbenchTaskPollAfterHeartbeatResult,
 } from '../workbench/runtime/taskPollSchedule.js';
 import {
   parseWorkbenchPushPayload,
@@ -1492,6 +1492,7 @@ const bgHandlers = {
       }
       const identity = await executionStationClient.getStoredStationIdentity();
       const heartbeat = await sendExecutionStationHeartbeat('online');
+      await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
       void registerWorkbenchPushSubscriptionTick();
       const { platformAccounts } = await collectExecutionStationRuntimeSnapshot(identity);
       return {
@@ -1550,6 +1551,7 @@ const bgHandlers = {
         browserLabel: String(msg.browserLabel || '').trim(),
       });
       const heartbeat = await sendExecutionStationHeartbeat('online');
+      await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
       void registerWorkbenchPushSubscriptionTick();
       const { platformAccounts } = await collectExecutionStationRuntimeSnapshot(identity);
       return {
@@ -1566,7 +1568,11 @@ const bgHandlers = {
     }
   },
 
-  [MSG.SEND_EXECUTION_STATION_HEARTBEAT]: async () => sendExecutionStationHeartbeat('online'),
+  [MSG.SEND_EXECUTION_STATION_HEARTBEAT]: async () => {
+    const heartbeat = await sendExecutionStationHeartbeat('online');
+    await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
+    return heartbeat;
+  },
 
   // ========== Cookie 管理 ==========
 
@@ -2445,6 +2451,19 @@ async function runWorkbenchTaskPollTick() {
   }
 }
 
+async function maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat = null) {
+  if (shouldRunWorkbenchTaskPollAfterHeartbeatResult({
+    heartbeat,
+    activeTask: taskPoller?.getState?.()?.activeTask,
+    nextPollAtMs: nextWorkbenchTaskPollAtMs,
+    nowMs: Date.now(),
+  })) {
+    await runWorkbenchTaskPollTick();
+    return true;
+  }
+  return false;
+}
+
 async function runExecutionStationHeartbeatTick() {
   const now = Date.now();
   if (nextExecutionStationHeartbeatAtMs > now) {
@@ -2480,14 +2499,7 @@ async function runExecutionStationHeartbeatTick() {
   nextExecutionStationHeartbeatAtMs = 0;
   await clearHeartbeatAuthorizationBackoff();
   void registerWorkbenchPushSubscriptionTick();
-  if (shouldRunWorkbenchTaskPollAfterHeartbeat({
-    activeTask: taskPoller?.getState?.()?.activeTask,
-    forcePoll: Boolean(heartbeat?.shouldPollNow),
-    nextPollAtMs: nextWorkbenchTaskPollAtMs,
-    nowMs: Date.now(),
-  })) {
-    await runWorkbenchTaskPollTick();
-  }
+  await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
 }
 
 async function runPackagedInstallBootstrapTick() {
@@ -2606,7 +2618,9 @@ chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 })
 // 每日配额清零（每小时检查一次日期变化）
 chrome.alarms?.create('daily-quota-reset', { periodInMinutes: 60 });
 
-void runPackagedInstallBootstrapTick();
-void registerWorkbenchPushSubscriptionTick();
+void runPackagedInstallBootstrapTick().finally(() => {
+  void registerWorkbenchPushSubscriptionTick();
+  void runExecutionStationHeartbeatTick();
+});
 
 console.log('[灵感爆爆爆] Background Service Worker 已启动');
