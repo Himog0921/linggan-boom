@@ -2482,6 +2482,7 @@ async function runExecutionStationHeartbeatTick() {
   void registerWorkbenchPushSubscriptionTick();
   if (shouldRunWorkbenchTaskPollAfterHeartbeat({
     activeTask: taskPoller?.getState?.()?.activeTask,
+    forcePoll: Boolean(heartbeat?.shouldPollNow),
     nextPollAtMs: nextWorkbenchTaskPollAtMs,
     nowMs: Date.now(),
   })) {

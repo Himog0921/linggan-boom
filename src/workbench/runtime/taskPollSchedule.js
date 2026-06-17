@@ -78,9 +78,11 @@ export function resolveWorkbenchTaskPollAlarmConfig(result = null, consecutiveEm
 
 export function shouldRunWorkbenchTaskPollAfterHeartbeat({
   activeTask = null,
+  forcePoll = false,
   nextPollAtMs = 0,
   nowMs = Date.now(),
 } = {}) {
+  if (forcePoll) return true;
   if (activeTask) return true;
   const normalizedNextPollAtMs = Number(nextPollAtMs);
   if (!Number.isFinite(normalizedNextPollAtMs) || normalizedNextPollAtMs <= 0) return true;

@@ -1,3 +1,6 @@
+2026-06-17
+- 工作台待领取任务心跳唤醒修复完成，版本提升到 v2.0.37：内容工作台新增 `shouldPollNow` 心跳信号，当后台发现有到期待接任务时，会要求插件不要继续等待本地空闲排程；插件端收到该信号后立即执行一次工作台任务接单检查，避免出现“工位心跳在线，但几个小时没有发起接单”的卡死。该改动只改变工作台任务轮询触发，不改变页面采集、租约、能力检查、结果回传和控制同步路径。验证：`node --test tests/workbench-task-poll-schedule.test.mjs` 通过 9 个用例；发布包 `releases/linggan-boom-v2.0.37.zip` 已生成并同步到内容工作台托管下载位。
+
 2026-06-16
 - 工作台统一接单入口适配完成，版本提升到 v2.0.35：内容工作台已废弃旧 `/api/collection-tasks/claim` 接单入口，只保留 `/api/execution-stations/dispatch` 统一处理工位心跳、对账与接单。插件接单客户端已改为请求 dispatch，并把 `heartbeat / reconcile / claim` 返回结构归一成原有任务执行器可识别的任务租约格式；接单请求同步上报 `pluginVersion` 和本地租约，避免新版服务端版本校验或租约恢复失败。发布包 `releases/linggan-boom-v2.0.35.zip` 已生成，SHA256 为 `d5dc590915620c3e0135a19ac4a29595249e64945642f3a4dea94c618d4b467e`，大小 `410378` 字节；包内检查确认不再包含 `/api/collection-tasks/claim`，只包含 `/api/execution-stations/dispatch`。验证：`node --test tests/workbench-task-lease.test.mjs tests/workbench-task-poller.test.mjs tests/workbench-control-sync.test.mjs tests/execution-station-client.test.mjs` 通过 72 个用例；`npm run test:douyin` 通过 216 个用例；`npm run check:contracts`、`npm run build`、`npm run release:verify -- --version 2.0.35 --zip releases/linggan-boom-v2.0.35.zip` 通过，构建仅保留既有包体积 warning。
 

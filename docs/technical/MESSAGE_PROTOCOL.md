@@ -119,6 +119,21 @@ POST /api/execution-stations/dispatch
 POST /api/collection-tasks/:taskId/lease
 ```
 
+心跳响应补充：
+
+```json
+{
+  "success": true,
+  "shouldPollNow": true,
+  "pollReason": "pending_task_available",
+  "maxPollDelayMs": 120000
+}
+```
+
+说明：
+- `shouldPollNow=true` 表示工作台发现已有到期待接任务，插件应立即运行一次既有任务检查，不再等待本地空闲排程。
+- 心跳只负责叫醒，不直接下发任务；真正接单仍必须走 `POST /api/execution-stations/dispatch`，继续经过能力检查、账号检查、租约和对账。
+
 Web Push 唤醒：
 
 ```text

@@ -196,3 +196,12 @@ test('heartbeat-triggered task polling still runs while a task is active', async
     nowMs: 60_000,
   }), true);
 });
+
+test('heartbeat-triggered task polling runs immediately when server reports pending work', async () => {
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: null,
+    forcePoll: true,
+    nextPollAtMs: 120_000,
+    nowMs: 60_000,
+  }), true);
+});
