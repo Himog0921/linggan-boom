@@ -11,6 +11,44 @@ function claimTask(tasksOrFactory) {
   };
 }
 
+test('task poller starts a fresh tick when the previous tick is stale', async () => {
+  let now = 1_000;
+  let claimCalls = 0;
+  const poller = createTaskPoller({
+    now: () => now,
+    tickStaleTimeoutMs: 1_000,
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      if (claimCalls === 1) {
+        return new Promise(() => {});
+      }
+      return {
+        task: null,
+        nextPollAfterMs: 30_000,
+        reason: {
+          code: 'NO_PENDING_TASK',
+          message: '暂无可接任务',
+        },
+      };
+    },
+  });
+
+  void poller.tick();
+  await Promise.resolve();
+  await Promise.resolve();
+  const overlapping = await poller.tick();
+  assert.equal(overlapping.skipped, true);
+  assert.equal(overlapping.reason, 'tick_in_progress');
+  assert.equal(claimCalls, 1);
+
+  now += 1_500;
+  const recovered = await poller.tick();
+  assert.equal(recovered.idle, true);
+  assert.equal(recovered.idleReasonCode, 'NO_PENDING_TASK');
+  assert.equal(claimCalls, 2);
+  assert.equal(poller.getState().ticking, false);
+});
+
 test('task poller claims a pending task and patches completion state', async () => {
   const patches = [];
   const recordBatches = [];

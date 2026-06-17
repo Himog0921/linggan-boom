@@ -37,6 +37,7 @@ const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
+const TICK_STALE_TIMEOUT_MS = 2 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -957,6 +958,7 @@ export function createTaskPoller(deps = {}) {
   };
 
   let tickPromise = null;
+  let tickStartedAtMs = 0;
   let lastReconcileAtMs = 0;
 
   function getNow() {
@@ -2208,9 +2210,23 @@ export function createTaskPoller(deps = {}) {
 
   async function tick() {
     if (tickPromise) {
-      return { success: true, skipped: true, reason: 'tick_in_progress' };
+      const timeoutMs = Number.isFinite(Number(deps.tickStaleTimeoutMs))
+        ? Math.max(1, Number(deps.tickStaleTimeoutMs))
+        : TICK_STALE_TIMEOUT_MS;
+      const ageMs = getNow() - tickStartedAtMs;
+      if (Number.isFinite(ageMs) && ageMs < timeoutMs) {
+        return { success: true, skipped: true, reason: 'tick_in_progress' };
+      }
+      console.warn('[灵感爆爆爆] workbench task poll tick timed out, starting a fresh tick', {
+        ageMs,
+        timeoutMs,
+      });
+      tickPromise = null;
+      tickStartedAtMs = 0;
     }
-    tickPromise = (async () => {
+    tickStartedAtMs = getNow();
+    let currentTickPromise;
+    currentTickPromise = (async () => {
       state.ticking = true;
       try {
         const authorizationBackoff = await readAuthorizationFailureBackoff();
@@ -2264,10 +2280,14 @@ export function createTaskPoller(deps = {}) {
         }
         return buildIdleTickResult(claimed, idleSnapshot);
       } finally {
-        state.ticking = false;
-        tickPromise = null;
+        if (tickPromise === currentTickPromise) {
+          state.ticking = false;
+          tickPromise = null;
+          tickStartedAtMs = 0;
+        }
       }
     })();
+    tickPromise = currentTickPromise;
     return tickPromise;
   }
 
