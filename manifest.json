@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "灵感爆爆爆",
-  "version": "2.0.43",
+  "version": "2.0.44",
   "description": "多平台内容灵感采集工具箱（小红书 · 抖音）",
   "permissions": [
     "activeTab",

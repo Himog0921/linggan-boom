@@ -2437,11 +2437,13 @@ test('task poller releases stale active task when lease renewal conflicts', asyn
 
   assert.equal(secondTick.released, true);
   assert.equal(secondTick.reason, 'lease_conflict');
+  assert.equal(secondTick.nextPollAfterMs, 120_000);
   assert.equal(claimCalls, 1);
   assert.equal(clearLeaseCalls, 1);
   assert.equal(poller.getState().activeTask, null);
   assert.equal(poller.getState().activeLease, null);
   assert.equal(events.at(-1).payload.reason, 'lease_conflict');
+  assert.equal(events.at(-1).payload.retryAfterMs, 120_000);
 });
 
 test('task poller releases dispatched tasks that never produce a startup run', async () => {

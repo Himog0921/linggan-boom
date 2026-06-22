@@ -176,6 +176,32 @@ test('task poll scheduler applies a short cooldown after task completion', async
   ]]);
 });
 
+test('task poll scheduler respects explicit cooldown after task release', async () => {
+  const calls = [];
+  const config = scheduleWorkbenchTaskPollAlarm({
+    alarmsApi: {
+      create(name, options) {
+        calls.push([name, options]);
+      },
+    },
+    alarmName: 'workbench-task-poll',
+    result: {
+      success: true,
+      released: true,
+      reason: 'lease_conflict',
+      nextPollAfterMs: 120_000,
+    },
+    consecutiveEmptyPolls: 0,
+    randomFn: () => 0,
+  });
+
+  assert.equal(config.intervalMs, 120_000);
+  assert.deepEqual(calls, [[
+    'workbench-task-poll',
+    { periodInMinutes: 2 },
+  ]]);
+});
+
 test('heartbeat-triggered task polling waits for the scheduled idle poll time', async () => {
   assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
     activeTask: null,
@@ -188,13 +214,16 @@ test('heartbeat-triggered task polling waits for the scheduled idle poll time', 
     nextPollAtMs: 120_000,
     nowMs: 120_000,
   }), true);
-});
-
-test('heartbeat-triggered task polling still runs while a task is active', async () => {
   assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
     activeTask: { taskId: 'task-1' },
     nextPollAtMs: 120_000,
     nowMs: 60_000,
+  }), false);
+
+  assert.equal(shouldRunWorkbenchTaskPollAfterHeartbeat({
+    activeTask: { taskId: 'task-1' },
+    nextPollAtMs: 120_000,
+    nowMs: 120_000,
   }), true);
 });
 

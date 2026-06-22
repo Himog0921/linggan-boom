@@ -45,7 +45,11 @@ function shouldApplyPostTaskCooldown(result = null) {
 export function resolveWorkbenchTaskPollIntervalMs(result = null, consecutiveEmptyPolls = 0, options = {}) {
   const randomFn = typeof options.randomFn === 'function' ? options.randomFn : Math.random;
   if (shouldApplyPostTaskCooldown(result)) {
-    return randomRangeMs(POST_TASK_COOLDOWN_MIN_MS, POST_TASK_COOLDOWN_MAX_MS, randomFn);
+    const requestedNextPollAfterMs = toFinitePositiveNumber(result?.nextPollAfterMs, 0);
+    return Math.max(
+      requestedNextPollAfterMs,
+      randomRangeMs(POST_TASK_COOLDOWN_MIN_MS, POST_TASK_COOLDOWN_MAX_MS, randomFn),
+    );
   }
 
   const idleNextPollAfterMs = toFinitePositiveNumber(result?.nextPollAfterMs, 0);
@@ -83,7 +87,6 @@ export function shouldRunWorkbenchTaskPollAfterHeartbeat({
   nowMs = Date.now(),
 } = {}) {
   if (forcePoll) return true;
-  if (activeTask) return true;
   const normalizedNextPollAtMs = Number(nextPollAtMs);
   if (!Number.isFinite(normalizedNextPollAtMs) || normalizedNextPollAtMs <= 0) return true;
   return normalizedNextPollAtMs <= Number(nowMs);

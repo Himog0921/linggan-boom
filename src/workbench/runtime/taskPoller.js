@@ -35,6 +35,7 @@ const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RUNNING_RESULT_LOOKUP_TIMEOUT_MS = 12 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
+const LEASE_CONFLICT_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const TICK_STALE_TIMEOUT_MS = 2 * 60 * 1000;
@@ -1824,6 +1825,7 @@ export function createTaskPoller(deps = {}) {
             leaseRenewalFailed: true,
             reason: 'lease_conflict',
             errorMessage: String(error?.message || error || 'lease_conflict'),
+            retryAfterMs: LEASE_CONFLICT_RETRY_DELAY_MS,
           });
           state.activeTask = null;
           state.seenControlIds.clear();
@@ -1832,6 +1834,7 @@ export function createTaskPoller(deps = {}) {
             success: true,
             released: true,
             reason: 'lease_conflict',
+            nextPollAfterMs: LEASE_CONFLICT_RETRY_DELAY_MS,
             cleanupTask: cleanupTaskSnapshot(activeTask),
           };
         }

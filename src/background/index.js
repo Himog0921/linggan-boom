@@ -49,6 +49,7 @@ import {
 } from '../workbench/runtime/executionAccountLock.js';
 import { createManualExecutionLockCoordinator } from '../workbench/runtime/manualExecutionLock.js';
 import {
+  MIN_CHROME_ALARM_INTERVAL_MS,
   scheduleWorkbenchTaskPollAlarm,
   shouldRunWorkbenchTaskPollAfterHeartbeatResult,
 } from '../workbench/runtime/taskPollSchedule.js';
@@ -113,9 +114,13 @@ const ACTIVE_TASK_CONTEXT_STORAGE_KEY = 'workbenchActiveTaskContext';
 const EXECUTION_ACCOUNT_LOCK_STORAGE_KEY = 'workbenchExecutionAccountLocks';
 const WORKBENCH_TASK_AUTH_BACKOFF_STORAGE_KEY = 'workbenchTaskAuthorizationBackoff';
 const WORKBENCH_STATION_HEARTBEAT_BACKOFF_STORAGE_KEY = 'workbenchStationHeartbeatBackoff';
+const WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY = 'workbenchTaskPollNextAtMs';
+const WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY = 'workbenchStationHeartbeatNextAtMs';
+const WORKBENCH_PUSH_SUBSCRIPTION_NEXT_STORAGE_KEY = 'workbenchPushSubscriptionNextAtMs';
 const WORKBENCH_TASK_POLL_ALARM = 'workbench-task-poll';
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const WORKBENCH_STATION_HEARTBEAT_ALARM = 'workbench-station-heartbeat';
+const WORKBENCH_STATION_HEARTBEAT_INTERVAL_MS = 60 * 1000;
 const INITIAL_WORKBENCH_TASK_POLL_MINUTES = 0.5;
 const WORKBENCH_PUSH_SUBSCRIPTION_REFRESH_MS = 6 * 60 * 60 * 1000;
 const WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS = 15 * 60 * 1000;
@@ -176,6 +181,26 @@ async function clearLocalStorageValue(key) {
   if (area.set) {
     await area.set({ [key]: null });
   }
+}
+
+async function readLocalStorageTimestamp(key) {
+  const value = await readLocalStorageValue(key);
+  const timestamp = Number(value);
+  return Number.isFinite(timestamp) && timestamp > 0 ? timestamp : 0;
+}
+
+async function writeLocalStorageTimestamp(key, timestamp = 0) {
+  const normalized = Number(timestamp);
+  if (!Number.isFinite(normalized) || normalized <= 0) {
+    await clearLocalStorageValue(key);
+    return;
+  }
+  await writeLocalStorageValue(key, normalized);
+}
+
+async function hydrateNextTimestamp(key, currentValue = 0) {
+  const stored = await readLocalStorageTimestamp(key);
+  return Math.max(Number(currentValue) || 0, stored);
 }
 
 async function readTaskAuthorizationBackoff() {
@@ -2427,7 +2452,15 @@ const taskPoller = createTaskPoller({
 
 getCurrentTaskExecutionContext = (taskId = '') => taskPoller?.getExecutionContext?.(taskId) || null;
 
-async function runWorkbenchTaskPollTick() {
+async function runWorkbenchTaskPollTick({ force = false } = {}) {
+  const now = Date.now();
+  nextWorkbenchTaskPollAtMs = await hydrateNextTimestamp(
+    WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY,
+    nextWorkbenchTaskPollAtMs,
+  );
+  if (!force && nextWorkbenchTaskPollAtMs > now) {
+    return { success: true, skipped: true, reason: 'task_poll_waiting' };
+  }
   const prevActiveTask = taskPoller?.getState?.()?.activeTask;
   let result = null;
   try {
@@ -2447,8 +2480,11 @@ async function runWorkbenchTaskPollTick() {
       consecutiveEmptyPolls,
     });
     nextWorkbenchTaskPollAtMs = Date.now() + alarmConfig.intervalMs;
+    await writeLocalStorageTimestamp(WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY, nextWorkbenchTaskPollAtMs);
   } catch (error) {
     console.error('[灵感爆爆爆] workbench task poll tick failed', error);
+    nextWorkbenchTaskPollAtMs = Date.now() + MIN_CHROME_ALARM_INTERVAL_MS;
+    await writeLocalStorageTimestamp(WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY, nextWorkbenchTaskPollAtMs);
   }
 
   const currentActiveTask = taskPoller?.getState?.()?.activeTask;
@@ -2472,8 +2508,9 @@ async function maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat = null) {
     if (heartbeat?.shouldPollNow) {
       await clearTaskAuthorizationBackoff();
       nextWorkbenchTaskPollAtMs = 0;
+      await writeLocalStorageTimestamp(WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY, 0);
     }
-    await runWorkbenchTaskPollTick();
+    await runWorkbenchTaskPollTick({ force: Boolean(heartbeat?.shouldPollNow) });
     return true;
   }
   return false;
@@ -2481,6 +2518,10 @@ async function maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat = null) {
 
 async function runExecutionStationHeartbeatTick() {
   const now = Date.now();
+  nextExecutionStationHeartbeatAtMs = await hydrateNextTimestamp(
+    WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY,
+    nextExecutionStationHeartbeatAtMs,
+  );
   if (nextExecutionStationHeartbeatAtMs > now) {
     return;
   }
@@ -2498,20 +2539,25 @@ async function runExecutionStationHeartbeatTick() {
     heartbeat = await sendExecutionStationHeartbeat('online');
   } catch (error) {
     console.warn('[灵感爆爆爆] execution station heartbeat failed', error);
+    nextExecutionStationHeartbeatAtMs = Date.now() + WORKBENCH_STATION_HEARTBEAT_INTERVAL_MS;
+    await writeLocalStorageTimestamp(WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY, nextExecutionStationHeartbeatAtMs);
     return;
   }
   if (!heartbeat?.success) {
     if ([401, 403].includes(Number(heartbeat?.status || 0))) {
       nextExecutionStationHeartbeatAtMs = Date.now() + AUTHORIZATION_FAILURE_IDLE_MS;
       await writeHeartbeatAuthorizationBackoff(nextExecutionStationHeartbeatAtMs);
+      await writeLocalStorageTimestamp(WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY, nextExecutionStationHeartbeatAtMs);
       return;
     }
     if (heartbeat?.retryable && Number(heartbeat?.nextRetryAt || 0) > Date.now()) {
       nextExecutionStationHeartbeatAtMs = Number(heartbeat.nextRetryAt);
+      await writeLocalStorageTimestamp(WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY, nextExecutionStationHeartbeatAtMs);
     }
     return;
   }
-  nextExecutionStationHeartbeatAtMs = 0;
+  nextExecutionStationHeartbeatAtMs = Date.now() + WORKBENCH_STATION_HEARTBEAT_INTERVAL_MS;
+  await writeLocalStorageTimestamp(WORKBENCH_STATION_HEARTBEAT_NEXT_STORAGE_KEY, nextExecutionStationHeartbeatAtMs);
   await clearHeartbeatAuthorizationBackoff();
   void registerWorkbenchPushSubscriptionTick();
   await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
@@ -2536,6 +2582,10 @@ async function runPackagedInstallBootstrapTick() {
 
 async function registerWorkbenchPushSubscriptionTick({ force = false } = {}) {
   const now = Date.now();
+  nextWorkbenchPushSubscriptionAtMs = await hydrateNextTimestamp(
+    WORKBENCH_PUSH_SUBSCRIPTION_NEXT_STORAGE_KEY,
+    nextWorkbenchPushSubscriptionAtMs,
+  );
   if (!force && nextWorkbenchPushSubscriptionAtMs > now) {
     return { registered: false, reason: 'push_subscription_waiting' };
   }
@@ -2543,6 +2593,7 @@ async function registerWorkbenchPushSubscriptionTick({ force = false } = {}) {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) {
       nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
+      await writeLocalStorageTimestamp(WORKBENCH_PUSH_SUBSCRIPTION_NEXT_STORAGE_KEY, nextWorkbenchPushSubscriptionAtMs);
       return { registered: false, reason: 'workbench_disabled' };
     }
     const result = await registerWorkbenchPushSubscription({
@@ -2563,10 +2614,12 @@ async function registerWorkbenchPushSubscriptionTick({ force = false } = {}) {
     } else {
       nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
     }
+    await writeLocalStorageTimestamp(WORKBENCH_PUSH_SUBSCRIPTION_NEXT_STORAGE_KEY, nextWorkbenchPushSubscriptionAtMs);
     return result;
   } catch (error) {
     console.warn('[灵感爆爆爆] workbench push subscription skipped', error);
     nextWorkbenchPushSubscriptionAtMs = Date.now() + WORKBENCH_PUSH_SUBSCRIPTION_RETRY_MS;
+    await writeLocalStorageTimestamp(WORKBENCH_PUSH_SUBSCRIPTION_NEXT_STORAGE_KEY, nextWorkbenchPushSubscriptionAtMs);
     return { registered: false, reason: 'push_subscription_failed' };
   }
 }
@@ -2575,7 +2628,8 @@ async function handleWorkbenchPushEvent(event) {
   const payload = parseWorkbenchPushPayload(event?.data || null);
   if (!shouldWakeForWorkbenchPush(payload)) return;
   nextWorkbenchTaskPollAtMs = 0;
-  await runWorkbenchTaskPollTick();
+  await writeLocalStorageTimestamp(WORKBENCH_TASK_POLL_NEXT_STORAGE_KEY, 0);
+  await runWorkbenchTaskPollTick({ force: true });
 }
 
 // ========== 采集完成时清除 badge ==========
