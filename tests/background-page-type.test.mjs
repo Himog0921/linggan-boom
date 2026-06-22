@@ -251,6 +251,42 @@ test('background turns xhs detail-mode batch notes into direct single-note colle
   );
 });
 
+test('background keeps xhs detail-mode batch notes on batch route when attached comments are requested', () => {
+  assert.deepEqual(
+    buildBatchNotesDispatchMessage({
+      mode: 'detail',
+      targetNoteId: '69baad5e00000000230055ef',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_2',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+      },
+      includeComments: true,
+      commentLimit: 20,
+      commentDepthMode: 'twoLevel',
+    }),
+    {
+      action: 'startBatchNotes',
+      mode: 'detail',
+      targetNoteId: '69baad5e00000000230055ef',
+      triggerSource: 'workbench_dispatch',
+      externalTaskMeta: {
+        externalTaskId: 'task_2',
+        externalTaskType: 'xhs.batchNotes',
+      },
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+      },
+      includeComments: true,
+      commentLimit: 20,
+      commentDepthMode: 'twoLevel',
+    },
+  );
+});
+
 test('background keeps batch comment fields intact when forwarding to content', () => {
   assert.deepEqual(
     buildBatchCommentsDispatchMessage({

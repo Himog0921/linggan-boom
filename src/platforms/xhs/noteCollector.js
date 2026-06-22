@@ -438,6 +438,8 @@ export async function collectNote(wd = window, options = {}) {
 
   const platformContentId = note.noteId || note.id || noteKey;
   const collectedAt = Date.now();
+  const rawPublicCommentCount = firstPresentValue(note.interactInfo, ['commentCount', 'comments']);
+  const publicCommentCount = rawPublicCommentCount == null ? null : parseCount(rawPublicCommentCount);
   const publishedAt = parseXhsPublishedAt(
     note.publishTime
       || note.publishDate
@@ -468,7 +470,9 @@ export async function collectNote(wd = window, options = {}) {
     videoStreams: videoSelection.streams || [],
     likes: parseXhsInteractCount(note.interactInfo, ['likedCount', 'likeCount', 'likes']),
     collects: parseXhsInteractCount(note.interactInfo, ['collectedCount', 'collectCount', 'collects', 'favoriteCount']),
-    comments: parseXhsInteractCount(note.interactInfo, ['commentCount', 'comments']),
+    comments: publicCommentCount ?? 0,
+    publicCommentCount,
+    publicCommentCountKnown: publicCommentCount !== null,
     shares: parseXhsInteractCount(note.interactInfo, ['shareCount', 'shares']),
     keywords: (note.tagList || []).map(t => t.name).filter(Boolean),
     topicIds: (note.tagList || []).map(t => t.id).filter(Boolean),

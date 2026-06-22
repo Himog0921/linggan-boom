@@ -4,6 +4,81 @@ function normalizeText(value = '') {
   return String(value || '').trim();
 }
 
+function normalizeNonNegativeInteger(value) {
+  if (typeof value === 'number' && Number.isFinite(value)) return Math.max(0, Math.floor(value));
+  if (typeof value === 'string' && value.trim()) {
+    const parsed = Number(value.replace(/[,+]/g, ''));
+    if (Number.isFinite(parsed)) return Math.max(0, Math.floor(parsed));
+  }
+  return null;
+}
+
+const MAX_ATTACHED_COMMENTS = 20;
+
+function expectedCommentCountFrom({
+  expectedCommentCount = null,
+  publicCommentCount = null,
+  requestedCommentLimit = null,
+  commentLimit = null,
+} = {}) {
+  const explicitExpected = normalizeNonNegativeInteger(expectedCommentCount);
+  if (explicitExpected !== null) return Math.min(explicitExpected, MAX_ATTACHED_COMMENTS);
+  const normalizedPublicCommentCount = normalizeNonNegativeInteger(publicCommentCount);
+  if (normalizedPublicCommentCount === null) return null;
+  const requestedLimit =
+    normalizeNonNegativeInteger(requestedCommentLimit) ??
+    normalizeNonNegativeInteger(commentLimit) ??
+    MAX_ATTACHED_COMMENTS;
+  return Math.min(normalizedPublicCommentCount, requestedLimit, MAX_ATTACHED_COMMENTS);
+}
+
+export function publicCommentCountFromXhsNote(note = {}) {
+  if (!note || typeof note !== 'object') return null;
+  const direct = normalizeNonNegativeInteger(note.publicCommentCount);
+  if (direct !== null) return direct;
+  if (note.publicCommentCountKnown !== true) return null;
+  return normalizeNonNegativeInteger(note.comments)
+    ?? normalizeNonNegativeInteger(note.commentCount)
+    ?? normalizeNonNegativeInteger(note.commentsCount)
+    ?? normalizeNonNegativeInteger(note.comment_count)
+    ?? normalizeNonNegativeInteger(note.commentNum);
+}
+
+export function buildXhsAttachedCommentResult({
+  noteId = '',
+  total = 0,
+  error = '',
+  publicCommentCount = null,
+  expectedCommentCount = null,
+  requestedCommentLimit = null,
+  commentLimit = null,
+} = {}) {
+  const normalizedTotal = Math.max(0, Number(total || 0) || 0);
+  const normalizedPublicCommentCount = normalizeNonNegativeInteger(publicCommentCount);
+  const normalizedExpectedCommentCount = expectedCommentCountFrom({
+    expectedCommentCount,
+    publicCommentCount: normalizedPublicCommentCount,
+    requestedCommentLimit,
+    commentLimit,
+  });
+  const inferredError =
+    normalizedExpectedCommentCount !== null && normalizedTotal < normalizedExpectedCommentCount
+      ? (normalizedTotal <= 0 ? 'comments_empty_after_request' : 'comments_under_expected')
+      : (normalizedTotal <= 0 && normalizedPublicCommentCount !== 0 ? 'comments_empty_after_request' : '');
+  const normalizedError = normalizeText(error) || inferredError;
+  return {
+    noteId: normalizeText(noteId),
+    total: normalizedTotal,
+    ...(normalizedPublicCommentCount !== null
+      ? { publicCommentCount: normalizedPublicCommentCount }
+      : {}),
+    ...(normalizedError && normalizedExpectedCommentCount !== null
+      ? { expectedCommentCount: normalizedExpectedCommentCount }
+      : {}),
+    error: normalizedError,
+  };
+}
+
 function normalizeExternalTaskMeta(meta = {}) {
   return {
     externalTaskId: normalizeText(meta.externalTaskId),
@@ -56,11 +131,7 @@ function buildContentIdsFromNotes(collected = []) {
 
 function buildAttachedCommentSummary(commentResults = []) {
   const results = (Array.isArray(commentResults) ? commentResults : [])
-    .map((item) => ({
-      noteId: normalizeText(item?.noteId),
-      total: Math.max(0, Number(item?.total || 0) || 0),
-      error: normalizeText(item?.error),
-    }))
+    .map((item) => buildXhsAttachedCommentResult(item))
     .filter((item) => item.noteId);
   if (results.length === 0) return {};
 

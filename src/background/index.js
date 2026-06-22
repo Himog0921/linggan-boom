@@ -492,6 +492,16 @@ function buildBatchNotesDispatchMessage(msg = {}) {
   const monitorMeta = msg?.monitorMeta || msg?.externalTaskMeta?.monitorMeta || null;
   const targetNoteId = normalizeString(msg?.targetNoteId || monitorMeta?.targetNoteId).replace(/^xhs_/, '');
   const isXhsRemoteDetail = externalTaskType === 'xhs.batchNotes' && String(msg?.mode || '').trim() === 'detail';
+  const shouldCollectAttachedComments = forwarded.includeComments === true || forwarded.collectComments === true;
+
+  if (isXhsRemoteDetail && shouldCollectAttachedComments) {
+    return {
+      ...forwarded,
+      action: MSG.START_BATCH_NOTES,
+      monitorMeta,
+      targetNoteId: targetNoteId || undefined,
+    };
+  }
 
   if (isXhsRemoteDetail) {
     return {
@@ -2458,6 +2468,10 @@ async function maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat = null) {
     nextPollAtMs: nextWorkbenchTaskPollAtMs,
     nowMs: Date.now(),
   })) {
+    if (heartbeat?.shouldPollNow) {
+      await clearTaskAuthorizationBackoff();
+      nextWorkbenchTaskPollAtMs = 0;
+    }
     await runWorkbenchTaskPollTick();
     return true;
   }

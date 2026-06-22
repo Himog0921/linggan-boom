@@ -114,7 +114,21 @@ test('xhs author surface records stop at scanLimit and carry monitor-shaped meta
   assert.equal(records[0].contentId, 'xhs_note_1');
   assert.equal(records[0].url, 'https://www.xiaohongshu.com/explore/note_1');
   assert.equal(records[0].likes, 5567);
+  assert.equal(records[0].publicCommentCount, null);
+  assert.equal(records[0].publicCommentCountKnown, false);
   assert.equal(records[0].monitorMeta.monitorId, 'monitor_author_1');
+});
+
+test('xhs author surface records mark explicit public comment counts', () => {
+  const records = buildXhsSurfaceNoteRecords([
+    { noteId: 'note_known_zero', title: '明确 0 评论', comments: '0' },
+  ], {
+    limit: 1,
+  });
+
+  assert.equal(records[0].comments, 0);
+  assert.equal(records[0].publicCommentCount, 0);
+  assert.equal(records[0].publicCommentCountKnown, true);
 });
 
 test('xhs author surface records rewrite profile-style note links to canonical explore detail urls', () => {

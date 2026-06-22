@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 
 import {
   buildRemoteRunCreatePayload,
+  buildXhsAttachedCommentResult,
   buildXhsBatchNotesProgressPatch,
   buildXhsBatchNotesRunPatch,
   buildXhsBatchCommentsProgressPatch,
   buildXhsBatchCommentsRunPatch,
+  publicCommentCountFromXhsNote,
 } from '../src/workbench/runtime/xhsBatchRunHelper.js';
+import { BatchNoteController } from '../src/platforms/xhs/batchController.js';
 
 test('buildRemoteRunCreatePayload returns null without external task id', () => {
   const payload = buildRemoteRunCreatePayload({
@@ -98,6 +101,103 @@ test('buildXhsBatchNotesRunPatch keeps attached comments separate from note succ
     { noteId: 'n1', total: 20, error: '' },
     { noteId: 'n2', total: 0, error: 'comments_not_ready' },
   ]);
+});
+
+test('buildXhsBatchNotesRunPatch marks requested attached comments as failed when none are returned', () => {
+  const patch = buildXhsBatchNotesRunPatch({
+    noteList: [{ noteId: 'n1' }],
+    collected: [{ noteId: 'n1' }],
+    commentResults: [
+      { noteId: 'n1', total: 0 },
+    ],
+  });
+
+  assert.equal(patch.itemsSucceeded, 1);
+  assert.equal(patch.itemsFailed, 0);
+  assert.equal(patch.totalComments, 0);
+  assert.deepEqual(patch.attachedCommentResults, [
+    { noteId: 'n1', total: 0, error: 'comments_empty_after_request' },
+  ]);
+});
+
+test('buildXhsBatchNotesRunPatch treats known public zero comments as complete', () => {
+  const patch = buildXhsBatchNotesRunPatch({
+    noteList: [{ noteId: 'n1' }],
+    collected: [{ noteId: 'n1', comments: 0 }],
+    commentResults: [
+      { noteId: 'n1', total: 0, publicCommentCount: 0 },
+    ],
+  });
+
+  assert.equal(patch.itemsSucceeded, 1);
+  assert.equal(patch.itemsFailed, 0);
+  assert.equal(patch.totalComments, 0);
+  assert.deepEqual(patch.attachedCommentResults, [
+    { noteId: 'n1', total: 0, publicCommentCount: 0, error: '' },
+  ]);
+});
+
+test('BatchNoteController records known public zero comments without collecting comments again', async () => {
+  const controller = new BatchNoteController();
+  controller.isRunning = true;
+  controller._includeComments = true;
+  controller._commentLimit = 20;
+
+  const result = await controller._collectAttachedComments(
+    { noteId: 'n1' },
+    'https://www.xiaohongshu.com/explore/n1',
+    { noteId: 'n1', comments: 0, publicCommentCount: 0, publicCommentCountKnown: true },
+  );
+
+  assert.deepEqual(result, { total: 0, comments: [], publicCommentCount: 0 });
+  assert.deepEqual(controller.commentResults, [
+    { noteId: 'n1', total: 0, publicCommentCount: 0, error: '' },
+  ]);
+});
+
+test('publicCommentCountFromXhsNote normalizes detail comment counts', () => {
+  assert.equal(publicCommentCountFromXhsNote({ comments: '1,234', publicCommentCountKnown: true }), 1234);
+  assert.equal(publicCommentCountFromXhsNote({ commentCount: '1,234', publicCommentCountKnown: true }), 1234);
+  assert.equal(publicCommentCountFromXhsNote({ publicCommentCount: 0 }), 0);
+  assert.equal(publicCommentCountFromXhsNote({ commentCount: 5 }), null);
+  assert.equal(publicCommentCountFromXhsNote({ comments: 0 }), null);
+  assert.equal(publicCommentCountFromXhsNote({}), null);
+});
+
+test('buildXhsAttachedCommentResult only marks zero returned comments as failed when public count is not known zero', () => {
+  assert.deepEqual(buildXhsAttachedCommentResult({
+    noteId: 'n1',
+    total: 0,
+    publicCommentCount: 0,
+  }), {
+    noteId: 'n1',
+    total: 0,
+    publicCommentCount: 0,
+    error: '',
+  });
+  assert.deepEqual(buildXhsAttachedCommentResult({
+    noteId: 'n2',
+    total: 0,
+  }), {
+    noteId: 'n2',
+    total: 0,
+    error: 'comments_empty_after_request',
+  });
+});
+
+test('buildXhsAttachedCommentResult marks returned comments as failed when fewer than the expected public count are collected', () => {
+  assert.deepEqual(buildXhsAttachedCommentResult({
+    noteId: 'n3',
+    total: 3,
+    publicCommentCount: 8,
+    requestedCommentLimit: 20,
+  }), {
+    noteId: 'n3',
+    total: 3,
+    publicCommentCount: 8,
+    expectedCommentCount: 8,
+    error: 'comments_under_expected',
+  });
 });
 
 test('buildXhsBatchNotesProgressPatch only counts processed targets during a running task', () => {

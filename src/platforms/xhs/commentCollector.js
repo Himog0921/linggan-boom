@@ -46,6 +46,17 @@ function readCommentSignals(container) {
   };
 }
 
+function readCommentSignalsSafe(container) {
+  if (!container) {
+    return {
+      commentHint: 0,
+      hasEndMarker: false,
+      hasExpandableReplies: false,
+    };
+  }
+  return readCommentSignals(container);
+}
+
 /**
  * 采集单篇笔记的所有评论（含子评论）
  * 技术路径：DOM 解析 + 自动滚动加载 + 子评论展开
@@ -71,6 +82,7 @@ export async function collectComments({
   commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
   collectionRunId = '',
   captchaActionTimeoutMs = 0,
+  persist = true,
 } = {}) {
   const apiResult = await collectCommentsViaApi({
     noteId,
@@ -83,6 +95,7 @@ export async function collectComments({
     commentDepthMode,
     collectionRunId,
     captchaActionTimeoutMs,
+    persist,
   });
   if (!apiResult.needsDomContinuation && (apiResult.apiObserved || apiResult.total > 0)) {
     return { total: apiResult.total, comments: apiResult.comments };
@@ -108,6 +121,7 @@ export async function collectComments({
     collectionRunId,
     initialComments: apiResult.comments,
     captchaActionTimeoutMs,
+    persist,
   });
 }
 
@@ -149,6 +163,7 @@ async function collectCommentsViaApi({
   commentDepthMode = COMMENT_DEPTH_MODE.TWO_LEVEL,
   collectionRunId = '',
   captchaActionTimeoutMs = 0,
+  persist = true,
 } = {}) {
   noteUrl = noteUrl || window.location.href;
   noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
@@ -156,9 +171,6 @@ async function collectCommentsViaApi({
 
   const resolveContainer = () => getActiveCommentsContext().container;
   let container = resolveContainer();
-  if (!container) {
-    throw new Error('未找到评论区域，请确认当前页面有评论');
-  }
 
   const allComments = [];
   const seenIds = new Set();
@@ -171,7 +183,6 @@ async function collectCommentsViaApi({
 
   while (!shouldStop()) {
     container = resolveContainer() || container;
-    if (!container) break;
     await waitIfPaused();
     if (shouldStop()) break;
     if (maxTotal > 0 && allComments.length >= maxTotal) {
@@ -242,16 +253,18 @@ async function collectCommentsViaApi({
       }
     }
 
-    const parentComments = container.querySelectorAll('.parent-comment');
-    for (const parentEl of parentComments) {
-      await waitIfPaused();
-      if (shouldStop()) break;
-      if (maxTotal > 0 && allComments.length >= maxTotal) break;
+    if (container) {
+      const parentComments = container.querySelectorAll('.parent-comment');
+      for (const parentEl of parentComments) {
+        await waitIfPaused();
+        if (shouldStop()) break;
+        if (maxTotal > 0 && allComments.length >= maxTotal) break;
 
-      const scrollParent = findScrollParent(container);
-      await scrollIntoViewIfNeeded(parentEl, scrollParent);
-      await randomDelay(80, 160);
-      await expandAllReplies(parentEl, replyExpandAttempts);
+        const scrollParent = findScrollParent(container);
+        await scrollIntoViewIfNeeded(parentEl, scrollParent);
+        await randomDelay(80, 160);
+        await expandAllReplies(parentEl, replyExpandAttempts);
+      }
     }
 
     if (foundNew) {
@@ -279,7 +292,7 @@ async function collectCommentsViaApi({
       noNewCount = 0;
     }
 
-    const nextSignals = readCommentSignals(resolveContainer() || container);
+    const nextSignals = readCommentSignalsSafe(resolveContainer() || container);
     if (nextSignals.hasEndMarker && noNewCount > 0) {
       onProgress?.({
         status: 'done',
@@ -294,16 +307,20 @@ async function collectCommentsViaApi({
     }
 
     const nextContainer = resolveContainer() || container;
-    const nextScrollParent = findScrollParent(nextContainer);
-    await humanScroll(nextScrollParent, 420);
-    await randomDelay(350, 650);
+    if (nextContainer) {
+      const nextScrollParent = findScrollParent(nextContainer);
+      await humanScroll(nextScrollParent, 420);
+      await randomDelay(350, 650);
+    } else {
+      await randomDelay(350, 650);
+    }
   }
 
-  if (allComments.length > 0) {
+  if (persist && allComments.length > 0) {
     await commentStore.bulkUpsert(allComments);
   }
 
-  const finalSignals = readCommentSignals(resolveContainer() || container);
+  const finalSignals = readCommentSignalsSafe(resolveContainer() || container);
   return {
     total: allComments.length,
     comments: allComments,
@@ -328,6 +345,7 @@ async function collectCommentsFromDom({
   collectionRunId = '',
   initialComments = [],
   captchaActionTimeoutMs = 0,
+  persist = true,
 } = {}) {
   noteUrl = noteUrl || window.location.href;
   noteId = noteId || noteUrl.split('/').pop()?.split('?')[0] || '';
@@ -489,7 +507,7 @@ async function collectCommentsFromDom({
     await randomDelay(350, 650);
   }
 
-  if (allComments.length > 0) {
+  if (persist && allComments.length > 0) {
     await commentStore.bulkUpsert(allComments);
   }
 

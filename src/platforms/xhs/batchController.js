@@ -12,8 +12,10 @@ import { MONITOR_RECORD_MODE, MONITOR_TASK_STRATEGY, WORKBENCH_RECORD_TYPE } fro
 import { buildXhsSurfaceNoteRecords, withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
 import {
   buildRemoteRunCreatePayload,
+  buildXhsAttachedCommentResult,
   buildXhsBatchNotesProgressPatch,
   buildXhsBatchNotesRunPatch,
+  publicCommentCountFromXhsNote,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
 import {
   applyXhsSearchFilters,
@@ -284,10 +286,12 @@ function hydrateXhsNoteResumeState(runRecord = {}, completedTargetIds = []) {
     }))
     .filter((item) => item.noteId && completedSet.has(item.noteId));
   const commentResults = (Array.isArray(runRecord.attachedCommentResults) ? runRecord.attachedCommentResults : [])
-    .map((item) => ({
+    .map((item) => buildXhsAttachedCommentResult({
       noteId: String(item?.noteId || item?.targetId || '').trim().replace(/^xhs_/, ''),
-      total: Math.max(0, Number(item?.total || 0) || 0),
-      error: String(item?.error || '').trim(),
+      total: item?.total,
+      publicCommentCount: item?.publicCommentCount,
+      expectedCommentCount: item?.expectedCommentCount,
+      error: item?.error,
     }))
     .filter((item) => item.noteId && completedSet.has(item.noteId));
   const totalComments = commentResults.reduce((sum, item) => sum + item.total, 0);
@@ -882,7 +886,11 @@ export class BatchNoteController extends BaseBatchController {
       }
 
       if (collected) {
-        await this._collectAttachedComments(noteInfo, collectedNote?.url || collectedNote?.canonicalUrl || noteInfo.url || window.location.href);
+        await this._collectAttachedComments(
+          noteInfo,
+          collectedNote?.url || collectedNote?.canonicalUrl || noteInfo.url || window.location.href,
+          collectedNote,
+        );
       }
 
       // 8. 返回列表页
@@ -924,7 +932,11 @@ export class BatchNoteController extends BaseBatchController {
       this._reportCollectedNote(result);
       console.log(`[灵感爆爆爆] Fallback 采集成功: ${noteInfo.noteId} (${result.title})`);
 
-      await this._collectAttachedComments(noteInfo, result?.url || result?.canonicalUrl || fullUrl);
+      await this._collectAttachedComments(
+        noteInfo,
+        result?.url || result?.canonicalUrl || fullUrl,
+        result,
+      );
 
       await this._goBackToList(urlBefore);
 
@@ -959,12 +971,23 @@ export class BatchNoteController extends BaseBatchController {
     });
   }
 
-  async _collectAttachedComments(noteInfo = {}, noteUrl = '') {
+  async _collectAttachedComments(noteInfo = {}, noteUrl = '', collectedNote = {}) {
     if (!this._includeComments || this._commentLimit <= 0) return { total: 0, comments: [] };
     if (!this.isRunning) return { total: 0, comments: [] };
 
     const noteId = String(noteInfo?.noteId || '').trim().replace(/^xhs_/, '');
     if (!noteId) return { total: 0, comments: [] };
+    const publicCommentCount = publicCommentCountFromXhsNote(collectedNote);
+    if (publicCommentCount === 0) {
+      const result = buildXhsAttachedCommentResult({
+        noteId,
+        total: 0,
+        publicCommentCount,
+        requestedCommentLimit: this._commentLimit,
+      });
+      this.commentResults.push(result);
+      return { total: 0, comments: [], publicCommentCount };
+    }
 
     try {
       this._emitProgress({
@@ -975,12 +998,15 @@ export class BatchNoteController extends BaseBatchController {
       });
       const ready = await this._waitForAttachedCommentContext(noteId, 8000);
       if (!ready) {
-        const result = { noteId, total: 0, error: 'comments_not_ready' };
-        this.commentResults.push(result);
-        return result;
+        this._emitProgress({
+          status: 'collecting_comments',
+          total: this.noteList.length,
+          current: this.currentIndex,
+          message: `第 ${this.currentIndex}/${this.noteList.length} 篇评论区未完全稳定，继续尝试从页面接口同步评论`,
+        });
       }
 
-      await randomDelay(120, 220);
+      await randomDelay(ready ? 120 : 220, ready ? 220 : 420);
       const result = await collectComments({
         noteId,
         noteUrl: noteUrl || noteInfo.url || window.location.href,
@@ -1003,16 +1029,29 @@ export class BatchNoteController extends BaseBatchController {
       });
       const comments = Array.isArray(result?.comments) ? result.comments : [];
       const total = Number(result?.total ?? comments.length) || 0;
+      const commentResult = buildXhsAttachedCommentResult({
+        noteId,
+        total,
+        publicCommentCount,
+        requestedCommentLimit: this._commentLimit,
+      });
       this._totalCommentsCollected += total;
-      this.commentResults.push({ noteId, total });
+      this.commentResults.push(commentResult);
       comments.forEach((comment, index) => this._reportCollectedComment(comment, noteInfo, index));
-      return { total, comments };
+      return {
+        total,
+        comments,
+        ...(publicCommentCount !== null ? { publicCommentCount } : {}),
+        ...(commentResult.error ? { error: commentResult.error } : {}),
+      };
     } catch (error) {
-      const result = {
+      const result = buildXhsAttachedCommentResult({
         noteId,
         total: 0,
         error: String(error?.message || error || 'comments_failed'),
-      };
+        publicCommentCount,
+        requestedCommentLimit: this._commentLimit,
+      });
       this.commentResults.push(result);
       console.warn(`[灵感爆爆爆] 附带评论采集失败: ${noteId}`, error);
       return result;

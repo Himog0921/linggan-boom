@@ -69,6 +69,27 @@ function ensurePositiveInteger(value, fallback = 0) {
   return Math.floor(num);
 }
 
+function hasExplicitCount(value) {
+  if (value == null) return false;
+  if (typeof value === 'string') return value.trim() !== '';
+  if (typeof value === 'object' && !Array.isArray(value)) {
+    return [
+      value.displayText,
+      value.display_text,
+      value.displayCount,
+      value.display_count,
+      value.text,
+      value.countText,
+      value.count_text,
+      value.value,
+      value.count,
+      value.num,
+      value.number,
+    ].some((candidate) => candidate != null && candidate !== '');
+  }
+  return true;
+}
+
 function positiveTimestamp(value) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return 0;
@@ -228,6 +249,8 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
       const url = normalizeXhsUrl(card.url || (noteId ? `/explore/${noteId}` : ''), noteId);
       const images = Array.isArray(card.images) ? card.images.filter(Boolean) : [];
       const imageCandidates = Array.isArray(card.imageCandidates) ? card.imageCandidates.filter(Boolean) : [];
+      const commentCountKnown = hasExplicitCount(card.comments);
+      const publicCommentCount = commentCountKnown ? parseCount(card.comments) : null;
       const cover = firstText(card.cover)
         || firstText(card.coverImg)
         || firstText(card.coverUrl)
@@ -252,7 +275,9 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
         images: images.length > 0 ? images : (cover ? [cover] : []),
         imageCandidates,
         likes: parseCount(card.likes),
-        comments: parseCount(card.comments),
+        comments: publicCommentCount ?? 0,
+        publicCommentCount,
+        publicCommentCountKnown: commentCountKnown,
         collects: parseCount(card.collects),
         shares: parseCount(card.shares),
         type: normalizeString(card.type || 'normal') || 'normal',
