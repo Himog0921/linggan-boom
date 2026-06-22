@@ -129,6 +129,60 @@ test('xhs batch start forwards search filters to the page controller', async () 
   });
 });
 
+test('xhs remote detail batch forwards attached comment settings to the page controller', async () => {
+  let received = null;
+
+  class DetailBatchNoteController {
+    constructor() {
+      this.collectionRunId = 'run_xhs_detail_comments_1';
+    }
+
+    async start(mode, onProgress, settings) {
+      received = { mode, settings };
+    }
+  }
+
+  const { handlers } = createHandlers({
+    BatchNoteController: DetailBatchNoteController,
+  });
+
+  const result = await handlers[MSG.START_BATCH_NOTES]({
+    mode: 'detail',
+    targetNoteId: 'xhs_69baad5e00000000230055ef',
+    includeComments: true,
+    commentLimit: 20,
+    commentDepthMode: 'twoLevel',
+    triggerSource: 'workbench_dispatch',
+    externalTaskMeta: {
+      externalTaskId: 'wb_xhs_detail_comments_1',
+      externalTaskType: 'xhs.batchNotes',
+      monitorMeta: {
+        monitorMode: 'detail_probe',
+      },
+    },
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  assert.equal(result.collectionRunId, 'run_xhs_detail_comments_1');
+  assert.equal(received.mode, 'detail');
+  assert.equal(received.settings.targetNoteId, '69baad5e00000000230055ef');
+  assert.equal(received.settings.includeComments, true);
+  assert.equal(received.settings.commentLimit, 20);
+  assert.equal(received.settings.commentDepthMode, 'twoLevel');
+  assert.equal(received.settings.triggerSource, 'workbench_dispatch');
+  assert.deepEqual(received.settings.monitorMeta, {
+    monitorMode: 'detail_probe',
+  });
+  assert.deepEqual(received.settings.externalTaskMeta, {
+    externalTaskId: 'wb_xhs_detail_comments_1',
+    externalTaskType: 'xhs.batchNotes',
+    monitorMeta: {
+      monitorMode: 'detail_probe',
+    },
+  });
+});
+
 test('xhs remote search batch allows filter settling before startup timeout', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout', 'setInterval'], now: 0 });
 
