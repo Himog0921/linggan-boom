@@ -33,6 +33,11 @@ function toFiniteNumber(value, fallback = 0) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function toOptionalInteger(value) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
+}
+
 function parseRetryAfterHeader(value = '') {
   const normalized = normalizeString(value);
   if (!normalized) return 0;
@@ -202,7 +207,8 @@ export function createExecutionStationClient({
     }
 
     try {
-      const data = await postJson('/api/execution-stations/heartbeat', {
+      const mailboxVersion = toOptionalInteger(identity.mailboxVersion);
+      const data = await postJson('/api/execution-stations/sync', {
         stationId,
         stationToken,
         authorizationId: normalizeString(authorization?.authorizationId),
@@ -210,15 +216,28 @@ export function createExecutionStationClient({
         pluginVersion: normalizeString(pluginVersion),
         capabilities: toStringArray(capabilities.length ? capabilities : identity.capabilities),
         platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
+        claimMode: 'status_only',
+        ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
       });
+      const heartbeat = data?.heartbeat && typeof data.heartbeat === 'object' && !Array.isArray(data.heartbeat)
+        ? data.heartbeat
+        : data;
+      const nextMailboxVersion = toOptionalInteger(data?.mailbox?.version);
       await saveStationIdentity({
         stationId,
         stationToken,
-        role: normalizeString(data?.station?.role) || normalizeString(identity.role),
+        role: normalizeString(heartbeat?.station?.role) || normalizeString(identity.role),
         lastHeartbeatAt: now(),
+        ...(nextMailboxVersion !== undefined ? { mailboxVersion: nextMailboxVersion } : {}),
         capabilities: toStringArray(capabilities.length ? capabilities : identity.capabilities),
       });
-      return { success: true, ...data };
+      return {
+        success: true,
+        ...heartbeat,
+        sync: data,
+        mailbox: data?.mailbox || null,
+        shouldPollNow: data?.mode === 'full_sync',
+      };
     } catch (error) {
       return {
         success: false,

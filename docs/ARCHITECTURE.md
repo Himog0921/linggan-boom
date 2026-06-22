@@ -255,12 +255,10 @@ idle → running ⇄ paused → stopping → done / error
   POST /api/plugin-authorizations/activate      → 激活插件授权
   POST /api/collect/batch                     ← 插件推送数据
   POST /api/media-assets/cover                ← 插件上传封面图片本体，工作台返回稳定资产地址
-  POST /api/execution-stations/reconcile      → 工位唤醒对账 / 恢复租约
-  POST /api/execution-stations/dispatch       → 工位心跳、对账与接单
+  POST /api/execution-stations/sync           → 工位轻量同步、信箱检查、对账与接单
   POST /api/collection-tasks/[id]/lease       ← 执行工位续租
   POST /api/collection-tasks/[id]/ingest      ← 增量上传
   POST /api/execution-stations/register       → 配对绑定执行工位
-  POST /api/execution-stations/heartbeat      ← 工位心跳与账号健康
   GET  /api/collection-tasks/[id]/control-requests → 远程控制
   PATCH /api/collection-tasks/[id]            ← 状态更新
         ↕ HTTPS + Bearer Token (PLUGIN_API_TOKEN)

@@ -87,8 +87,9 @@ function extractIdleClaimReason(claim = {}) {
 
 export function createTaskLeaseIdleSnapshot(claim = {}) {
   const { code, message, nextPollAfterMs, reason } = extractIdleClaimReason(claim);
-  if (!code && !message && !reason) return null;
-  return {
+  const mailboxVersion = extractMailboxVersion(claim);
+  if (!code && !message && !reason && mailboxVersion === undefined) return null;
+  return attachMailboxVersion({
     taskId: '',
     leaseToken: '',
     expiresAt: '',
@@ -96,7 +97,7 @@ export function createTaskLeaseIdleSnapshot(claim = {}) {
     idleReasonMessage: message,
     nextPollAfterMs,
     reason,
-  };
+  }, mailboxVersion);
 }
 
 export function formatTaskLeaseIdleNotice(snapshot = {}) {
@@ -170,7 +171,7 @@ function createHttpError(message, { status = 0, reasonCode = '', nextPollAfterMs
   return error;
 }
 
-function isDispatchEnvelope(data = {}) {
+function isStationSyncEnvelope(data = {}) {
   return Boolean(
     data
     && typeof data === 'object'
@@ -179,18 +180,41 @@ function isDispatchEnvelope(data = {}) {
       Object.prototype.hasOwnProperty.call(data, 'heartbeat')
       || Object.prototype.hasOwnProperty.call(data, 'reconcile')
       || Object.prototype.hasOwnProperty.call(data, 'claim')
+      || Object.prototype.hasOwnProperty.call(data, 'mailbox')
+      || Object.prototype.hasOwnProperty.call(data, 'mode')
     )
   );
 }
 
-function normalizeDispatchClaimResponse(data = {}) {
-  if (!isDispatchEnvelope(data)) return data;
+function extractMailboxVersion(data = {}) {
+  return toOptionalInteger(
+    data?.mailboxVersion
+    ?? data?.mailbox?.version
+    ?? data?.sync?.mailbox?.version
+    ?? data?.dispatch?.mailbox?.version,
+  );
+}
+
+function attachMailboxVersion(snapshot = {}, mailboxVersion) {
+  const normalizedMailboxVersion = toOptionalInteger(mailboxVersion);
+  if (normalizedMailboxVersion === undefined) return snapshot;
+  return {
+    ...snapshot,
+    mailboxVersion: normalizedMailboxVersion,
+  };
+}
+
+function normalizeStationSyncClaimResponse(data = {}) {
+  if (!isStationSyncEnvelope(data)) return data;
+  const mailboxVersion = extractMailboxVersion(data);
   if (data?.claim) {
     return {
       ...data.claim,
+      sync: data,
       dispatch: data,
       heartbeat: data.heartbeat || null,
       reconcile: data.reconcile || null,
+      mailboxVersion,
     };
   }
 
@@ -209,21 +233,27 @@ function normalizeDispatchClaimResponse(data = {}) {
         message: '服务端已有执行中任务，先恢复本地任务后再继续。',
       },
       nextPollAfterMs: 1000,
+      mailboxVersion,
+      sync: data,
       dispatch: data,
       heartbeat: data.heartbeat || null,
       reconcile,
     };
   }
 
+  const isClearLocal = action === 'clear_local';
   return {
     task: null,
+    clearLocalLease: isClearLocal,
     reason: {
-      code: action === 'clear_local' ? 'server_cleared_local_task' : 'no_pending_task',
-      message: action === 'clear_local'
+      code: isClearLocal ? 'server_cleared_local_task' : 'no_pending_task',
+      message: isClearLocal
         ? '服务端没有当前任务，本地任务状态已清理。'
         : '当前没有可领取任务。',
     },
-    nextPollAfterMs: 0,
+    nextPollAfterMs: toFiniteNumber(data?.nextSyncAfterMs, 0),
+    mailboxVersion,
+    sync: data,
     dispatch: data,
     heartbeat: data.heartbeat || null,
     reconcile,
@@ -317,13 +347,15 @@ export async function claimCollectionTaskLease({
   capabilities = [],
   platformAccounts = [],
   pluginVersion = '',
+  forceFullSync = false,
   fetchFn,
   store = null,
 } = {}) {
   const localLease = typeof store?.read === 'function' ? await store.read() : null;
+  const mailboxVersion = extractMailboxVersion(localLease || {});
   const rawData = await postJson({
     serverUrl,
-    path: '/api/execution-stations/dispatch',
+    path: '/api/execution-stations/sync',
     fetchFn,
     authorizationToken,
     body: {
@@ -335,21 +367,24 @@ export async function claimCollectionTaskLease({
       capabilities: toStringArray(capabilities),
       platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
       pluginVersion: normalizeString(pluginVersion),
+      ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
+      ...(forceFullSync ? { forceFullSync: true } : {}),
       localLease: localLease && typeof localLease === 'object'
         ? normalizeLeaseSnapshot({ fallback: localLease })
         : null,
     },
   });
-  const data = normalizeDispatchClaimResponse(rawData);
+  const data = normalizeStationSyncClaimResponse(rawData);
+  const responseMailboxVersion = extractMailboxVersion(data);
 
   if (data?.task && data?.lease && store?.write) {
-    await store.write(normalizeLeaseSnapshot({
+    await store.write(attachMailboxVersion(normalizeLeaseSnapshot({
       task: data.task,
       lease: data.lease,
       attempt: data.attempt,
-    }));
+    }), responseMailboxVersion));
   } else if (data?.resumeLease?.taskId && data?.resumeLease?.leaseToken && store?.write) {
-    await store.write(data.resumeLease);
+    await store.write(attachMailboxVersion(data.resumeLease, responseMailboxVersion));
   } else if (store?.write) {
     const idleSnapshot = createTaskLeaseIdleSnapshot(data);
     if (idleSnapshot) {
@@ -387,6 +422,8 @@ export async function renewCollectionTaskLease({
       attemptNumber,
     },
   });
+  const existingLease = typeof store?.read === 'function' ? await store.read() : null;
+  const mailboxVersion = extractMailboxVersion(existingLease || {});
   const data = await postJson({
     serverUrl,
     path: `/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/lease`,
@@ -402,13 +439,13 @@ export async function renewCollectionTaskLease({
   });
 
   if (store?.write && data?.expiresAt) {
-    await store.write(normalizeLeaseSnapshot({
+    await store.write(attachMailboxVersion(normalizeLeaseSnapshot({
       lease: data,
       fallback: {
         ...leaseAuth,
         expiresAt: data.expiresAt,
       },
-    }));
+    }), mailboxVersion));
   }
 
   return data;
@@ -444,30 +481,20 @@ export async function reconcileExecutionStationLease({
     pluginVersion: normalizeString(pluginVersion),
   };
 
-  let data;
-  let lastMissingError = null;
-  for (const path of ['/api/execution-stations/reconcile', '/api/station/reconcile']) {
-    try {
-      data = await postJson({
-        serverUrl,
-        path,
-        fetchFn,
-        authorizationToken,
-        body,
-      });
-      break;
-    } catch (error) {
-      if ([404, 405].includes(Number(error?.status || 0))) {
-        lastMissingError = error;
-        continue;
-      }
-      throw error;
-    }
-  }
-  if (!data) {
-    void lastMissingError;
-    return { success: false, skipped: true, reason: 'reconcile_unavailable' };
-  }
+  const mailboxVersion = extractMailboxVersion(localLease || {});
+  const rawData = await postJson({
+    serverUrl,
+    path: '/api/execution-stations/sync',
+    fetchFn,
+    authorizationToken,
+    body: {
+      ...body,
+      claimMode: 'status_only',
+      ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
+    },
+  });
+  const data = isStationSyncEnvelope(rawData) ? rawData.reconcile || {} : rawData;
+  const responseMailboxVersion = extractMailboxVersion(rawData);
 
   const action = normalizeString(data?.action || data?.status || '');
   const serverLease = data?.lease || data?.serverLease || null;
@@ -487,20 +514,30 @@ export async function reconcileExecutionStationLease({
   const leaseToken = normalizeString(normalizedServerLease.leaseToken);
 
   if (store?.write && taskId && leaseToken) {
-    await store.write(normalizedServerLease);
+    await store.write(attachMailboxVersion(normalizedServerLease, responseMailboxVersion));
   } else if (
-    store?.clear &&
+    store?.write &&
     ['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)
   ) {
-    await store.clear();
+    const idleSnapshot = createTaskLeaseIdleSnapshot({
+      ...normalizeStationSyncClaimResponse(rawData),
+      mailboxVersion: responseMailboxVersion,
+    });
+    if (idleSnapshot) {
+      await store.write(idleSnapshot);
+    } else if (store?.clear) {
+      await store.clear();
+    }
   }
 
   return {
     success: true,
     ...data,
+    sync: isStationSyncEnvelope(rawData) ? rawData : null,
+    mailbox: isStationSyncEnvelope(rawData) ? rawData.mailbox || null : null,
     action,
     lease: taskId && leaseToken
-      ? normalizedServerLease
+      ? attachMailboxVersion(normalizedServerLease, responseMailboxVersion)
       : null,
   };
 }

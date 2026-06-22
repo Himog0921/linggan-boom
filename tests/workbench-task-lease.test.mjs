@@ -28,17 +28,18 @@ function createMemoryStorage(initial = {}) {
   };
 }
 
-test('task lease client claims through station dispatch and renews through lease endpoints', async () => {
+test('task lease client claims through station sync and renews through lease endpoints', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
-    if (url.endsWith('/api/execution-stations/dispatch')) {
+    if (url.endsWith('/api/execution-stations/sync')) {
       return {
         ok: true,
         status: 200,
         async json() {
           return {
             heartbeat: { success: true },
+            mailbox: { version: 12 },
             reconcile: { action: 'idle', serverLease: null },
             claim: {
               task: {
@@ -105,19 +106,65 @@ test('task lease client claims through station dispatch and renews through lease
   assert.equal((await store.read()).leaseEpoch, 3);
   assert.equal(renewal.expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal((await store.read()).expiresAt, '2026-04-17T12:10:00.000Z');
+  assert.equal((await store.read()).mailboxVersion, 12);
   assert.equal(requests.length, 2);
-  assert.ok(requests[0][0].endsWith('/api/execution-stations/dispatch'));
+  assert.ok(requests[0][0].endsWith('/api/execution-stations/sync'));
+  assert.equal(requests[0][0].includes('/api/execution-stations/dispatch'), false);
   assert.equal(requests[0][0].includes('/api/collection-tasks/claim'), false);
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
   assert.equal(JSON.parse(requests[0][1].body).pluginAuthorizationId, 'auth_1');
   assert.equal(JSON.parse(requests[0][1].body).pluginVersion, '2.0.35');
   assert.deepEqual(JSON.parse(requests[0][1].body).localLease, null);
+  assert.equal(JSON.parse(requests[0][1].body).mailboxVersion, undefined);
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
   assert.equal(JSON.parse(requests[1][1].body).attemptId, 'attempt-1');
   assert.equal(JSON.parse(requests[1][1].body).attemptNumber, 2);
   assert.equal(JSON.parse(requests[1][1].body).leaseEpoch, 3);
+});
+
+test('task lease client can force a full station sync while keeping mailbox version', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mode: 'mailbox_idle',
+          heartbeat: { success: true },
+          mailbox: { version: 12 },
+          reconcile: { action: 'idle', serverLease: null },
+          claim: null,
+          nextSyncAfterMs: 60000,
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: '',
+    leaseToken: '',
+    expiresAt: '',
+    mailboxVersion: 12,
+  });
+
+  await claimCollectionTaskLease({
+    serverUrl: 'http://localhost:3000',
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.42',
+    forceFullSync: true,
+    fetchFn,
+    store,
+  });
+
+  const body = JSON.parse(requests[0][1].body);
+  assert.equal(body.mailboxVersion, 12);
+  assert.equal(body.forceFullSync, true);
 });
 
 test('task lease client exposes renewal conflict status', async () => {
@@ -245,7 +292,7 @@ test('task lease client preserves claim reason and writes an idle snapshot', asy
   );
 });
 
-test('task lease client stores server resume lease from station dispatch without redispatching', async () => {
+test('task lease client stores server resume lease from station sync without a second claim', async () => {
   const store = createTaskLeaseMemoryStore();
   const fetchFn = async () => ({
     ok: true,
@@ -296,13 +343,19 @@ test('task lease client reconciles a server lease into local storage', async () 
       status: 200,
       async json() {
         return {
-          action: 'resume',
-          task: { id: 'task-reconcile-1' },
-          lease: {
-            taskId: 'task-reconcile-1',
-            leaseToken: 'lease-reconcile-1',
-            expiresAt: '2026-05-10T01:05:00.000Z',
+          mode: 'full_sync',
+          heartbeat: { success: true },
+          mailbox: { version: 4 },
+          reconcile: {
+            action: 'resume',
+            task: { id: 'task-reconcile-1' },
+            lease: {
+              taskId: 'task-reconcile-1',
+              leaseToken: 'lease-reconcile-1',
+              expiresAt: '2026-05-10T01:05:00.000Z',
+            },
           },
+          claim: null,
         };
       },
     };
@@ -332,12 +385,15 @@ test('task lease client reconciles a server lease into local storage', async () 
     taskId: 'task-reconcile-1',
     leaseToken: 'lease-reconcile-1',
     expiresAt: '2026-05-10T01:05:00.000Z',
+    mailboxVersion: 4,
   });
-  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/reconcile');
+  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
   const body = JSON.parse(requests[0][1].body);
   assert.equal(body.stationId, 'station-1');
   assert.equal(body.localLease.leaseToken, 'local-token');
+  assert.equal(body.mailboxVersion, undefined);
+  assert.equal(body.claimMode, 'status_only');
   assert.equal(body.pluginVersion, '2.0.7');
 });
 
@@ -346,7 +402,13 @@ test('task lease client clears local lease when reconcile says idle', async () =
     ok: true,
     status: 200,
     async json() {
-      return { action: 'clear_local' };
+      return {
+        mode: 'full_sync',
+        heartbeat: { success: true },
+        mailbox: { version: 5 },
+        reconcile: { action: 'clear_local' },
+        claim: null,
+      };
     },
   });
   const store = createTaskLeaseMemoryStore({
@@ -364,61 +426,48 @@ test('task lease client clears local lease when reconcile says idle', async () =
   });
 
   assert.equal(result.action, 'clear_local');
-  assert.equal(await store.read(), null);
-});
-
-test('task lease client skips reconcile when the service endpoint is not deployed yet', async () => {
-  const fetchFn = async () => ({
-    ok: false,
-    status: 404,
-    async text() {
-      return 'not found';
+  assert.deepEqual(await store.read(), {
+    taskId: '',
+    leaseToken: '',
+    expiresAt: '',
+    idleReasonCode: 'server_cleared_local_task',
+    idleReasonMessage: '服务端没有当前任务，本地任务状态已清理。',
+    nextPollAfterMs: 0,
+    reason: {
+      code: 'server_cleared_local_task',
+      message: '服务端没有当前任务，本地任务状态已清理。',
     },
+    mailboxVersion: 5,
   });
-
-  const result = await reconcileExecutionStationLease({
-    serverUrl: 'http://localhost:3000',
-    stationId: 'station-1',
-    stationToken: 'station-token',
-    fetchFn,
-  });
-
-  assert.equal(result.success, false);
-  assert.equal(result.skipped, true);
-  assert.equal(result.reason, 'reconcile_unavailable');
 });
 
-test('task lease client falls back to the short station reconcile path', async () => {
+test('task lease client does not fall back to old reconcile endpoints', async () => {
   const paths = [];
   const fetchFn = async (url) => {
     paths.push(new URL(url).pathname);
-    if (url.endsWith('/api/execution-stations/reconcile')) {
-      return {
-        ok: false,
-        status: 404,
-        async text() {
-          return 'not found';
-        },
-      };
-    }
     return {
-      ok: true,
-      status: 200,
-      async json() {
-        return { action: 'idle' };
+      ok: false,
+      status: 404,
+      async text() {
+        return 'not found';
       },
     };
   };
 
-  const result = await reconcileExecutionStationLease({
-    serverUrl: 'http://localhost:3000',
-    stationId: 'station-1',
-    stationToken: 'station-token',
-    fetchFn,
-  });
+  await assert.rejects(
+    () => reconcileExecutionStationLease({
+      serverUrl: 'http://localhost:3000',
+      stationId: 'station-1',
+      stationToken: 'station-token',
+      fetchFn,
+    }),
+    (error) => {
+      assert.equal(error.status, 404);
+      return true;
+    },
+  );
 
-  assert.equal(result.action, 'idle');
-  assert.deepEqual(paths, ['/api/execution-stations/reconcile', '/api/station/reconcile']);
+  assert.deepEqual(paths, ['/api/execution-stations/sync']);
 });
 
 test('task poller keeps one active lease and does not claim another task while running', async () => {

@@ -73,8 +73,10 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(requests.length, 2);
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
+  assert.equal(requests[1][0], 'http://localhost:3000/api/execution-stations/sync');
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
+  assert.equal(JSON.parse(requests[1][1].body).claimMode, 'status_only');
 });
 
 test('execution station client reuses stable station key before registration', async () => {
@@ -155,6 +157,71 @@ test('execution station heartbeat respects server retry-after backpressure', asy
   assert.equal(heartbeat.reasonCode, 'plugin_protocol_backpressure');
   assert.equal(heartbeat.nextRetryAfterMs, 120_000);
   assert.equal(heartbeat.nextRetryAt, 121_000);
+});
+
+test('execution station heartbeat sync stores mailbox version and wakes task polling on changes', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchExecutionStation: {
+      stationKey: 'station-key-1',
+      stationId: 'station-1',
+      stationToken: 'token-1',
+      capabilities: ['xhs.authorSurfaceScan'],
+      mailboxVersion: 6,
+    },
+  });
+  const requests = [];
+  const client = createExecutionStationClient({
+    storageArea,
+    now: () => 5_000,
+    resolveServerUrl: async () => 'http://localhost:3000',
+    resolveAuthorization: async () => ({
+      authorizationId: 'auth_1',
+      authorizationToken: 'auth_token_1',
+    }),
+    fetchFn: async (url, options = {}) => {
+      requests.push([url, options]);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            mode: 'full_sync',
+            heartbeat: {
+              success: true,
+              station: {
+                id: 'station-1',
+                role: 'execution',
+              },
+            },
+            mailbox: {
+              version: 7,
+              pendingCount: 1,
+              wakeReason: 'queue_changed',
+            },
+            reconcile: { action: 'idle', serverLease: null },
+            claim: null,
+          };
+        },
+      };
+    },
+  });
+
+  const heartbeat = await client.sendHeartbeat({
+    status: 'online',
+    capabilities: ['xhs.authorSurfaceScan'],
+    pluginVersion: '2.0.42',
+  });
+  const stored = await client.getStoredStationIdentity();
+  const body = JSON.parse(requests[0][1].body);
+
+  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
+  assert.equal(body.mailboxVersion, 6);
+  assert.equal(body.claimMode, 'status_only');
+  assert.equal(heartbeat.success, true);
+  assert.equal(heartbeat.shouldPollNow, true);
+  assert.equal(heartbeat.mailbox.version, 7);
+  assert.equal(stored.mailboxVersion, 7);
+  assert.equal(stored.lastHeartbeatAt, 5_000);
 });
 
 test('execution station client fetches VAPID public key and registers push subscription', async () => {

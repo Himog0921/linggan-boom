@@ -113,26 +113,27 @@ GET /api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after
 ```text
 POST /api/plugin-authorizations/activate
 POST /api/execution-stations/register
-POST /api/execution-stations/heartbeat
-POST /api/execution-stations/reconcile
-POST /api/execution-stations/dispatch
+POST /api/execution-stations/sync
 POST /api/collection-tasks/:taskId/lease
 ```
 
-心跳响应补充：
+工位同步响应补充：
 
 ```json
 {
-  "success": true,
-  "shouldPollNow": true,
-  "pollReason": "pending_task_available",
-  "maxPollDelayMs": 120000
+  "mode": "mailbox_idle",
+  "heartbeat": { "success": true },
+  "mailbox": { "version": 108, "pendingCount": 0 },
+  "reconcile": { "action": "idle", "serverLease": null },
+  "claim": null,
+  "nextSyncAfterMs": 60000
 }
 ```
 
 说明：
-- `shouldPollNow=true` 表示工作台发现已有到期待接任务，插件应立即运行一次既有任务检查，不再等待本地空闲排程。
-- 心跳只负责叫醒，不直接下发任务；真正接单仍必须走 `POST /api/execution-stations/dispatch`，继续经过能力检查、账号检查、租约和对账。
+- `mode=mailbox_idle` 表示工位信箱没有变化，插件不需要进入完整接单。
+- `mode=full_sync` 表示信箱变化、本地有租约或插件要求完整同步，服务端会先对账，再按需返回可执行任务。
+- 插件状态型同步会带 `claimMode=status_only`，只更新在线状态和信箱版本，不会顺手接单；任务轮询同步才会领取任务。
 
 Web Push 唤醒：
 

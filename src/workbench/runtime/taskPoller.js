@@ -38,6 +38,7 @@ const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const TICK_STALE_TIMEOUT_MS = 2 * 60 * 1000;
+const FULL_SYNC_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -949,6 +950,9 @@ function buildAuthorizationFailureIdleResult(error = {}) {
 }
 
 export function createTaskPoller(deps = {}) {
+  const fullSyncFallbackIntervalMs = Number.isFinite(Number(deps.fullSyncFallbackIntervalMs))
+    ? Math.max(0, Number(deps.fullSyncFallbackIntervalMs))
+    : FULL_SYNC_FALLBACK_INTERVAL_MS;
   const state = {
     activeTask: null,
     activeLease: null,
@@ -960,6 +964,7 @@ export function createTaskPoller(deps = {}) {
   let tickPromise = null;
   let tickStartedAtMs = 0;
   let lastReconcileAtMs = 0;
+  let lastForceFullSyncAtMs = getNow();
 
   function getNow() {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
@@ -2254,7 +2259,15 @@ export function createTaskPoller(deps = {}) {
 
         let claimed;
         try {
-          claimed = await deps.claimTaskLease();
+          const shouldForceFullSync =
+            fullSyncFallbackIntervalMs > 0 &&
+            getNow() - lastForceFullSyncAtMs >= fullSyncFallbackIntervalMs;
+          claimed = await deps.claimTaskLease({
+            forceFullSync: shouldForceFullSync,
+          });
+          if (shouldForceFullSync) {
+            lastForceFullSyncAtMs = getNow();
+          }
         } catch (error) {
           if (isAuthorizationFailureError(error)) {
             return handleAuthorizationFailure(error);

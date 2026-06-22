@@ -2247,7 +2247,7 @@ const taskPoller = createTaskPoller({
   },
   acquireExecutionLock: async (lock) => executionAccountLockManager.acquire(lock),
   releaseExecutionLock: async (lock) => executionAccountLockManager.release(lock),
-  claimTaskLease: async () => {
+  claimTaskLease: async ({ forceFullSync = false } = {}) => {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
     const identity = await executionStationClient.getStoredStationIdentity();
@@ -2272,6 +2272,7 @@ const taskPoller = createTaskPoller({
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
       pluginVersion: getPluginVersion(),
+      forceFullSync,
       store: taskLeaseStore,
     });
   },

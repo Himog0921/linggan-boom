@@ -122,16 +122,14 @@ Authorization: Bearer <authorizationToken>
 
 以下请求都必须携带插件授权 Bearer Token，且服务端同时校验 `authorizationId`：
 
-- `POST /api/execution-stations/heartbeat`
-- `POST /api/execution-stations/dispatch`
+- `POST /api/execution-stations/sync`
 - `POST /api/collection-tasks/:taskId/lease`
 - `POST /api/collect/batch`
 - `POST /api/media-assets/cover`（上传采集封面图片本体，返回工作台稳定 `publicUrl`）
-- `POST /api/execution-stations/reconcile`（工位唤醒后先对账，用服务端当前租约恢复执行）
 - `POST /api/collection-tasks/:taskId/ingest`
 - `GET /api/collection-tasks/:taskId/control-requests`
 
-执行工位模式下，插件不再调用 `GET /api/collection-tasks` 恢复扫描任务列表；旧版本如果继续高频轮询，会被工作台入口层拦截。
+执行工位模式下，插件不再调用 `GET /api/collection-tasks` 恢复扫描任务列表，也不再调用旧的 `heartbeat / reconcile / dispatch` 工位接口；旧版本如果继续高频轮询，会被工作台入口层拦截。
 
 普通同步数据归属规则：插件授权只证明“这台浏览器可以使用插件”，不代表普通采集数据应该写入授权者账号。Dashboard 手动同步、批量同步和封面上传在写入前必须先通过 `POST /api/plugin-data-workspace` 绑定当前登录的内容工作台使用者账号，并在后续请求里携带 `X-Plugin-Data-Token`。如果没有使用者登录或绑定失败，工作台应拒绝同步，而不是回退写到授权者、系统所有者或共享执行池。
 
@@ -139,7 +137,7 @@ Authorization: Bearer <authorizationToken>
 
 ## 5. 失效与撤销
 
-当内容工作台撤销授权时，插件下一次心跳 / 接单 / 同步必须立即失败，并引导用户重新激活授权码。  
+当内容工作台撤销授权时，插件下一次 `/sync`、续租或数据同步必须立即失败，并引导用户重新激活授权码。
 若用户在插件里主动清除授权，本地必须同时清掉：
 
 1. `authorizationToken`

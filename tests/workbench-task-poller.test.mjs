@@ -49,6 +49,34 @@ test('task poller starts a fresh tick when the previous tick is stale', async ()
   assert.equal(poller.getState().ticking, false);
 });
 
+test('task poller forces a full station sync after the idle fallback interval', async () => {
+  let now = 1_000;
+  const claimOptions = [];
+  const poller = createTaskPoller({
+    now: () => now,
+    fullSyncFallbackIntervalMs: 10_000,
+    claimTaskLease: async (options = {}) => {
+      claimOptions.push(options);
+      return {
+        task: null,
+        nextPollAfterMs: 30_000,
+        reason: { code: 'NO_PENDING_TASK', message: '暂无可接任务' },
+      };
+    },
+  });
+
+  await poller.tick();
+  now += 9_999;
+  await poller.tick();
+  now += 1;
+  await poller.tick();
+
+  assert.equal(claimOptions.length, 3);
+  assert.equal(claimOptions[0].forceFullSync, false);
+  assert.equal(claimOptions[1].forceFullSync, false);
+  assert.equal(claimOptions[2].forceFullSync, true);
+});
+
 test('task poller claims a pending task and patches completion state', async () => {
   const patches = [];
   const recordBatches = [];
