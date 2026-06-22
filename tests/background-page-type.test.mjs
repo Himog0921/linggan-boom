@@ -221,7 +221,7 @@ test('background preserves target note metadata when forwarding xhs profile rela
   );
 });
 
-test('background turns xhs detail-mode batch notes into direct single-note collection', () => {
+test('background keeps xhs detail-mode batch notes on the batch route', () => {
   assert.deepEqual(
     buildBatchNotesDispatchMessage({
       mode: 'detail',
@@ -236,7 +236,9 @@ test('background turns xhs detail-mode batch notes into direct single-note colle
       },
     }),
     {
-      action: 'collectSingleNote',
+      action: 'startBatchNotes',
+      mode: 'detail',
+      targetNoteId: '69baad5e00000000230055ef',
       triggerSource: 'workbench_dispatch',
       externalTaskMeta: {
         externalTaskId: 'task_2',
@@ -245,8 +247,6 @@ test('background turns xhs detail-mode batch notes into direct single-note colle
       monitorMeta: {
         monitorMode: 'detail_probe',
       },
-      expectedNoteId: '69baad5e00000000230055ef',
-      asyncDispatch: true,
     },
   );
 });

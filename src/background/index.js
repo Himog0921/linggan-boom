@@ -132,7 +132,7 @@ let nextWorkbenchTaskPollAtMs = 0;
 let nextWorkbenchPushSubscriptionAtMs = 0;
 
 function navigatedTaskTabStorageArea() {
-  return chrome.storage?.session || chrome.storage?.local || null;
+  return globalThis.chrome?.storage?.session || globalThis.chrome?.storage?.local || null;
 }
 
 function navigatedTabsSnapshotFromMemory() {
@@ -151,7 +151,7 @@ async function readNavigatedTaskTabsSnapshot() {
 }
 
 function localStorageArea() {
-  return chrome.storage?.local || null;
+  return globalThis.chrome?.storage?.local || null;
 }
 
 async function readLocalStorageValue(key) {
@@ -517,25 +517,13 @@ function buildBatchNotesDispatchMessage(msg = {}) {
   const monitorMeta = msg?.monitorMeta || msg?.externalTaskMeta?.monitorMeta || null;
   const targetNoteId = normalizeString(msg?.targetNoteId || monitorMeta?.targetNoteId).replace(/^xhs_/, '');
   const isXhsRemoteDetail = externalTaskType === 'xhs.batchNotes' && String(msg?.mode || '').trim() === 'detail';
-  const shouldCollectAttachedComments = forwarded.includeComments === true || forwarded.collectComments === true;
 
-  if (isXhsRemoteDetail && shouldCollectAttachedComments) {
+  if (isXhsRemoteDetail) {
     return {
       ...forwarded,
       action: MSG.START_BATCH_NOTES,
       monitorMeta,
       targetNoteId: targetNoteId || undefined,
-    };
-  }
-
-  if (isXhsRemoteDetail) {
-    return {
-      action: MSG.COLLECT_SINGLE_NOTE,
-      triggerSource: forwarded.triggerSource,
-      externalTaskMeta: forwarded.externalTaskMeta,
-      monitorMeta,
-      expectedNoteId: targetNoteId || undefined,
-      asyncDispatch: true,
     };
   }
 
