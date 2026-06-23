@@ -46,6 +46,18 @@ test('collection done wakes workbench task finalization instead of only clearing
   assert.match(backgroundSource, /runWorkbenchTaskPollTick\(\{\s*force:\s*true\s*\}\)/);
 });
 
+test('xhs terminal collection controllers confirm run persistence before reporting done', () => {
+  const sources = [
+    fs.readFileSync(path.join(projectRoot, 'src/platforms/xhs/batchController.js'), 'utf8'),
+    fs.readFileSync(path.join(projectRoot, 'src/platforms/xhs/batchCommentController.js'), 'utf8'),
+  ];
+
+  for (const source of sources) {
+    assert.match(source, /async _finalizeCollectionRun\(/);
+    assert.doesNotMatch(source, /collectionRunStore\.markDone\([\s\S]{0,260}?\)\.catch\(\(\) => \{\}\);[\s\S]{0,180}?status:\s*'done'/);
+  }
+});
+
 test('douyin page lifecycle can clean listeners, observers, and injected UI', () => {
   const adapterSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/index.js'), 'utf8');
   const uiSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/uiInjector.js'), 'utf8');

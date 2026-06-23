@@ -626,12 +626,12 @@ export class BatchNoteController extends BaseBatchController {
 
     await this._cleanupAfterLoop();
     if (this.collectionRunId) {
-      await collectionRunStore.markDone(this.collectionRunId, buildXhsBatchNotesRunPatch({
+      await this._finalizeCollectionRun('done', buildXhsBatchNotesRunPatch({
         noteList: this.noteList,
         collected: this.collected,
         failed: this.failed,
         commentResults: this.commentResults,
-      })).catch(() => {});
+      }));
     }
     this._setState(TASK_STATE.DONE, 'done');
     this._emitProgress({
@@ -646,6 +646,18 @@ export class BatchNoteController extends BaseBatchController {
       taskState: this.state,
       phase: 'done',
     });
+  }
+
+  async _finalizeCollectionRun(status, patch = {}) {
+    if (!this.collectionRunId) return null;
+    const finalizer = status === 'stopped'
+      ? collectionRunStore.markStopped
+      : collectionRunStore.markDone;
+    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, patch);
+    if (!updated) {
+      throw new Error(`采集运行记录最终状态写入失败：${this.collectionRunId}`);
+    }
+    return updated;
   }
 
   async _captureLoop() {
@@ -710,20 +722,16 @@ export class BatchNoteController extends BaseBatchController {
 
     const stopped = this._stoppedByUser;
     await this._cleanupAfterLoop();
+    const finalRunPatch = buildXhsBatchNotesRunPatch({
+      noteList: this.noteList,
+      collected: this.collected,
+      failed: this.failed,
+      commentResults: this.commentResults,
+    });
     if (stopped) {
-      await collectionRunStore.markStopped(this.collectionRunId, buildXhsBatchNotesRunPatch({
-        noteList: this.noteList,
-        collected: this.collected,
-        failed: this.failed,
-        commentResults: this.commentResults,
-      })).catch(() => {});
+      await this._finalizeCollectionRun('stopped', finalRunPatch);
     } else if (this.collectionRunId) {
-      await collectionRunStore.markDone(this.collectionRunId, buildXhsBatchNotesRunPatch({
-        noteList: this.noteList,
-        collected: this.collected,
-        failed: this.failed,
-        commentResults: this.commentResults,
-      })).catch(() => {});
+      await this._finalizeCollectionRun('done', finalRunPatch);
     }
     this._setState(TASK_STATE.DONE, stopped ? 'stopped' : 'done');
     this._emitProgress({
@@ -845,12 +853,12 @@ export class BatchNoteController extends BaseBatchController {
       await this._syncRunProgress();
       await this._cleanupAfterLoop();
       if (this.collectionRunId) {
-        await collectionRunStore.markDone(this.collectionRunId, buildXhsBatchNotesRunPatch({
+        await this._finalizeCollectionRun('done', buildXhsBatchNotesRunPatch({
           noteList: this.noteList,
           collected: this.collected,
           failed: this.failed,
           commentResults: this.commentResults,
-        })).catch(() => {});
+        }));
       }
       this._setState(TASK_STATE.DONE, 'done');
       this._emitProgress({

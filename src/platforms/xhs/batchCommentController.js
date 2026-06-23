@@ -354,9 +354,9 @@ export class BatchCommentController extends BaseBatchController {
       results: this.results,
     });
     if (this._stoppedByUser) {
-      await collectionRunStore.markStopped(this.collectionRunId, runPatch).catch(() => {});
+      await this._finalizeCollectionRun('stopped', runPatch);
     } else if (this.collectionRunId) {
-      await collectionRunStore.markDone(this.collectionRunId, runPatch).catch(() => {});
+      await this._finalizeCollectionRun('done', runPatch);
     }
     this._emitProgress({
       status: 'done',
@@ -371,6 +371,18 @@ export class BatchCommentController extends BaseBatchController {
       taskState: this.state,
       phase: 'done',
     });
+  }
+
+  async _finalizeCollectionRun(status, patch = {}) {
+    if (!this.collectionRunId) return null;
+    const finalizer = status === 'stopped'
+      ? collectionRunStore.markStopped
+      : collectionRunStore.markDone;
+    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, patch);
+    if (!updated) {
+      throw new Error(`采集运行记录最终状态写入失败：${this.collectionRunId}`);
+    }
+    return updated;
   }
 
   _throwIfBlockingError() {
