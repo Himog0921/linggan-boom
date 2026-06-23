@@ -4,7 +4,7 @@ import { throttle, watchCaptcha, showCaptchaPauseOverlay } from './antiDetect.js
 import { sendToBackground, reportProgress, reportDone, reportWorkbenchRecord } from '../../shared/messaging.js';
 import { BATCH_CONFIG, COLLECT_MODE, COMMENT_DEPTH_MODE, MSG, TASK_STATE } from '../../shared/constants.js';
 import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
-import { randomDelay, parseCount } from '../../shared/utils.js';
+import { randomDelay, parseCount, extractNoteId } from '../../shared/utils.js';
 import { noteStore } from '../../db/noteStore.js';
 import { collectionRunStore } from '../../db/collectionRunStore.js';
 import { createCollectionRunHeartbeatReporter } from '../../workbench/runtime/heartbeat.js';
@@ -515,15 +515,19 @@ export class BatchNoteController extends BaseBatchController {
       }
     });
 
-    // 2. 发现笔记列表（含滚动加载）
-    this._emitProgress({
-      status: 'discovering',
-      total: 0,
-      current: 0,
-      message: '正在扫描页面笔记...',
-    });
-
     try {
+      if (mode === COLLECT_MODE.DETAIL && !this.surfaceOnly) {
+        await this._captureCurrentDetailTask();
+        return;
+      }
+
+      // 2. 发现笔记列表（含滚动加载）
+      this._emitProgress({
+        status: 'discovering',
+        total: 0,
+        current: 0,
+        message: '正在扫描页面笔记...',
+      });
       this.noteList = await discoverWithScroll(this._containerSelector, 10, {
         expectedCount: this.targetNoteId ? 1 : count,
       });
@@ -736,6 +740,136 @@ export class BatchNoteController extends BaseBatchController {
       taskState: this.state,
       phase: 'done',
     });
+  }
+
+  _resolveCurrentDetailNoteInfo() {
+    const currentUrl = String(window.location.href || '').trim();
+    const noteId = String(this.targetNoteId || extractNoteId(currentUrl) || '').trim().replace(/^xhs_/, '');
+    if (!noteId) {
+      throw new Error('当前详情页缺少目标作品 ID');
+    }
+    return {
+      noteId,
+      url: currentUrl,
+      canonicalUrl: currentUrl,
+      rawUrl: currentUrl,
+    };
+  }
+
+  async _captureCurrentDetailTask() {
+    const noteInfo = this._resolveCurrentDetailNoteInfo();
+    this.noteList = [noteInfo];
+    this.currentIndex = 1;
+
+    this._emitProgress({
+      status: 'collecting',
+      total: 1,
+      current: 1,
+      message: `正在采集当前作品详情：${noteInfo.noteId}`,
+    });
+    reportProgress(1, 1, '正在采集当前作品详情', {
+      taskType: this.type,
+      taskState: this.state,
+      phase: 'collect',
+    });
+    void this.reportHeartbeat.report(this.collectionRunId, {
+      taskState: this.state,
+      stage: 'collecting',
+      current: 1,
+      total: 1,
+      message: '正在采集当前作品详情',
+    }).catch(() => {});
+
+    try {
+      if (await this._pauseForRiskControl()) {
+        await this._waitIfPaused();
+      }
+      if (!this.isRunning) {
+        await this._cleanupAfterLoop();
+        return;
+      }
+
+      const pageReady = await this._waitForNoteLoad(noteInfo.noteId, 10000);
+      if (!pageReady) {
+        throw new Error(`目标作品详情页未加载完成：${noteInfo.noteId}`);
+      }
+
+      const stateReady = await waitForNoteState(noteInfo.noteId, 10000);
+      if (!stateReady) {
+        console.warn('[灵感爆爆爆] __INITIAL_STATE__ 未就绪，尝试直接采集当前详情页:', noteInfo.noteId);
+      }
+
+      await this._settleAfterDetailReady();
+      const warmedUp = await this._waitForNoteDataStable(noteInfo.noteId, 6000);
+      if (!warmedUp) {
+        console.warn('[灵感爆爆爆] 当前详情页目标笔记数据仍未稳定，进入保守重试模式:', noteInfo.noteId);
+      }
+
+      let collectedNote = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          await this._waitIfPaused();
+          if (!this.isRunning) break;
+          if (attempt > 0) {
+            await this._waitForNoteDataStable(noteInfo.noteId, 2600 + (attempt * 1200));
+            await randomDelay(420, 760);
+          }
+          const result = await collectNote(window, {
+            collectionRunId: this.collectionRunId,
+            expectedNoteId: noteInfo.noteId,
+            monitorMeta: this.monitorMeta,
+          });
+          if (String(result?.noteId || '').trim() !== String(noteInfo.noteId || '').trim()) {
+            throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
+          }
+          this.collected.push(result);
+          this._reportCollectedNote(result);
+          collectedNote = result;
+          console.log(`[灵感爆爆爆] 当前详情页采集成功: ${noteInfo.noteId} (${result.title})`);
+          break;
+        } catch (err) {
+          console.warn(`[灵感爆爆爆] 当前详情页采集第 ${attempt + 1} 次失败: ${noteInfo.noteId}`, err.message);
+        }
+      }
+
+      if (!collectedNote) {
+        throw new Error(`目标作品详情采集失败：${noteInfo.noteId}`);
+      }
+
+      await this._collectAttachedComments(
+        noteInfo,
+        collectedNote?.url || collectedNote?.canonicalUrl || noteInfo.url || window.location.href,
+        collectedNote,
+      );
+
+      await this._syncRunProgress();
+      await this._cleanupAfterLoop();
+      if (this.collectionRunId) {
+        await collectionRunStore.markDone(this.collectionRunId, buildXhsBatchNotesRunPatch({
+          noteList: this.noteList,
+          collected: this.collected,
+          failed: this.failed,
+          commentResults: this.commentResults,
+        })).catch(() => {});
+      }
+      this._setState(TASK_STATE.DONE, 'done');
+      this._emitProgress({
+        status: 'done',
+        total: 1,
+        current: this.collected.length,
+        failed: this.failed.length,
+        message: `采集完成：成功 ${this.collected.length}，评论 ${this._totalCommentsCollected} 条，失败 ${this.failed.length}`,
+      });
+      reportDone('batchNotes', this.collected.length, {
+        taskType: this.type,
+        taskState: this.state,
+        phase: 'done',
+      });
+    } catch (error) {
+      this.failed.push({ noteId: noteInfo.noteId, error: String(error?.message || error) });
+      await this._syncRunProgress();
+      throw error;
+    }
   }
 
   async _throttleAfterOne() {
@@ -1250,7 +1384,7 @@ export class BatchNoteController extends BaseBatchController {
         return false;
       }
       const path = window.location.pathname;
-      if (path.includes(`/explore/${noteId}`) || path.includes(`/discovery/item/${noteId}`)) {
+      if (noteId && (path.includes(`/explore/${noteId}`) || path.includes(`/discovery/item/${noteId}`) || path.includes(`/${noteId}`))) {
         console.log('[灵感爆爆爆] URL 已跳转到笔记详情:', path);
         return true;
       }

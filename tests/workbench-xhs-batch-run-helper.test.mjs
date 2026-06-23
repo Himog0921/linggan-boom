@@ -11,6 +11,7 @@ import {
   publicCommentCountFromXhsNote,
 } from '../src/workbench/runtime/xhsBatchRunHelper.js';
 import { BatchNoteController } from '../src/platforms/xhs/batchController.js';
+import { COLLECT_MODE } from '../src/shared/constants.js';
 
 test('buildRemoteRunCreatePayload returns null without external task id', () => {
   const payload = buildRemoteRunCreatePayload({
@@ -153,6 +154,82 @@ test('BatchNoteController records known public zero comments without collecting 
   assert.deepEqual(controller.commentResults, [
     { noteId: 'n1', total: 0, publicCommentCount: 0, error: '' },
   ]);
+});
+
+test('BatchNoteController routes detail mode to current detail collection', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  let usedDetailCollector = false;
+  const events = [];
+
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/explore/n1',
+      pathname: '/explore/n1',
+      origin: 'https://www.xiaohongshu.com',
+    },
+  };
+  globalThis.document = {
+    body: { innerText: '' },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+
+  class DetailBatchNoteController extends BatchNoteController {
+    async _captureCurrentDetailTask() {
+      usedDetailCollector = true;
+      this.noteList = [{ noteId: 'n1', url: globalThis.window.location.href }];
+      this.collected = [{ noteId: 'n1', contentId: 'xhs_n1' }];
+      this.captchaWatcher?.disconnect?.();
+      this.isRunning = false;
+    }
+  }
+
+  try {
+    const controller = new DetailBatchNoteController();
+    await controller.start(COLLECT_MODE.DETAIL, (progress) => {
+      events.push(progress);
+    }, {
+      targetNoteId: 'n1',
+      includeComments: true,
+      commentLimit: 20,
+    });
+
+    assert.equal(usedDetailCollector, true);
+    assert.deepEqual(controller.noteList, [
+      { noteId: 'n1', url: 'https://www.xiaohongshu.com/explore/n1' },
+    ]);
+    assert.equal(events.some((event) => event.status === 'discovering'), false);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
+test('BatchNoteController treats xhs profile relay urls with note id as loaded detail pages', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+
+  globalThis.window = {
+    location: {
+      href: 'https://www.xiaohongshu.com/user/profile/author_1/n1?xsec_token=abc',
+      pathname: '/user/profile/author_1/n1',
+      origin: 'https://www.xiaohongshu.com',
+    },
+  };
+  globalThis.document = {
+    body: { innerText: '' },
+    querySelector: () => null,
+  };
+
+  try {
+    const controller = new BatchNoteController();
+    const loaded = await controller._waitForNoteLoad('n1', 5);
+    assert.equal(loaded, true);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
 });
 
 test('publicCommentCountFromXhsNote normalizes detail comment counts', () => {
