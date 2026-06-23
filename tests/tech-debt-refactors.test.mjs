@@ -38,6 +38,14 @@ test('background workbench task routing uses one shared task context registry', 
   assert.doesNotMatch(backgroundSource, /taskExecutionTabRegistry/);
 });
 
+test('collection done wakes workbench task finalization instead of only clearing the badge', () => {
+  const backgroundSource = fs.readFileSync(path.join(projectRoot, 'src/background/index.js'), 'utf8');
+
+  assert.match(backgroundSource, /message\.action === MSG\.COLLECT_DONE/);
+  assert.match(backgroundSource, /getActiveWorkbenchTaskForMessage\(message, sender\)/);
+  assert.match(backgroundSource, /runWorkbenchTaskPollTick\(\{\s*force:\s*true\s*\}\)/);
+});
+
 test('douyin page lifecycle can clean listeners, observers, and injected UI', () => {
   const adapterSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/index.js'), 'utf8');
   const uiSource = fs.readFileSync(path.join(projectRoot, 'src/platforms/douyin/uiInjector.js'), 'utf8');

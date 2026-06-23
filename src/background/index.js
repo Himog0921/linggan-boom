@@ -2582,6 +2582,11 @@ async function handleWorkbenchPushEvent(event) {
 chrome.runtime.onMessage.addListener((message, sender) => {
   if (message.action === MSG.COLLECT_DONE && sender.tab?.id) {
     chrome.action.setBadgeText({ text: '', tabId: sender.tab.id });
+    if (getActiveWorkbenchTaskForMessage(message, sender)) {
+      void runWorkbenchTaskPollTick({ force: true }).catch((error) => {
+        console.warn('[灵感爆爆爆] 采集完成后同步工作台任务状态失败:', error);
+      });
+    }
   }
 });
 
