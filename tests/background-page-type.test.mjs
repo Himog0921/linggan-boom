@@ -149,7 +149,7 @@ test('xhs author note link tasks map to profile page type', () => {
   );
 });
 
-test('xhs detail probe uses profile dispatch page type when target is an unsigned profile relay url', () => {
+test('xhs detail probe keeps detail dispatch page type when target is an unsigned profile relay url', () => {
   assert.deepEqual(
     normalizeWorkbenchTaskTarget({
       platform: 'xhs',
@@ -161,7 +161,7 @@ test('xhs detail probe uses profile dispatch page type when target is an unsigne
       },
     }),
     {
-      pageType: 'profile',
+      pageType: 'detail',
       url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef',
     },
   );
@@ -188,7 +188,7 @@ test('xhs detail probe keeps detail dispatch page type when target is a signed p
 test('background preserves target note metadata when forwarding xhs profile relay batch notes', () => {
   assert.deepEqual(
     buildBatchNotesDispatchMessage({
-      mode: 'profile',
+      mode: 'detail',
       count: 1,
       targetNoteId: '69baad5e00000000230055ef',
       triggerSource: 'workbench_dispatch',
@@ -204,7 +204,7 @@ test('background preserves target note metadata when forwarding xhs profile rela
     }),
     {
       action: 'startBatchNotes',
-      mode: 'profile',
+      mode: 'detail',
       count: 1,
       targetNoteId: '69baad5e00000000230055ef',
       triggerSource: 'workbench_dispatch',

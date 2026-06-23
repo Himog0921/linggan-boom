@@ -1,9 +1,6 @@
 import '../extensionPublicPath.js';
 import { MSG } from '../shared/constants.js';
-import {
-  extractProfileIdentityFromUrl,
-  parseTargetIdentity,
-} from '../shared/targetIdentity.js';
+import { parseTargetIdentity } from '../shared/targetIdentity.js';
 import {
   testConnection,
   getFlywheelConfig,
@@ -328,24 +325,6 @@ function buildCanonicalXhsDetailUrl(noteId = '') {
   return normalizedNoteId ? `https://www.xiaohongshu.com/explore/${normalizedNoteId}` : '';
 }
 
-function extractXhsProfileUserId(url = '') {
-  return extractProfileIdentityFromUrl(url);
-}
-
-function buildCanonicalXhsProfileUrl(userId = '') {
-  const normalizedUserId = normalizeString(userId);
-  return normalizedUserId ? `https://www.xiaohongshu.com/user/profile/${normalizedUserId}` : '';
-}
-
-function isXhsProfileRelayDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?xiaohongshu\.com\/user\/profile\/[^/?#]+\/[^/?#]+/i.test(normalizeString(url));
-}
-
-function getTaskStrategy(task = {}) {
-  const payload = task?.payload && typeof task.payload === 'object' ? task.payload : {};
-  return normalizeString(task?.taskStrategy || payload.taskStrategy || payload.monitorStrategy);
-}
-
 function isRecoverableConnectionError(error) {
   const message = String(error?.message || error || '');
   return /Could not establish connection|Receiving end does not exist|context invalidated|The message port closed|sendToTab timeout|Cannot access contents|Extension manifest must request permission/i.test(message);
@@ -415,10 +394,6 @@ async function resolvePreferredTaskTarget(task = {}) {
   const pageType = inferPageTypeFromTask(task);
   if (platform !== 'xhs' || pageType !== 'detail') return target;
   if (isSignedXhsShareUrl(target)) return target;
-  if (shouldUseXhsProfileRelay(task)) {
-    return buildCanonicalXhsProfileUrl(extractXhsProfileUserId(target)) || target;
-  }
-
   const noteId = getTaskPlatformContentId(task);
   if (!noteId) return target;
 
@@ -464,24 +439,6 @@ function inferPageTypeFromTask(task = {}) {
   return 'search';
 }
 
-function shouldUseXhsProfileRelay(task = {}) {
-  return (
-    normalizeString(task?.platform).toLowerCase() === 'xhs'
-    && normalizeString(task?.taskType) === 'xhs.batchNotes'
-    && inferPageTypeFromTask(task) === 'detail'
-    && getTaskStrategy(task) === 'detail_probe'
-    && !isSignedXhsShareUrl(task?.target)
-    && isXhsProfileRelayDetailUrl(task?.target)
-  );
-}
-
-function inferDispatchPageTypeFromTask(task = {}) {
-  if (shouldUseXhsProfileRelay(task)) {
-    return 'profile';
-  }
-  return inferPageTypeFromTask(task);
-}
-
 function resolveRiskControlAccountId(activeTask = {}) {
   return String(activeTask?.accountId || '').trim();
 }
@@ -506,7 +463,7 @@ function buildRiskControlActiveTaskPatch({ accountId = '', accountName = '', err
 function normalizeWorkbenchTaskTarget(task = {}) {
   const targetUrl = String(task.target || '').trim();
   return {
-    pageType: inferDispatchPageTypeFromTask(task),
+    pageType: inferPageTypeFromTask(task),
     url: targetUrl,
   };
 }
