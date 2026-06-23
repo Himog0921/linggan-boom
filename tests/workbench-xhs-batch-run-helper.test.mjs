@@ -157,6 +157,8 @@ test('BatchNoteController records known public zero comments without collecting 
 });
 
 test('BatchNoteController routes detail mode to current detail collection', async () => {
+  assert.equal(COLLECT_MODE.DETAIL, 'detail');
+
   const previousWindow = globalThis.window;
   const previousDocument = globalThis.document;
   let usedDetailCollector = false;
@@ -187,7 +189,7 @@ test('BatchNoteController routes detail mode to current detail collection', asyn
 
   try {
     const controller = new DetailBatchNoteController();
-    await controller.start(COLLECT_MODE.DETAIL, (progress) => {
+    await controller.start('detail', (progress) => {
       events.push(progress);
     }, {
       targetNoteId: 'n1',

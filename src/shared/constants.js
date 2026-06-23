@@ -94,6 +94,7 @@ export const TASK_STATE = {
 export const COLLECT_MODE = {
   SEARCH: 'search',
   PROFILE: 'profile',
+  DETAIL: 'detail',
   FAVORITE: 'favorite',
 };
 
