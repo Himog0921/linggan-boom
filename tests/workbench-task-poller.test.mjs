@@ -223,6 +223,61 @@ test('task poller claims a pending task and patches completion state', async () 
   assert.deepEqual(recordBatches[0][0].payload.images, [{ url: 'https://images.example.com/cover.jpg' }]);
 });
 
+test('task poller carries plugin-opened tab ownership into terminal cleanup', async () => {
+  const poller = createTaskPoller({
+    claimTaskLease: claimTask([
+      {
+        id: 'task_plugin_tab_1',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/explore/note_1',
+      },
+    ]),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: true,
+      pluginOpenedTabId: 701,
+    }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_plugin_tab_1',
+      tabId: 701,
+      resultLookup: { externalTaskId: 'task_plugin_tab_1' },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_plugin_tab_1',
+        status: 'done',
+        resultSummary: {
+          notes: 1,
+          itemsPlanned: 1,
+          itemsSucceeded: 1,
+          failedItems: 0,
+        },
+        records: {
+          notes: [],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+  });
+
+  await poller.tick();
+  const terminalTick = await poller.tick();
+
+  assert.deepEqual(terminalTick.cleanupTask, {
+    taskId: 'task_plugin_tab_1',
+    externalTaskId: 'task_plugin_tab_1',
+    pluginRunId: 'run_plugin_tab_1',
+    pluginOpenedTabId: 701,
+  });
+});
+
 test('task poller marks task running immediately when dispatch already returns a local run id', async () => {
   const patches = [];
   const events = [];

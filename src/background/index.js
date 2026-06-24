@@ -273,14 +273,22 @@ async function rememberNavigatedTaskExecutionTab(taskId = '', tabId = 0) {
   );
 }
 
-async function closeRememberedTaskExecutionTabs(taskIds = []) {
+async function closeRememberedTaskExecutionTabs(taskIds = [], explicitTabIds = []) {
   const snapshot = {
     ...(await readNavigatedTaskTabsSnapshot()),
     ...navigatedTabsSnapshotFromMemory(),
   };
+  const tabIdsToClose = new Set(
+    explicitTabIds
+      .map((tabId) => Number(tabId || 0))
+      .filter((tabId) => Number.isFinite(tabId) && tabId > 0),
+  );
   for (const taskId of taskIds) {
     const tabId = Number(snapshot[String(taskId || '').trim()] || 0);
     if (!tabId) continue;
+    tabIdsToClose.add(tabId);
+  }
+  for (const tabId of tabIdsToClose) {
     await closeTab(tabId);
   }
   await writeNavigatedTaskTabsSnapshot(
@@ -2367,7 +2375,10 @@ const taskPoller = createTaskPoller({
       clearWorkbenchTaskContext(taskId);
     }
 
-    return result;
+    return {
+      ...result,
+      pluginOpenedTabId: navResult.tabId,
+    };
   },
   dispatchTask: async (task) => {
     const preferredTarget = await resolvePreferredTaskTarget(task);
@@ -2435,11 +2446,11 @@ async function runWorkbenchTaskPollTick({ force = false } = {}) {
   const currentActiveTask = taskPoller?.getState?.()?.activeTask;
   const cleanupTask = result?.cleanupTask || (prevActiveTask && !currentActiveTask ? prevActiveTask : null);
   if (cleanupTask) {
-    const { registryIds, navigationIds } = taskExecutionCleanupKeys(cleanupTask);
+    const { registryIds, navigationIds, tabIds } = taskExecutionCleanupKeys(cleanupTask);
     for (const registryId of registryIds) {
       clearWorkbenchTaskContext(registryId);
     }
-    await closeRememberedTaskExecutionTabs(navigationIds);
+    await closeRememberedTaskExecutionTabs(navigationIds, tabIds);
   }
 }
 

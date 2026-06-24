@@ -500,6 +500,7 @@ function normalizePersistedActiveTaskContext(value = {}) {
     taskStrategy: String(source.taskStrategy || '').trim(),
     accountId: String(source.accountId || '').trim(),
     tabId: toOptionalInteger(source.tabId) || null,
+    pluginOpenedTabId: toOptionalInteger(source.pluginOpenedTabId) || null,
     workbenchStatus: String(source.workbenchStatus || source.status || '').trim(),
     resultFingerprint: String(source.resultFingerprint || '').trim(),
     controlCursor: String(source.controlCursor || '').trim(),
@@ -861,6 +862,7 @@ function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null
     executorInstanceId: String(task?.executorInstanceId || matchingPersisted?.executorInstanceId || matchingPersisted?.stationId || '').trim(),
     accountId: String(task?.accountId || matchingPersisted?.accountId || '').trim(),
     tabId: toOptionalInteger(task?.tabId) || matchingPersisted?.tabId || null,
+    pluginOpenedTabId: toOptionalInteger(task?.pluginOpenedTabId) || matchingPersisted?.pluginOpenedTabId || null,
     workbenchStatus: String(task?.status || matchingPersisted?.workbenchStatus || 'dispatched').trim() || 'dispatched',
     resultFingerprint: String(matchingPersisted?.resultFingerprint || '').trim(),
     controlCursor: String(task?.controlCursor || matchingPersisted?.controlCursor || '').trim(),
@@ -890,10 +892,12 @@ function cleanupTaskSnapshot(task = {}) {
   const taskId = String(task?.taskId || task?.id || '').trim();
   const externalTaskId = String(task?.externalTaskId || task?.id || taskId).trim();
   const pluginRunId = String(task?.pluginRunId || task?.collectionRunId || '').trim();
+  const pluginOpenedTabId = toOptionalInteger(task?.pluginOpenedTabId) || null;
   return {
     taskId,
     externalTaskId,
     pluginRunId,
+    ...(pluginOpenedTabId ? { pluginOpenedTabId } : {}),
   };
 }
 
@@ -1600,6 +1604,11 @@ export function createTaskPoller(deps = {}) {
       executorInstanceId,
       accountId,
       tabId: toOptionalInteger(dispatch?.tabId) || toOptionalInteger(task?.tabId) || null,
+      pluginOpenedTabId:
+        toOptionalInteger(dispatch?.pluginOpenedTabId) ||
+        toOptionalInteger(capability?.pluginOpenedTabId) ||
+        toOptionalInteger(task?.pluginOpenedTabId) ||
+        null,
       workbenchStatus: dispatchCollectionRunId ? 'running' : 'dispatched',
       resultFingerprint: '',
       controlCursor: '',

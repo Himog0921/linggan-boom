@@ -6,14 +6,25 @@ function uniqueIds(values = []) {
   return Array.from(new Set(values.map(normalizeId).filter(Boolean)));
 }
 
+function normalizeTabId(value = 0) {
+  const tabId = Number(value || 0);
+  return Number.isFinite(tabId) && tabId > 0 ? tabId : 0;
+}
+
+function uniqueTabIds(values = []) {
+  return Array.from(new Set(values.map(normalizeTabId).filter(Boolean)));
+}
+
 export function taskExecutionCleanupKeys(activeTask = {}) {
   const taskId = normalizeId(activeTask?.taskId);
   const externalTaskId = normalizeId(activeTask?.externalTaskId);
   const pluginRunId = normalizeId(activeTask?.pluginRunId);
+  const pluginOpenedTabId = normalizeTabId(activeTask?.pluginOpenedTabId);
 
   return {
     registryIds: uniqueIds([taskId, externalTaskId, pluginRunId]),
     navigationIds: uniqueIds([taskId, externalTaskId, pluginRunId]),
+    tabIds: uniqueTabIds([pluginOpenedTabId]),
   };
 }
 
