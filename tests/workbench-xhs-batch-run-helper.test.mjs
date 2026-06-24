@@ -156,6 +156,136 @@ test('BatchNoteController records known public zero comments without collecting 
   ]);
 });
 
+test('BatchNoteController finalizes surface runs before page cleanup', async () => {
+  const calls = [];
+
+  class TestBatchNoteController extends BatchNoteController {
+    async _finalizeCollectionRun(status, patch) {
+      calls.push({ type: 'finalize', status, patch });
+      return { status, ...patch };
+    }
+
+    async _cleanupAfterLoop() {
+      calls.push({ type: 'cleanup' });
+    }
+  }
+
+  const controller = new TestBatchNoteController();
+  controller.collectionRunId = 'run_surface_done';
+  controller.noteList = [];
+
+  await controller._completeSurfaceScan({ mode: COLLECT_MODE.PROFILE });
+
+  assert.deepEqual(calls.map((call) => call.type), ['finalize', 'cleanup']);
+  assert.equal(calls[0].status, 'done');
+});
+
+test('BatchNoteController finalizes completed batch runs before page cleanup', async () => {
+  const calls = [];
+
+  class TestBatchNoteController extends BatchNoteController {
+    async _finalizeCollectionRun(status, patch) {
+      calls.push({ type: 'finalize', status, patch });
+      return { status, ...patch };
+    }
+
+    async _cleanupAfterLoop() {
+      calls.push({ type: 'cleanup' });
+    }
+  }
+
+  const controller = new TestBatchNoteController();
+  controller.collectionRunId = 'run_batch_done';
+  controller.noteList = [];
+  controller.isRunning = true;
+
+  await controller._captureLoop();
+
+  assert.deepEqual(calls.map((call) => call.type), ['finalize', 'cleanup']);
+  assert.equal(calls[0].status, 'done');
+});
+
+test('BatchNoteController finalizes detail runs before page cleanup', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const calls = [];
+
+  globalThis.window = {
+    __INITIAL_STATE__: { note: { noteDetailMap: { n1: {} } } },
+  };
+  globalThis.document = {
+    body: { innerText: '' },
+    querySelector: () => null,
+    querySelectorAll: () => [],
+  };
+
+  class TestBatchNoteController extends BatchNoteController {
+    _resolveCurrentDetailNoteInfo() {
+      return {
+        noteId: 'n1',
+        url: 'https://www.xiaohongshu.com/explore/n1',
+        canonicalUrl: 'https://www.xiaohongshu.com/explore/n1',
+        rawUrl: 'https://www.xiaohongshu.com/explore/n1',
+      };
+    }
+
+    async _pauseForRiskControl() {
+      return false;
+    }
+
+    async _waitForNoteLoad() {
+      return true;
+    }
+
+    async _settleAfterDetailReady() {}
+
+    async _waitForNoteDataStable() {
+      return true;
+    }
+
+    async _collectCurrentDetailNote(noteInfo) {
+      const note = { noteId: noteInfo.noteId, contentId: 'xhs_n1', url: noteInfo.url };
+      this.collected.push(note);
+      return note;
+    }
+
+    async _collectAttachedComments(noteInfo) {
+      this.commentResults.push({ noteId: noteInfo.noteId, total: 10 });
+      this._totalCommentsCollected = 10;
+      return { total: 10, comments: [] };
+    }
+
+    async _syncRunProgress() {
+      calls.push({ type: 'progress' });
+    }
+
+    async _finalizeCollectionRun(status, patch) {
+      calls.push({ type: 'finalize', status, patch });
+      return { status, ...patch };
+    }
+
+    async _cleanupAfterLoop() {
+      calls.push({ type: 'cleanup' });
+    }
+
+    _emitProgress() {}
+  }
+
+  try {
+    const controller = new TestBatchNoteController();
+    controller.collectionRunId = 'run_detail_done';
+    controller.isRunning = true;
+
+    await controller._captureCurrentDetailTask();
+
+    assert.deepEqual(calls.map((call) => call.type), ['progress', 'finalize', 'cleanup']);
+    assert.equal(calls[1].status, 'done');
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
+
 test('BatchNoteController routes detail mode to current detail collection', async () => {
   assert.equal(COLLECT_MODE.DETAIL, 'detail');
 

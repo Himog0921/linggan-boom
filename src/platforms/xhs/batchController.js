@@ -624,7 +624,6 @@ export class BatchNoteController extends BaseBatchController {
       records.forEach((record) => this._reportCollectedNote(record));
     }
 
-    await this._cleanupAfterLoop();
     if (this.collectionRunId) {
       await this._finalizeCollectionRun('done', buildXhsBatchNotesRunPatch({
         noteList: this.noteList,
@@ -633,6 +632,7 @@ export class BatchNoteController extends BaseBatchController {
         commentResults: this.commentResults,
       }));
     }
+    await this._cleanupAfterLoop();
     this._setState(TASK_STATE.DONE, 'done');
     this._emitProgress({
       status: 'done',
@@ -721,7 +721,6 @@ export class BatchNoteController extends BaseBatchController {
     }
 
     const stopped = this._stoppedByUser;
-    await this._cleanupAfterLoop();
     const finalRunPatch = buildXhsBatchNotesRunPatch({
       noteList: this.noteList,
       collected: this.collected,
@@ -733,6 +732,7 @@ export class BatchNoteController extends BaseBatchController {
     } else if (this.collectionRunId) {
       await this._finalizeCollectionRun('done', finalRunPatch);
     }
+    await this._cleanupAfterLoop();
     this._setState(TASK_STATE.DONE, stopped ? 'stopped' : 'done');
     this._emitProgress({
       status: 'done',
@@ -813,36 +813,7 @@ export class BatchNoteController extends BaseBatchController {
         console.warn('[灵感爆爆爆] 当前详情页目标笔记数据仍未稳定，进入保守重试模式:', noteInfo.noteId);
       }
 
-      let collectedNote = null;
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          await this._waitIfPaused();
-          if (!this.isRunning) break;
-          if (attempt > 0) {
-            await this._waitForNoteDataStable(noteInfo.noteId, 2600 + (attempt * 1200));
-            await randomDelay(420, 760);
-          }
-          const result = await collectNote(window, {
-            collectionRunId: this.collectionRunId,
-            expectedNoteId: noteInfo.noteId,
-            monitorMeta: this.monitorMeta,
-          });
-          if (String(result?.noteId || '').trim() !== String(noteInfo.noteId || '').trim()) {
-            throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
-          }
-          this.collected.push(result);
-          this._reportCollectedNote(result);
-          collectedNote = result;
-          console.log(`[灵感爆爆爆] 当前详情页采集成功: ${noteInfo.noteId} (${result.title})`);
-          break;
-        } catch (err) {
-          console.warn(`[灵感爆爆爆] 当前详情页采集第 ${attempt + 1} 次失败: ${noteInfo.noteId}`, err.message);
-        }
-      }
-
-      if (!collectedNote) {
-        throw new Error(`目标作品详情采集失败：${noteInfo.noteId}`);
-      }
+      const collectedNote = await this._collectCurrentDetailNote(noteInfo);
 
       await this._collectAttachedComments(
         noteInfo,
@@ -851,7 +822,6 @@ export class BatchNoteController extends BaseBatchController {
       );
 
       await this._syncRunProgress();
-      await this._cleanupAfterLoop();
       if (this.collectionRunId) {
         await this._finalizeCollectionRun('done', buildXhsBatchNotesRunPatch({
           noteList: this.noteList,
@@ -860,6 +830,7 @@ export class BatchNoteController extends BaseBatchController {
           commentResults: this.commentResults,
         }));
       }
+      await this._cleanupAfterLoop();
       this._setState(TASK_STATE.DONE, 'done');
       this._emitProgress({
         status: 'done',
@@ -878,6 +849,40 @@ export class BatchNoteController extends BaseBatchController {
       await this._syncRunProgress();
       throw error;
     }
+  }
+
+  async _collectCurrentDetailNote(noteInfo) {
+    let collectedNote = null;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        await this._waitIfPaused();
+        if (!this.isRunning) break;
+        if (attempt > 0) {
+          await this._waitForNoteDataStable(noteInfo.noteId, 2600 + (attempt * 1200));
+          await randomDelay(420, 760);
+        }
+        const result = await collectNote(window, {
+          collectionRunId: this.collectionRunId,
+          expectedNoteId: noteInfo.noteId,
+          monitorMeta: this.monitorMeta,
+        });
+        if (String(result?.noteId || '').trim() !== String(noteInfo.noteId || '').trim()) {
+          throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
+        }
+        this.collected.push(result);
+        this._reportCollectedNote(result);
+        collectedNote = result;
+        console.log(`[灵感爆爆爆] 当前详情页采集成功: ${noteInfo.noteId} (${result.title})`);
+        break;
+      } catch (err) {
+        console.warn(`[灵感爆爆爆] 当前详情页采集第 ${attempt + 1} 次失败: ${noteInfo.noteId}`, err.message);
+      }
+    }
+
+    if (!collectedNote) {
+      throw new Error(`目标作品详情采集失败：${noteInfo.noteId}`);
+    }
+    return collectedNote;
   }
 
   async _throttleAfterOne() {
