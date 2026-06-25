@@ -2,7 +2,7 @@
 
 > 来源：`2026-03-project-retrospective-audit.md` + `2026-03-project-remediation-checklist.md`  
 > 目的：把修订清单转成按依赖排序、可连续执行的工作波次  
-> 当前状态：活跃
+> 当前状态：已归档（2026-03 治理编排，内容已被后续工作覆盖，留作历史参考）
 
 ---
 
