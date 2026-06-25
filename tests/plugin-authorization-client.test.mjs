@@ -66,6 +66,57 @@ test('plugin authorization client exchanges authorization code and stores active
   assert.equal(JSON.parse(requests[0][1].body).deviceId, 'device-1');
 });
 
+test('plugin authorization client sends station identity during authorization code activation', async () => {
+  const storageArea = createMemoryStorage();
+  const requests = [];
+  const client = createPluginAuthorizationClient({
+    storageArea,
+    randomUUID: () => 'device-1',
+    resolveServerUrl: async () => 'http://localhost:3000',
+    fetchFn: async (url, options = {}) => {
+      requests.push([url, options]);
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            authorizationId: 'auth_1',
+            authorizationToken: 'auth_token_1',
+            status: 'active',
+            memberName: 'Mog',
+            seatName: 'Mog Chrome 工位',
+            station: {
+              stationId: 'station-1',
+              stationToken: 'station-token-1',
+              displayName: 'Mog Chrome 工位',
+              role: 'execution',
+            },
+          };
+        },
+      };
+    },
+  });
+
+  const authorization = await client.authorizeWithCode({
+    authorizationCode: 'AUTH-001',
+    stationKey: 'station-key-1',
+    pluginVersion: '2.0.52',
+    browserLabel: 'Chrome',
+    capabilities: ['xhs.authorSurfaceScan'],
+  });
+
+  assert.equal(authorization.authorizationToken, 'auth_token_1');
+  assert.equal(authorization.station.stationId, 'station-1');
+  assert.deepEqual(JSON.parse(requests[0][1].body), {
+    authorizationCode: 'AUTH-001',
+    deviceId: 'device-1',
+    stationKey: 'station-key-1',
+    pluginVersion: '2.0.52',
+    browserLabel: 'Chrome',
+    capabilities: ['xhs.authorSurfaceScan'],
+  });
+});
+
 test('plugin authorization guard throws a user-facing error when authorization is missing', async () => {
   const storageArea = createMemoryStorage();
 
@@ -158,12 +209,12 @@ test('plugin authorization client claims an approved request and stores active a
             authorizationId: 'request-1',
             authorizationToken: 'auth-token-1',
             memberName: '程烈',
-            seatName: '程烈 Chrome 执行设备',
+            seatName: '程烈 Chrome 工位',
             expiresAt: '2026-08-03T08:00:00.000Z',
             station: {
               stationId: 'station-1',
               stationToken: 'station-token-1',
-              displayName: '程烈 Chrome 执行设备',
+              displayName: '程烈 Chrome 工位',
               role: 'execution',
             },
           };
@@ -190,4 +241,41 @@ test('plugin authorization client claims an approved request and stores active a
     browserLabel: 'Chrome 外部安装',
     capabilities: ['xhs.authorSurfaceScan'],
   });
+});
+
+test('plugin authorization client preserves existing token when claim response has no token', async () => {
+  const storageArea = createMemoryStorage({
+    workbenchPluginAuthorization: {
+      deviceId: 'device-external-1',
+      authorizationId: 'auth-active-1',
+      authorizationToken: 'existing-token-1',
+      status: 'active',
+    },
+  });
+  const client = createPluginAuthorizationClient({
+    storageArea,
+    resolveServerUrl: async () => 'https://lingganboom.fun',
+    fetchFn: async () => ({
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          status: 'active',
+          requestId: 'auth-active-1',
+          message: '这条授权申请已经处理过，请在插件里查看当前授权状态。',
+        };
+      },
+    }),
+  });
+
+  const result = await client.claimApprovedRequest({
+    stationKey: 'station-key-1',
+    pluginVersion: '2.0.52',
+    browserLabel: 'Chrome 外部安装',
+  });
+
+  assert.equal(result.claimed, false);
+  assert.equal(result.authorization.authorizationToken, 'existing-token-1');
+  assert.equal(result.authorization.status, 'active');
+  assert.equal(result.authorization.authorizationMessage, '这条授权申请已经处理过，请在插件里查看当前授权状态。');
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import { applyPackagedInstallBootstrap } from '../src/workbench/runtime/pluginInstallBootstrap.js';
 
-test('packaged install bootstrap authorizes the plugin and binds an execution station once', async () => {
+test('packaged install bootstrap authorizes the plugin and stores the returned station once', async () => {
   const calls = [];
   const authorizationClient = {
     async getStoredAuthorization() {
@@ -15,6 +15,12 @@ test('packaged install bootstrap authorizes the plugin and binds an execution st
         authorizationId: 'auth_1',
         authorizationToken: 'auth_token_1',
         status: 'active',
+        station: {
+          stationId: 'station-1',
+          stationToken: 'station-token-1',
+          displayName: '程烈的工位',
+          role: 'execution',
+        },
       };
     },
   };
@@ -22,13 +28,13 @@ test('packaged install bootstrap authorizes the plugin and binds an execution st
     async getStoredStationIdentity() {
       return {};
     },
-    async registerWithPairingCode(input) {
-      calls.push(['register', input]);
-      return {
-        stationId: 'station-1',
-        stationToken: 'station-token-1',
-        displayName: '程烈的执行设备',
-      };
+    async ensureStationKey() {
+      calls.push(['station-key']);
+      return 'station-key-1';
+    },
+    async saveStationIdentity(input) {
+      calls.push(['station', input]);
+      return input;
     },
   };
 
@@ -37,7 +43,6 @@ test('packaged install bootstrap authorizes the plugin and binds an execution st
       schemaVersion: 1,
       serverUrl: 'https://lingganboom.fun',
       authorizationCode: 'LGBOOM-AUTO',
-      pairingCode: '123456',
       expiresAt: '2099-01-01T00:00:00.000Z',
     }),
     authorizationClient,
@@ -46,15 +51,19 @@ test('packaged install bootstrap authorizes the plugin and binds an execution st
     stationCapabilities: ['xhs.authorSurfaceScan'],
     pluginVersion: '2.0.1',
     browserLabel: 'Chrome',
+    now: () => 1_000,
   });
 
   assert.equal(result.applied, true);
   assert.deepEqual(calls, [
     ['config', { serverUrl: 'https://lingganboom.fun', enabled: true }],
+    ['station-key'],
     ['authorize', {
       authorizationCode: 'LGBOOM-AUTO',
+      stationKey: 'station-key-1',
       pluginVersion: '2.0.1',
       browserLabel: 'Chrome',
+      capabilities: ['xhs.authorSurfaceScan'],
     }],
     ['config', {
       enabled: true,
@@ -65,11 +74,14 @@ test('packaged install bootstrap authorizes the plugin and binds an execution st
       dataUserEmail: '',
       dataUserName: '',
     }],
-    ['register', {
-      pairingCode: '123456',
+    ['station', {
+      stationKey: 'station-key-1',
+      stationId: 'station-1',
+      stationToken: 'station-token-1',
+      displayName: '程烈的工位',
+      role: 'execution',
       capabilities: ['xhs.authorSurfaceScan'],
-      pluginVersion: '2.0.1',
-      browserLabel: 'Chrome',
+      pairedAt: 1_000,
     }],
   ]);
 });
@@ -80,7 +92,6 @@ test('packaged install bootstrap skips when authorization and station already ex
       schemaVersion: 1,
       serverUrl: 'https://lingganboom.fun',
       authorizationCode: 'LGBOOM-AUTO',
-      pairingCode: '123456',
       expiresAt: '2099-01-01T00:00:00.000Z',
     }),
     authorizationClient: {
@@ -105,7 +116,6 @@ test('packaged install bootstrap preserves existing authorization when only stat
       schemaVersion: 1,
       serverUrl: 'https://lingganboom.fun',
       authorizationCode: 'LGBOOM-NEW',
-      pairingCode: '654321',
       expiresAt: '2099-01-01T00:00:00.000Z',
     }),
     authorizationClient: {
@@ -119,9 +129,15 @@ test('packaged install bootstrap preserves existing authorization when only stat
       async authorizeWithCode(input) {
         calls.push(['authorize', input]);
         return {
-          authorizationId: 'new-auth',
+          authorizationId: 'old-auth',
           authorizationToken: 'new-token',
           status: 'active',
+          station: {
+            stationId: 'station-2',
+            stationToken: 'station-token-2',
+            displayName: 'Chrome 工位',
+            role: 'execution',
+          },
         };
       },
     },
@@ -129,29 +145,51 @@ test('packaged install bootstrap preserves existing authorization when only stat
       async getStoredStationIdentity() {
         return {};
       },
-      async registerWithPairingCode(input) {
-        calls.push(['register', input]);
-        return {
-          stationId: 'station-2',
-          stationToken: 'station-token-2',
-        };
+      async ensureStationKey() {
+        calls.push(['station-key']);
+        return 'station-key-existing';
+      },
+      async saveStationIdentity(input) {
+        calls.push(['station', input]);
+        return input;
       },
     },
     saveFlywheelConfig: async (config) => calls.push(['config', config]),
     stationCapabilities: ['xhs.noteDetailProbe'],
     pluginVersion: '2.0.2',
     browserLabel: 'Chrome',
+    now: () => 2_000,
   });
 
   assert.equal(result.applied, true);
   assert.equal(result.authorization.authorizationId, 'old-auth');
   assert.deepEqual(calls, [
     ['config', { serverUrl: 'https://lingganboom.fun', enabled: true }],
-    ['register', {
-      pairingCode: '654321',
-      capabilities: ['xhs.noteDetailProbe'],
+    ['station-key'],
+    ['authorize', {
+      authorizationCode: 'LGBOOM-NEW',
+      stationKey: 'station-key-existing',
       pluginVersion: '2.0.2',
       browserLabel: 'Chrome',
+      capabilities: ['xhs.noteDetailProbe'],
+    }],
+    ['config', {
+      enabled: true,
+      apiToken: 'new-token',
+      dataToken: '',
+      dataTokenExpiresAt: '',
+      dataWorkspaceId: '',
+      dataUserEmail: '',
+      dataUserName: '',
+    }],
+    ['station', {
+      stationKey: 'station-key-existing',
+      stationId: 'station-2',
+      stationToken: 'station-token-2',
+      displayName: 'Chrome 工位',
+      role: 'execution',
+      capabilities: ['xhs.noteDetailProbe'],
+      pairedAt: 2_000,
     }],
   ]);
 });

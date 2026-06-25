@@ -248,9 +248,20 @@ export function unwrapTabResponseData(result, fallback) {
   return unwrapCompatResponseData(result, fallback);
 }
 
-export function sendToBackground(action, payload) {
+export function sendToBackground(action, payload, { timeoutMs = 15000 } = {}) {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const timer = Number.isFinite(Number(timeoutMs)) && Number(timeoutMs) > 0
+      ? setTimeout(() => {
+        settled = true;
+        reject(new Error(`插件后台暂时没有回应，请刷新扩展后再试：${String(action || 'unknown_action')}`));
+      }, Number(timeoutMs))
+      : null;
+
     chrome.runtime.sendMessage({ action, ...payload }, (response) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
       const runtimeErr = chrome.runtime.lastError;
       if (runtimeErr) {
         reject(new Error(getErrorMessage(runtimeErr)));

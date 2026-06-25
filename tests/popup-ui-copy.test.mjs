@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { toFriendlyError } from '../src/popup/utils.js';
+import { sendToBackground, toFriendlyError } from '../src/popup/utils.js';
 
 const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
 
@@ -146,7 +146,7 @@ test('popup notice uses structured icon and copy blocks instead of a single bare
   assert.match(styleSource, /\.popup-notice-close/);
 });
 
-test('popup workbench config separates plugin authorization from station pairing', () => {
+test('popup workbench config presents one connection flow and hides manual pairing code binding', () => {
   const componentSource = fs.readFileSync(path.join(projectRoot, 'src/popup/components/FlywheelSection.jsx'), 'utf8');
   const appSource = fs.readFileSync(path.join(projectRoot, 'src/popup/App.jsx'), 'utf8');
   const styleSource = fs.readFileSync(path.join(projectRoot, 'src/popup/popup.css'), 'utf8');
@@ -161,10 +161,12 @@ test('popup workbench config separates plugin authorization from station pairing
   assert.match(componentSource, /flywheel-preset-chip/);
   assert.match(componentSource, /插件授权/);
   assert.match(componentSource, /输入授权码/);
-  assert.match(componentSource, /激活授权/);
-  assert.match(componentSource, /先完成插件授权，再使用内容工作台设置里生成的配对码绑定执行设备/);
+  assert.match(componentSource, /连接插件/);
+  assert.match(componentSource, /授权成功后会自动创建工位/);
   assert.match(componentSource, /按任务优先级接单/);
-  assert.match(componentSource, /输入配对码/);
+  assert.doesNotMatch(componentSource, /输入配对码/);
+  assert.doesNotMatch(componentSource, /绑定工位/);
+  assert.doesNotMatch(componentSource, /先完成插件授权，再使用内容工作台设置里生成的配对码绑定执行设备/);
   assert.match(componentSource, /全部同步到工作台/);
 
   assert.match(appSource, /CONTENT_WORKBENCH_PROD_URL/);
@@ -173,8 +175,10 @@ test('popup workbench config separates plugin authorization from station pairing
   assert.match(appSource, /AUTHORIZE_PLUGIN_ACCESS/);
   assert.match(appSource, /CLEAR_PLUGIN_AUTHORIZATION/);
   assert.match(appSource, /请输入内容工作台设置里生成的授权码/);
-  assert.match(appSource, /插件授权已激活/);
+  assert.match(appSource, /插件已连接，工位也已自动准备好/);
   assert.match(appSource, /内容工作台已就绪/);
+  assert.doesNotMatch(appSource, /REGISTER_EXECUTION_STATION/);
+  assert.doesNotMatch(appSource, /stationPairingCode/);
 
   assert.match(styleSource, /\.flywheel-heading-side/);
   assert.match(styleSource, /\.flywheel-preset-row/);
@@ -200,7 +204,7 @@ test('popup execution station diagnostics expose local runtime state in user-fac
   assert.match(componentSource, /当前任务/);
   assert.match(componentSource, /本机锁/);
   assert.match(componentSource, /待发送事件/);
-  assert.match(componentSource, /执行设备诊断/);
+  assert.match(componentSource, /工位诊断/);
   assert.match(componentSource, /页面权限正常/);
   assert.match(componentSource, /缺少页面权限/);
   assert.match(componentSource, /需登录/);
@@ -223,4 +227,22 @@ test('popup maps manual collection blockers to clear user messages', () => {
     toFriendlyError(new Error('permission_denied')),
     '浏览器助手缺少当前平台页面权限，请重新授权插件后再试。',
   );
+});
+
+test('popup background messages time out with a visible user hint', async () => {
+  const previousChrome = globalThis.chrome;
+  globalThis.chrome = {
+    runtime: {
+      sendMessage() {},
+    },
+  };
+
+  try {
+    await assert.rejects(
+      () => sendToBackground('registerExecutionStation', {}, { timeoutMs: 1 }),
+      /插件后台暂时没有回应/,
+    );
+  } finally {
+    globalThis.chrome = previousChrome;
+  }
 });

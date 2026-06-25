@@ -101,7 +101,6 @@ export default function FlywheelSection({
   flywheelStatus,
   authorizationCode,
   authorizationStatus = {},
-  stationPairingCode,
   stationStatus,
   presetUrls = {},
   testing = false,
@@ -109,7 +108,6 @@ export default function FlywheelSection({
   requestingAuthorization = false,
   claimingAuthorization = false,
   clearingAuthorization = false,
-  pairing = false,
   syncing = false,
   onUrlChange,
   onUsePresetUrl,
@@ -118,9 +116,7 @@ export default function FlywheelSection({
   onRequestAuthorization,
   onClaimAuthorization,
   onClearAuthorization,
-  onPairingCodeChange,
   onTest,
-  onPair,
   onSync,
 }) {
   const statusText = {
@@ -144,8 +140,8 @@ export default function FlywheelSection({
     ? (authorization.memberName || authorization.teamName || authorization.authorizationId || '已授权')
     : (isAuthorizationPending ? '待审批' : isAuthorizationApproved ? '可领取' : '未授权');
   const authorizationHint = authorizationStatus.authorized
-    ? `当前浏览器已授权给${authorization.memberName || '团队成员'}使用${authorization.teamName ? `，归属 ${authorization.teamName}` : ''}${authorization.expiresAt ? `，有效期至 ${authorization.expiresAt}` : ''}。`
-    : (authorizationStatus.authorizationMessage || '从内容工作台下载的插件会自动授权；其他来源安装时，可以在这里发起授权申请。');
+    ? `当前浏览器已授权给${authorization.memberName || '团队成员'}使用${authorization.teamName ? `，归属 ${authorization.teamName}` : ''}${authorization.expiresAt ? `，有效期至 ${authorization.expiresAt}` : ''}。授权成功后会自动创建工位。`
+    : (authorizationStatus.authorizationMessage || '从内容工作台下载的插件会自动授权并准备工位；其他来源安装时，可以在这里发起授权申请。');
   const canRequestAuthorization = !authorizationStatus.authorized
     && !isAuthorizationPending
     && !isAuthorizationApproved
@@ -157,7 +153,7 @@ export default function FlywheelSection({
   const stationName = stationStatus.registered
     ? (stationStatus.identity?.displayName || stationStatus.identity?.stationId || '已绑定')
     : '未绑定';
-  const stationRoleLabel = '执行设备';
+  const stationRoleLabel = '工位';
 
   const accounts = Array.isArray(stationStatus.platformAccounts) ? stationStatus.platformAccounts : [];
   const healthyCount = accounts.filter((a) => a.healthStatus === 'healthy').length;
@@ -259,7 +255,7 @@ export default function FlywheelSection({
             onClick={onAuthorize}
             disabled={authorizing || clearingAuthorization}
           >
-            {authorizing ? '激活中...' : '激活授权'}
+            {authorizing ? '连接中...' : '连接插件'}
           </button>
           {authorizationStatus.authorized && typeof onClearAuthorization === 'function' ? (
             <button
@@ -300,22 +296,22 @@ export default function FlywheelSection({
 
       <div className="station-panel">
         <div className="station-title-row">
-          <span style={{ fontSize: '12px', fontWeight: 900 }}>执行设备</span>
+          <span style={{ fontSize: '12px', fontWeight: 900 }}>工位</span>
           <span id="stationStatus" className={`flywheel-status ${stationStatus.registered ? 'connected' : 'unconfigured'}`}>
             {stationStatus.registered ? `${stationName} · ${stationRoleLabel}` : stationName}
           </span>
         </div>
         <p id="stationHint" className="station-hint">
           {!authorizationStatus.authorized
-            ? '先完成插件授权，再使用内容工作台设置里生成的配对码绑定执行设备。'
+            ? '先连接插件；授权成功后会自动创建工位。'
             : stationStatus.registered
             ? (healthyCount > 0
               ? stationTaskHint
               : `已绑定${stationRoleLabel}；请先在 Cookie & 账号里保存可用账号，才能领取任务。`)
-            : '把内容工作台给的配对码填进来；绑定后，这个浏览器会作为执行设备按任务优先级接单。'}
+            : '工位正在等待工作台返回身份；重新点击连接插件或检查审批结果即可自动补齐。'}
         </p>
         {shouldShowDiagnostics ? (
-          <div className="station-diagnostics" aria-label="执行设备诊断">
+          <div className="station-diagnostics" aria-label="工位诊断">
             <div className="station-diagnostic-grid">
               {diagnosticItems.map((item) => (
                 <div className="station-diagnostic-item" key={item.label}>
@@ -338,25 +334,6 @@ export default function FlywheelSection({
             )}
           </div>
         ) : null}
-        <div className="flywheel-url-row">
-          <input
-            id="stationPairingCode"
-            type="text"
-            className="flywheel-input"
-            placeholder="输入配对码"
-            value={stationPairingCode}
-            onChange={(e) => onPairingCodeChange(e.target.value)}
-            disabled={!authorizationStatus.authorized || pairing}
-          />
-          <button
-            id="btnStationPair"
-            className={`popup-btn primary small${pairing ? ' is-busy' : ''}`}
-            onClick={onPair}
-            disabled={!authorizationStatus.authorized || pairing}
-          >
-            {pairing ? '绑定中...' : '绑定工位'}
-          </button>
-        </div>
       </div>
 
       <button

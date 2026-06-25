@@ -16,6 +16,20 @@ function normalizeScope(value) {
     : [];
 }
 
+function normalizeStation(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const stationId = normalizeString(value.stationId || value.id);
+  const stationToken = normalizeString(value.stationToken || value.token);
+  if (!stationId || !stationToken) return null;
+  return {
+    stationId,
+    stationToken,
+    displayName: normalizeString(value.displayName),
+    role: normalizeString(value.role || 'execution') || 'execution',
+    status: normalizeString(value.status),
+  };
+}
+
 function resolveDefaultStorageArea() {
   return globalThis.chrome?.storage?.local || null;
 }
@@ -181,15 +195,19 @@ export function createPluginAuthorizationClient({
 
   async function authorizeWithCode({
     authorizationCode = '',
+    stationKey = '',
     pluginVersion = '',
     browserLabel = '',
+    capabilities = [],
   } = {}) {
     const deviceId = await ensureDeviceId();
     const data = await postJson('/api/plugin-authorizations/activate', {
       authorizationCode: normalizeString(authorizationCode),
       deviceId,
+      stationKey: normalizeString(stationKey),
       pluginVersion: normalizeString(pluginVersion),
       browserLabel: normalizeString(browserLabel),
+      capabilities: normalizeScope(capabilities),
     });
     return saveAuthorization({
       deviceId,
@@ -205,6 +223,7 @@ export function createPluginAuthorizationClient({
       issuedBy: normalizeString(data.issuedBy),
       scope: normalizeScope(data.scope),
       expiresAt: normalizeString(data.expiresAt),
+      station: normalizeStation(data.station),
       authorizedAt: now(),
     });
   }
@@ -250,7 +269,8 @@ export function createPluginAuthorizationClient({
       browserLabel: normalizeString(browserLabel),
       capabilities: normalizeScope(capabilities),
     });
-    if (normalizeString(data.status) !== 'active') {
+    const authorizationToken = normalizeString(data.authorizationToken || data.apiToken || data.token);
+    if (normalizeString(data.status) !== 'active' || !authorizationToken) {
       const authorization = await saveAuthorization({
         deviceId,
         authorizationId,
@@ -262,7 +282,7 @@ export function createPluginAuthorizationClient({
     const authorization = await saveAuthorization({
       deviceId,
       authorizationId: normalizeString(data.authorizationId || authorizationId),
-      authorizationToken: normalizeString(data.authorizationToken || data.apiToken || data.token),
+      authorizationToken,
       status: 'active',
       teamName: normalizeString(data.teamName),
       memberName: normalizeString(data.memberName),

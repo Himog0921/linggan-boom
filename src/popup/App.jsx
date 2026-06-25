@@ -86,7 +86,6 @@ export default function App() {
   const [flywheelUrl, setFlywheelUrl] = useState('');
   const [flywheelStatus, setFlywheelStatus] = useState('unconfigured');
   const [authorizationCode, setAuthorizationCode] = useState('');
-  const [stationPairingCode, setStationPairingCode] = useState('');
   const [stationStatus, setStationStatus] = useState({ registered: false });
 
   const [cookieStatus, setCookieStatus] = useState({ xhs: null, douyin: null });
@@ -737,7 +736,7 @@ export default function App() {
         }
         setAuthorizationCode('');
         await loadStationStatus();
-        showNotice('插件授权已激活。接下来可以绑定执行设备并使用采集能力。', 'success');
+        showNotice('插件已连接，工位也已自动准备好。', 'success');
       } catch (err) {
         showNotice(`授权失败：${toFriendlyError(err)}`, 'warning');
       }
@@ -780,7 +779,7 @@ export default function App() {
         });
         await loadStationStatus();
         if (result?.authorized) {
-          showNotice('授权已生效，执行设备也已自动绑定。', 'success');
+          showNotice('授权已生效，工位也已自动准备好。', 'success');
           return;
         }
         showNotice(result?.message || '申请还在等待工作台审批。', 'info');
@@ -793,8 +792,8 @@ export default function App() {
   const handleClearPluginAuthorization = useCallback(async () => {
     const confirmed = await showConfirmDialog({
       title: '清除插件授权',
-      message: '清除后，这个浏览器将失去插件使用资格，并解除当前执行设备绑定。',
-      detail: '如果只是换工位，请保留授权，只重新绑定配对码。',
+      message: '清除后，这个浏览器将失去插件使用资格，并解除当前工位绑定。',
+      detail: '如果只是临时停止接单，请在内容工作台关闭这个工位的接单开关。',
       confirmText: '确认清除',
       confirmTone: 'danger',
     });
@@ -804,7 +803,6 @@ export default function App() {
       try {
         await sendToBackground(MSG.CLEAR_PLUGIN_AUTHORIZATION);
         setAuthorizationCode('');
-        setStationPairingCode('');
         await loadStationStatus();
         showNotice('插件授权已清除。', 'warning');
       } catch (err) {
@@ -839,39 +837,6 @@ export default function App() {
       }
     });
   }, [flywheelUrl, hideNotice, showNotice, withBusyAction]);
-
-  const handleStationPair = useCallback(async () => {
-    if (!requirePluginAuthorization()) return;
-    const serverUrl = flywheelUrl.trim();
-    const code = stationPairingCode.trim();
-    if (!serverUrl) {
-      showNotice('请先配置工作台地址。', 'warning');
-      return;
-    }
-    if (!code) {
-      showNotice('请输入工作台生成的配对码。', 'warning');
-      return;
-    }
-    await withBusyAction('stationPair', async () => {
-      setStationStatus((current) => ({ ...current, registered: false, pairing: true }));
-      try {
-        const result = await sendToBackground(MSG.REGISTER_EXECUTION_STATION, {
-          serverUrl,
-          pairingCode: code,
-          browserLabel: navigator.userAgent || '',
-        });
-        if (!result?.success) {
-          throw new Error(result?.error || '绑定失败');
-        }
-        setStationPairingCode('');
-        await loadStationStatus();
-        showNotice('执行设备已绑定，这个浏览器会按任务优先级接单。', 'success');
-      } catch (err) {
-        await loadStationStatus();
-        showNotice(`绑定失败：${toFriendlyError(err)}`, 'warning');
-      }
-    });
-  }, [flywheelUrl, stationPairingCode, showNotice, withBusyAction, requirePluginAuthorization, loadStationStatus]);
 
   const handleSyncToFlywheel = useCallback(async () => {
     if (!requirePluginAuthorization()) return;
@@ -1252,7 +1217,6 @@ export default function App() {
               flywheelStatus={flywheelStatus}
               authorizationCode={authorizationCode}
               authorizationStatus={stationStatus}
-              stationPairingCode={stationPairingCode}
               stationStatus={stationStatus}
               onUrlChange={handleWorkbenchUrlChange}
               onUsePresetUrl={handleUseWorkbenchPreset}
@@ -1261,16 +1225,13 @@ export default function App() {
               onRequestAuthorization={handlePluginAuthorizationRequest}
               onClaimAuthorization={handlePluginAuthorizationClaim}
               onClearAuthorization={handleClearPluginAuthorization}
-              onPairingCodeChange={setStationPairingCode}
               onTest={handleFlywheelTest}
-              onPair={handleStationPair}
               onSync={handleSyncToFlywheel}
               testing={Boolean(busyActions.flywheelTest)}
               authorizing={Boolean(busyActions.pluginAuthorize)}
               requestingAuthorization={Boolean(busyActions.requestPluginAuthorization)}
               claimingAuthorization={Boolean(busyActions.claimPluginAuthorization)}
               clearingAuthorization={Boolean(busyActions.clearPluginAuthorization)}
-              pairing={Boolean(busyActions.stationPair)}
               syncing={Boolean(busyActions.syncFlywheel)}
               presetUrls={{
                 production: CONTENT_WORKBENCH_PROD_URL,

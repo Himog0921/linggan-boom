@@ -17,13 +17,26 @@ function normalizeInstallConfig(raw = {}) {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
   const authorizationCode = normalizeString(raw.authorizationCode);
   const pairingCode = normalizeString(raw.pairingCode);
-  if (!authorizationCode || !pairingCode) return null;
+  if (!authorizationCode) return null;
   return {
     schemaVersion: Number(raw.schemaVersion || 1),
     serverUrl: normalizeString(raw.serverUrl),
     authorizationCode,
     pairingCode,
     expiresAt: normalizeString(raw.expiresAt),
+  };
+}
+
+function normalizeConnectedStation(value = {}) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const stationId = normalizeString(value.stationId || value.id);
+  const stationToken = normalizeString(value.stationToken || value.token);
+  if (!stationId || !stationToken) return null;
+  return {
+    stationId,
+    stationToken,
+    displayName: normalizeString(value.displayName),
+    role: normalizeString(value.role || 'execution') || 'execution',
   };
 }
 
@@ -50,6 +63,7 @@ export async function applyPackagedInstallBootstrap({
   stationCapabilities = [],
   pluginVersion = '',
   browserLabel = '',
+  now = () => Date.now(),
 } = {}) {
   const config = await readConfig();
   if (!config) return { applied: false, reason: 'missing_config' };
@@ -69,12 +83,18 @@ export async function applyPackagedInstallBootstrap({
     await saveFlywheelConfig({ serverUrl: config.serverUrl, enabled: true });
   }
 
-  const shouldAuthorizeWithPackagedCode = !hasAuthorization;
+  const capabilities = Array.isArray(stationCapabilities) ? stationCapabilities : [];
+  const shouldAuthorizeWithPackagedCode = !hasAuthorization || !hasStation;
+  const stationKey = !hasStation
+    ? normalizeString(station?.stationKey) || normalizeString(await stationClient?.ensureStationKey?.())
+    : normalizeString(station?.stationKey);
   const nextAuthorization = shouldAuthorizeWithPackagedCode
     ? await authorizationClient.authorizeWithCode({
       authorizationCode: config.authorizationCode,
+      stationKey,
       pluginVersion,
       browserLabel,
+      capabilities,
     })
     : authorization;
 
@@ -91,14 +111,25 @@ export async function applyPackagedInstallBootstrap({
   }
 
   let nextStation = station;
-  if (!hasStation) {
+  const connectedStation = normalizeConnectedStation(nextAuthorization?.station);
+  if (!hasStation && connectedStation && stationKey) {
+    nextStation = await stationClient.saveStationIdentity({
+      stationKey,
+      ...connectedStation,
+      capabilities,
+      pairedAt: now(),
+    });
+    await sendHeartbeat('online');
+  } else if (!hasStation && config.pairingCode && typeof stationClient?.registerWithPairingCode === 'function') {
     nextStation = await stationClient.registerWithPairingCode({
       pairingCode: config.pairingCode,
-      capabilities: Array.isArray(stationCapabilities) ? stationCapabilities : [],
+      capabilities,
       pluginVersion,
       browserLabel,
     });
     await sendHeartbeat('online');
+  } else if (!hasStation) {
+    nextStation = null;
   }
 
   return {

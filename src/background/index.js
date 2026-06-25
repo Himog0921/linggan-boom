@@ -1362,10 +1362,15 @@ const bgHandlers = {
     }
     try {
       const previousAuthorization = await pluginAuthorizationClient.getStoredAuthorization();
+      const stationKey = await executionStationClient.ensureStationKey();
+      const currentIdentity = await executionStationClient.getStoredStationIdentity();
+      const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(currentIdentity);
       const authorization = await pluginAuthorizationClient.authorizeWithCode({
         authorizationCode,
+        stationKey,
         pluginVersion: getPluginVersion(),
         browserLabel: String(msg.browserLabel || '').trim(),
+        capabilities: runtimeSnapshot.capabilities,
       });
       await saveFlywheelConfig({
         enabled: true,
@@ -1381,13 +1386,25 @@ const bgHandlers = {
         && authorization?.authorizationId
         && previousAuthorization.authorizationId !== authorization.authorizationId
       ) {
-        await executionStationClient.clearStationIdentity();
         await taskLeaseStore.clear();
       }
+      await saveConnectedWorkbenchStation({
+        station: authorization.station,
+        stationKey,
+        capabilities: runtimeSnapshot.capabilities,
+      });
+      const identity = await executionStationClient.getStoredStationIdentity();
+      const heartbeat = await sendExecutionStationHeartbeat('online');
+      await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
+      void registerWorkbenchPushSubscriptionTick();
+      const { platformAccounts } = await collectExecutionStationRuntimeSnapshot(identity);
       return {
         success: true,
         authorized: true,
         authorization,
+        identity,
+        heartbeat,
+        platformAccounts,
       };
     } catch (error) {
       return {
@@ -1467,17 +1484,11 @@ const bgHandlers = {
       ) {
         await taskLeaseStore.clear();
       }
-      if (result.station) {
-        await executionStationClient.saveStationIdentity({
-          stationKey,
-          stationId: String(result.station.stationId || '').trim(),
-          stationToken: String(result.station.stationToken || '').trim(),
-          displayName: String(result.station.displayName || '').trim(),
-          role: String(result.station.role || 'execution').trim(),
-          capabilities: runtimeSnapshot.capabilities,
-          pairedAt: Date.now(),
-        });
-      }
+      await saveConnectedWorkbenchStation({
+        station: result.station,
+        stationKey,
+        capabilities: runtimeSnapshot.capabilities,
+      });
       const identity = await executionStationClient.getStoredStationIdentity();
       const heartbeat = await sendExecutionStationHeartbeat('online');
       await maybeRunWorkbenchTaskPollAfterHeartbeat(heartbeat);
@@ -2089,6 +2100,21 @@ function summarizeStationIdentityForDiagnostics(identity = null) {
     displayName: String(identity.displayName || '').trim(),
     role: String(identity.role || '').trim(),
   };
+}
+
+async function saveConnectedWorkbenchStation({ station = null, stationKey = '', capabilities = [] } = {}) {
+  const stationId = String(station?.stationId || station?.id || '').trim();
+  const stationToken = String(station?.stationToken || station?.token || '').trim();
+  if (!stationId || !stationToken) return null;
+  return executionStationClient.saveStationIdentity({
+    stationKey: String(stationKey || '').trim(),
+    stationId,
+    stationToken,
+    displayName: String(station?.displayName || '').trim(),
+    role: String(station?.role || 'execution').trim() || 'execution',
+    capabilities: Array.isArray(capabilities) ? capabilities : [],
+    pairedAt: Date.now(),
+  });
 }
 
 async function sendExecutionStationHeartbeat(status = 'online') {
