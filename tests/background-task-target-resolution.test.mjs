@@ -79,22 +79,38 @@ test('resolvePreferredTaskTarget reuses signed xhs note url stored from an earli
   }
 });
 
-test('resolvePreferredTaskTarget opens canonical author profile for xhs relay detail probes when no signed detail url is available', async () => {
-  const resolved = await resolvePreferredTaskTarget({
-    platform: 'xhs',
-    taskType: 'xhs.batchNotes',
-    taskStrategy: 'detail_probe',
-    target: 'https://www.xiaohongshu.com/user/profile/65f44e0b000000000500f029/69d67b88000000002102cded',
-    payload: {
-      targetPageType: 'detail',
-      platformContentId: '69d67b88000000002102cded',
-    },
+test('resolvePreferredTaskTarget falls back to locally stored signed profile relay url when target lacks token', async () => {
+  // 真实场景（probe 2026-06-25 验证）：detail_probe 任务 target 可能不带 xsec_token，
+  // 但本地 noteStore 普遍存了带 token 的 url/canonicalUrl（author_baseline 扫描留下的
+  // 作者页卡片 href，形态 /user/profile/{authorId}/{noteId}?xsec_token=...）。
+  // 此时 resolvePreferredTaskTarget 应复用本地带 token URL，让插件打开后能正常采集，
+  // 而不是退化成无 token 的 explore/{noteId}（会触发 30017 风控）。
+  // 注意：本测试 rawUrl 留空、token 仅存在于 url/canonicalUrl，匹配生产数据真实分布。
+  const originalGetById = noteStore.getById;
+  const storedSignedUrl = 'https://www.xiaohongshu.com/user/profile/65f44e0b000000000500f029/69d67b88000000002102cded?xsec_token=ABcDefGhi_SignedTokenExample&xsec_source=pc_user';
+  noteStore.getById = async () => ({
+    noteId: '69d67b88000000002102cded',
+    url: storedSignedUrl,
+    canonicalUrl: storedSignedUrl,
+    rawUrl: '',
   });
 
-  assert.equal(
-    resolved,
-    'https://www.xiaohongshu.com/user/profile/65f44e0b000000000500f029',
-  );
+  try {
+    const resolved = await resolvePreferredTaskTarget({
+      platform: 'xhs',
+      taskType: 'xhs.batchNotes',
+      taskStrategy: 'detail_probe',
+      target: 'https://www.xiaohongshu.com/user/profile/65f44e0b000000000500f029/69d67b88000000002102cded',
+      payload: {
+        targetPageType: 'detail',
+        platformContentId: '69d67b88000000002102cded',
+      },
+    });
+
+    assert.equal(resolved, storedSignedUrl);
+  } finally {
+    noteStore.getById = originalGetById;
+  }
 });
 
 test('resolvePreferredTaskTarget keeps signed xhs relay detail urls on the direct note path', async () => {
