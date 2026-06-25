@@ -283,6 +283,3 @@ export function getSupportedRemoteTask(taskType = '') {
   return SUPPORTED_REMOTE_TASKS[normalizedTaskType] || null;
 }
 
-export function isSupportedRemoteTaskType(taskType = '') {
-  return Boolean(getSupportedRemoteTask(taskType));
-}

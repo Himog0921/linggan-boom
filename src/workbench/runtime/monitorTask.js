@@ -122,11 +122,6 @@ function inferMonitorMode(strategy, pageType = '') {
   return MONITOR_RECORD_MODE.AUTHOR_SURFACE;
 }
 
-export function normalizeMonitorTaskStrategy(value = '') {
-  const strategy = normalizeString(value);
-  return STRATEGY_VALUES.has(strategy) ? strategy : '';
-}
-
 export function buildMonitorTaskMeta({
   platform = '',
   taskType = '',

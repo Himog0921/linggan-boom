@@ -228,7 +228,3 @@ export function formatCompactCount(value) {
   if (n >= 10000) return `${(n / 10000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '')}万`;
   return String(Math.round(n));
 }
-
-export function parseBatchLikes(value) {
-  return parseCount(value);
-}

@@ -11,7 +11,7 @@
 |---|---|
 | 名称 | 灵感爆爆爆 (linggan-boom) |
 | 类型 | Chrome Extension (Manifest V3) |
-| 版本 | 2.0.0 |
+| 版本 | 2.0.52 |
 | 目标平台 | 小红书 (xhs) + 抖音 (douyin) |
 | 定位 | 多平台内容灵感采集工具箱 |
 | 上游系统 | 内容工作台 (Content Workbench) |
@@ -27,7 +27,7 @@
 | 打包下载 | JSZip | 评论图片批量打包下载（按需动态加载） |
 | 样式 | 纯 CSS | content.css, popup.css, dashboard.css |
 | 语言 | JavaScript (ES2020+) | 无 TypeScript |
-| 测试 | Node.js test runner (.mjs) | 32 个测试文件 |
+| 测试 | Node.js test runner (.mjs) | 110 个测试文件 |
 | 脚本 | 探查脚本 (scripts/probe-*.js) | 一次性 DOM/API 结构调研 |
 
 ---
@@ -47,7 +47,7 @@
 ### 3.2 上下文间通信
 
 ```
-Popup ──sendToBackground──→ Background ──sendToContent──→ Content Script
+Popup ──sendToBackground──→ Background ──sendToTab──→ Content Script
   ↑                                                          │
   └─────────────── reportProgress ←──────────────────────────┘
 
@@ -59,10 +59,13 @@ Content Script ←──postMessage──→ Injected Script (main world)
 ### 3.3 权限
 
 ```
-activeTab, storage, downloads, alarms, debugger, scripting, declarativeNetRequest
+activeTab, tabs, storage, cookies, downloads, alarms, scripting,
+declarativeNetRequest, declarativeNetRequestWithHostAccess, notifications
 ```
 
-Host permissions: `*.xiaohongshu.com`, `*.douyin.com`, CDN 域名
+> 本项目**不使用** `chrome.debugger`（关闭弹窗/派发 Esc 走 `chrome.scripting.executeScript`）。
+
+Host permissions: `xiaohongshu.com`、`*.xiaohongshu.com`、`www.douyin.com`、`lingganboom.fun`、`localhost` 及媒体 CDN 域名（完整清单见 `manifest.json` / `docs/technical/TECH_STACK.md` §5）
 
 ### 3.4 加载边界
 
@@ -197,7 +200,6 @@ idle → running ⇄ paused → stopping → done / error
 | noteMediaDownload.js | 笔记媒体下载 |
 | mediaDownloadUtils.js | 媒体下载工具（高清候选 URL、重试） |
 | commentTaskController.js | 评论采集任务控制器 |
-| commentCollectTask.js | 评论采集任务执行 |
 | commentImageTask.js | 评论图片下载任务 |
 | uiInjector.js | 页面 UI 注入（浮动控制面板等） |
 
@@ -418,7 +420,7 @@ linggan-boom 插件
 | 文件 | 关键函数/常量 | 用途 |
 |---|---|---|
 | constants.js | MSG, TASK_STATE, COLLECT_MODE, BATCH_CONFIG | 消息协议与配置常量 |
-| messaging.js | sendToBackground, sendToContent, reportProgress, reportDone | 消息传递封装 |
+| messaging.js | sendToBackground, sendToTab, reportProgress, reportDone | 消息传递封装 |
 | utils.js | parseCount, extractNoteId, csvEscape, generateCsv, downloadFile, getHighQualityImageCandidates | 通用工具函数 |
 | collectorMetadata.js | 版本戳记、原始数据保留、证据收集 | 数据溯源 |
 | taskUi.js | TaskBarShell, ProgressDisplay, Toast | 页面内 UI 组件 |
@@ -441,7 +443,7 @@ Webpack 5 多入口打包到 dist/：
 
 ## 12. 测试
 
-32 个测试文件 (tests/*.test.mjs)：
+110 个测试文件 (tests/*.test.mjs)：
 
 | 覆盖域 | 测试文件 |
 |---|---|

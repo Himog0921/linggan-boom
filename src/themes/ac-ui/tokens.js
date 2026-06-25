@@ -24,14 +24,6 @@ export const TOKENS = {
   baseUnit: '6px',
 };
 
-// Dialog 的 4 种柔和渐变（从源码提取）
-export const DIALOG_GRADIENTS = [
-  'linear-gradient(to right bottom, #e0fefb 0%, #f2e2e0 100%)',
-  'linear-gradient(to right bottom, #A1FFCE, #FAFFD1)',
-  'linear-gradient(to right bottom, #1c92d2, #f2fcfe)',
-  'linear-gradient(to right bottom, #4AC29A, #BDFFF3)',
-];
-
 /** 从色系中随机取一个颜色 */
 export function pickColor(type = 'blue') {
   const colors = AC_COLORS[type] || AC_COLORS.blue;
@@ -53,42 +45,6 @@ export function buttonStyle(colorType = 'blue', { ghost = false } = {}) {
     `background-position:right 0 top 0;` +
     `transition:background-position 300ms ease, transform 150ms ease;` +
     `cursor:pointer;`
-  );
-}
-
-/** 生成 AC-UI Dialog 的内联样式字符串 */
-export function dialogStyle(gradientIndex = 0) {
-  const bg = DIALOG_GRADIENTS[gradientIndex % DIALOG_GRADIENTS.length];
-  return (
-    `background:${bg};` +
-    `border-radius:${TOKENS.radius};` +
-    `box-shadow:-30px 150px 150px -150px rgba(0,0,0,0.3);` +
-    `color:${TOKENS.dialogText};` +
-    `padding:10px;`
-  );
-}
-
-/** 生成 AC-UI Input 的内联样式字符串 */
-export function inputStyle() {
-  return (
-    `border:1px solid ${TOKENS.theme};` +
-    `border-radius:${TOKENS.radius};` +
-    `padding:10px;` +
-    `line-height:16px;` +
-    `transition:border-color 500ms;` +
-    `background-image:linear-gradient(white, white), linear-gradient(to right, cyan, lightgreen 150%);` +
-    `background-clip:padding-box, border-box;` +
-    `outline:none;`
-  );
-}
-
-/** 生成 AC-UI 卡片的内联样式字符串 */
-export function cardStyle() {
-  return (
-    `background:#fff;` +
-    `border:1px solid #ddd;` +
-    `border-radius:${TOKENS.radius};` +
-    `box-shadow:0 2px 8px rgba(0,0,0,0.06);`
   );
 }
 

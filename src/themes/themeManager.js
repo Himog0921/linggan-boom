@@ -41,13 +41,3 @@ export async function setTheme(themeName) {
   await chrome.storage.local.set({ [THEME_KEY]: themeName });
 }
 
-/** 订阅主题变化 */
-export function onThemeChange(fn) {
-  listeners.add(fn);
-  return () => listeners.delete(fn);
-}
-
-/** 判断当前是否为 AC-UI 主题 */
-export function isAcUiTheme() {
-  return cachedTheme === 'ac-ui';
-}

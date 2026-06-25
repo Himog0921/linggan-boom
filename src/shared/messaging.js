@@ -119,13 +119,6 @@ export async function sendToTab(tabId, payload, {
 }
 
 /**
- * 发送消息到指定 tab 的 Content Script
- */
-export function sendToContent(tabId, action, data = {}) {
-  return sendToTab(tabId, { action, ...data });
-}
-
-/**
  * 广播进度消息（从 content script 发到 popup/background）
  */
 export function reportProgress(current, total, status, meta = {}) {

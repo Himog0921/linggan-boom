@@ -648,16 +648,3 @@ export async function fetchCollectionTaskControlRequests(
     });
   }
 }
-
-/**
- * 检查工作台连接状态
- * @returns {Promise<boolean>}
- */
-export async function checkFlywheelConnection() {
-  try {
-    const response = await fetchFlywheel('/api/topics?stats=true');
-    return response.ok;
-  } catch {
-    return false;
-  }
-}

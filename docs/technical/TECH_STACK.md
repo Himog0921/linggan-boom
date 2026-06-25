@@ -10,7 +10,7 @@
 - 前端框架：React 19（createRoot / Hooks）
 - 样式：原生 CSS
 - 数据存储：IndexedDB（Dexie）
-- 当前本地 schema：Dexie `v7`
+- 当前本地 schema：Dexie `v13`
 
 ## 2. 核心版本（锁定）
 
@@ -53,38 +53,49 @@
 - `chrome.action.setBadgeBackgroundColor`
 - `chrome.storage.local`
 - `chrome.declarativeNetRequest.updateDynamicRules`
-- `chrome.debugger.attach/sendCommand/detach`
 - `chrome.downloads.download`
 
 ## 5. 权限清单（manifest）
 
+> 事实源：`manifest.json`。本项目**不使用** `chrome.debugger`（关闭弹窗/派发 Esc 走 `chrome.scripting.executeScript`）。
+
+permissions：
+
 - `activeTab`
+- `tabs`
 - `storage`
+- `cookies`
 - `downloads`
-- `debugger`
+- `alarms`
 - `scripting`
 - `declarativeNetRequest`
 - `declarativeNetRequestWithHostAccess`
-- `host_permissions`:
-  - `http://localhost:*/*`
-  - `https://www.xiaohongshu.com/*`
-  - `https://ci.xiaohongshu.com/*`
-  - `https://*.xhscdn.com/*`
-  - `https://www.douyin.com/*`
-  - `https://*.byteimg.com/*`
-  - `https://*.douyinpic.com/*`
-  - `https://*.douyinstatic.com/*`
-  - `https://*.amemv.com/*`
-  - `https://*.douyinvod.com/*`
-  - `https://*.bytevcloudcdn.com/*`
+- `notifications`
 
-## 6. 当前构建快照（2026-05-17）
+host_permissions：
+
+- `http://localhost/*`
+- `https://lingganboom.fun/*`
+- `https://xiaohongshu.com/*`
+- `https://*.xiaohongshu.com/*`
+- `https://www.xiaohongshu.com/*`
+- `https://ci.xiaohongshu.com/*`
+- `https://*.xhscdn.com/*`
+- `https://www.douyin.com/*`
+- `https://*.byteimg.com/*`
+- `https://*.douyinpic.com/*`
+- `https://*.douyinstatic.com/*`
+- `https://*.amemv.com/*`
+- `https://*.douyinvod.com/*`
+- `https://*.bytevcloudcdn.com/*`
+
+## 6. 当前构建快照（2026-06-25，v2.0.52 + 死代码清理后）
 
 - `vendor.js`（React 共享 chunk）：约 `185 KiB`
-- `content.js`：约 `581 KiB`
-- `background.js`：约 `247 KiB`
-- `popup.js`：约 `65.8 KiB`
-- `dashboard.js`：约 `47.5 KiB`
+- `content.js`：约 `651 KiB`
+- `background.js`：约 `305 KiB`
+- `popup.js`：约 `75 KiB`
+- `dashboard.js`：约 `52 KiB`
 - 内容脚本异步 chunk：无
 
 备注：

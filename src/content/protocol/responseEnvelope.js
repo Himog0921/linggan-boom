@@ -18,11 +18,6 @@ const CONTENT_DIRECT_DATA_ACTIONS = new Map([
   [MSG.DOWNLOAD_NOTE_MEDIA, (result = {}) => result?.summary || {}],
 ]);
 
-export function isContentEnvelopeAction(action = '') {
-  const normalizedAction = String(action || '').trim();
-  return CONTENT_ARRAY_ACTIONS.has(normalizedAction) || CONTENT_DIRECT_DATA_ACTIONS.has(normalizedAction);
-}
-
 export function normalizeContentMessageResponse(action = '', result) {
   const normalizedAction = String(action || '').trim();
   if (CONTENT_ARRAY_ACTIONS.has(normalizedAction)) {
