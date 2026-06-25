@@ -1,5 +1,13 @@
 2026-06-25
 - 插件授权与自动工位连接重构完成，版本提升到 v2.0.53：把原“先授权、再输入配对码绑定工位”的日常流程改为一次“连接插件”。插件授权码激活和审批领取都会带上本浏览器稳定 `stationKey`，内容工作台自动创建 / 复用工位并返回 `stationId + stationToken`，插件保存后即可心跳和接单；同一账号名下可存在多个浏览器插件，每个插件自动生成一个工位，默认名称按成员和浏览器生成，后续可在工作台改名。Popup 删除日常配对码输入和“绑定工位”按钮，工作台设置页仅保留“旧版配对”作为旧插件或自动连接失败修复入口。下载包引导配置不再携带 `pairingCode`。已同步产品流、PRD、技术协议、测试清单、决策记录、Chrome Web Store 文案和隐私政策。发布包已重新构建并通过校验：`releases/linggan-boom-v2.0.53.zip`、`dist.zip` 已生成，内容工作台 `plugin-releases/linggan-boom-latest.zip` 和 manifest 已刷新到 v2.0.53。验证：插件 `node --test tests/plugin-authorization-client.test.mjs tests/plugin-install-bootstrap.test.mjs tests/popup-ui-copy.test.mjs` 21 个用例通过；插件全量 `node --test tests/*.test.mjs` 531 个用例通过；`npm run check:contracts` 通过；`npm run build` 通过（保留既有 webpack 体积 warning）；`npm run release:verify -- --version 2.0.53 --zip releases/linggan-boom-v2.0.53.zip` 通过；内容工作台自动工位/下载包/设置页定向测试 50 个用例通过，插件下载测试 19 个用例通过；内容工作台 `npm run lint` 通过（保留既有 6 条图片 warning），`npm run build` 通过（保留既有 Turbopack trace warning）。
+- PRD 功能矩阵改写为「功能规格库」+ mediaAssets URL 字段核实（文档变更，无代码改动）：用户反馈第一版 PRD 功能矩阵太总结式，要求每个功能写得极其细节；并要求核实 mediaAssets 是否缺 URL 字段。本轮：
+  · mediaAssets 核实结论：URL 字段在代码里是有的（`normalizeMediaAssetRecord` spread 透传 `url` + `candidateUrls[]`，抖音 commentMedia.js:116 写 `url: candidateUrls[0]`），不是功能缺口，是 PRD 描述不全。已在 5.3 补上 `url / candidateUrls[]` 并加专门说明。
+  · PRD 重构：第 1.3 节功能矩阵改为「功能索引表」（17 个功能，每个带 `#锚点` 跳转 + 状态徽章 ✅/🟡）；新增第 2 节「功能规格库」，每个功能（X1-X6 小红书 6 个 / D1-D8 抖音 8 个 / W1-W3 工作台 3 个）按统一模板展开：状态 / 入口 / 前置条件 / 输入参数（含真实默认值如评论上限默认 20、数量 [5,10,20,50]、maxPerSession=50）/ 数据源 / 写入字段 / 业务规则（含 D7/D8/D9/D18/D19/D23 等决策约束）/ 反检测参数（BATCH_CONFIG 全部数值：1200-2800ms 笔记间停顿、100-300px 滚动步长、15000ms 详情超时等）/ 状态机 / 异常处理（8 类错误映射）/ 验收点。
+  · 容器型入口（Popup/页内控制台/Dashboard/Cookie&账号）单列 2.0 节，与采集功能规格分开。
+  · 修正项：W2 自动接单规格补全 chrome.alarms 驱动细节（task poll alarm 30s = periodInMinutes 0.5、工位心跳 1min、collectionRun 心跳 30s 去 3s 抖、lease 2h、outbox 1s→2s→5s→15s→60s、in_flight 5min 复位、Web Push 唤醒 D21）；把上一轮反馈核查中确认的真实实现（chrome.alarms 驱动 outbox flush、IndexedDB 时间戳重试、accounts 含 cookieJson 字段）写进规格，避免再次被误读。
+  · 保留并整合原有 mermaid 图：评论树层级（X3 内）、远程任务执行流程（W2 内）、数据层 ER、插件架构、工作台拓扑、主数据流。
+  · 文档分层说明写在开头：第 2 节是 agent 实现 spec 权威，第 5-6 节是概览，完整字段/消息走 DATA_MODEL.md 和 MESSAGE_PROTOCOL.md。
+  验证：纯文档改动，无构建/测试影响。本次同步文件：docs/product/PRD.md（主）、progress.txt（本条）。
 - PRD 基于本地数据库真实结构补全 + 补流程图架构图完成（文档变更，无代码改动）：用户要求按本地数据库把 `docs/product/PRD.md` 功能细节补到位，并补流程图、架构图。对照 `src/db/index.js` v13 真实 schema 核对，原 PRD 第 5 节只列了 5 张表且字段几乎为空，遗漏了 `workbenchOutbox`（工作台增量发件箱，幂等键唯一索引 + 复合索引）和 `accounts`（采集账号，Cookie 轮换）两表，也无索引、去重、迁移历史、`chrome.storage.local` 扩展存储等内容。本次改动：
   · 第 1 节功能矩阵日期 2026-03-27 → 2026-06-25，补"detail_probe 目标解析已完成"行，抖音下载链路按 D18 标注页面上下文 fetch。
   · 第 2.2 评论采集补评论树层级 mermaid 图（rootCommentId/parentCommentId/level/replyToCommentId 关系）。
