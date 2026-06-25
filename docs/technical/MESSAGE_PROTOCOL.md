@@ -81,13 +81,13 @@
 | `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ tabId?, externalTaskId?, collectionRunId? }` | 从本次执行页的 `collectionRuns` 打包结果并回传给工作台 |
 | `WORKBENCH_LOCAL_CONTROL_EVENT` | Content → Background | `{ externalTaskId?, collectionRunId?, taskType?, controlAction, status, message?, occurredAt? }` | 插件本地暂停 / 继续 / 停止同步回工作台事件流 |
 | `WORKBENCH_DELTA_FLUSH` | 内部 / 调试 → Background | `{}` | 触发工作台增量 outbox 立即 flush |
-| `AUTHORIZE_PLUGIN_ACCESS` | Popup → Background | `{ serverUrl, authorizationCode, browserLabel? }` | 使用内容工作台设置里生成的授权码激活当前浏览器 |
-| `CLEAR_PLUGIN_AUTHORIZATION` | Popup → Background | `{}` | 清除当前浏览器的插件授权，并解除执行工位绑定 |
-| `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前浏览器是否已授权、是否已绑定执行工位，以及可上报的平台账号状态 |
-| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 在已授权前提下，使用内容工作台生成的配对码绑定执行工位 |
+| `AUTHORIZE_PLUGIN_ACCESS` | Popup → Background | `{ serverUrl, authorizationCode, browserLabel? }` | 使用内容工作台设置里生成的授权码连接当前浏览器；Background 会同时带上本浏览器稳定工位身份，工作台返回授权和工位 |
+| `CLEAR_PLUGIN_AUTHORIZATION` | Popup → Background | `{}` | 清除当前浏览器的插件授权，并解除当前工位绑定 |
+| `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前浏览器是否已授权、当前工位是否已准备好，以及可上报的平台账号状态 |
+| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 旧版兼容入口：仅旧插件或自动连接失败修复时，用内容工作台生成的配对码绑定工位 |
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
-> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Content 入口不再单独截获 `WORKBENCH_TASK_CONTROL`，所有暂停 / 继续 / 停止都进入 runtime 的工作台处理器，再按是否带 `taskControl` 分别控制远程任务登记或旧式页面批量控制器。Background 通过执行工位协议和内容工作台对账，再按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
+> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Content 入口不再单独截获 `WORKBENCH_TASK_CONTROL`，所有暂停 / 继续 / 停止都进入 runtime 的工作台处理器，再按是否带 `taskControl` 分别控制远程任务登记或旧式页面批量控制器。Background 在授权连接时自动拿到工位身份，再通过执行工位协议和内容工作台对账，按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
 >
 > 工作台远程任务的最终结果包必须从执行页读取，不能从 Background 本地库兜底伪装。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
@@ -154,10 +154,11 @@ collection_task_control
 - `collection_task_available` / `collection_task_control` 只用于叫醒 Background；收到后插件立即运行既有任务检查，真正的任务内容仍从 `claim` 和后续租约接口读取。
 - 如果工作台未配置 VAPID、浏览器不支持 push、订阅过期或 push 发送失败，插件继续按低频对账节奏检查任务。
 
-授权与配对说明：
+授权与自动工位说明：
 
 - `authorizationCode` 由内容工作台“设置 → 插件授权”生成，决定谁可以使用插件
-- `pairingCode` 由内容工作台的工位管理入口生成，决定这台已授权浏览器绑定到哪个执行工位
+- `stationKey` 是插件本地为当前浏览器生成的稳定身份，授权连接时会一并发给工作台，用来自动创建或复用工位
+- `pairingCode` 只保留给旧版插件或自动连接失败后的修复入口，不是日常连接流程
 - 插件完成授权后，后续工作台请求统一携带 `Authorization: Bearer <authorizationToken>`
 
 控制动作：
