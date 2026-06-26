@@ -1,4 +1,12 @@
 import { normalizeServerUrl } from '../../shared/utils.js';
+import {
+  buildSyncRequestV11,
+  extractMailboxVersionsFromResponse,
+  extractNextSyncFromResponse,
+  isV11SyncResponse,
+  resolveStationSessionId,
+  clearStationSessionId,
+} from '../protocol/syncEnvelopeV11.js';
 
 const STORAGE_KEY = 'workbenchExecutionStation';
 const DEFAULT_SERVER_URL = 'https://lingganboom.fun';
@@ -9,6 +17,10 @@ function normalizeString(value = '') {
 
 function toStringArray(value) {
   return Array.isArray(value) ? value.filter((item) => typeof item === 'string') : [];
+}
+
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
 }
 
 async function readStorage(storageArea, key) {
@@ -135,10 +147,12 @@ export function createExecutionStationClient({
       const headerRetryAfterMs = parseRetryAfterHeader(response.headers?.get?.('Retry-After'));
       const bodyRetryAfterMs = toFiniteNumber(parsed?.retryAfterMs, 0)
         || toFiniteNumber(parsed?.retryAfterSeconds, 0) * 1000;
+      // 错误码：优先 code/reasonCode（机读码，如 plugin_protocol_backpressure），
+      // 然后是 V1.1 sync 的 error 字段（如 VERSION_REJECTED / PROTOCOL_VERSION_REJECTED）
       throw createHttpError(errorMessageFromResponseText(text, `HTTP ${response.status}`), {
         status: response.status,
         retryable: isRetryableStatus(response.status),
-        reasonCode: parsed?.code || parsed?.reasonCode || '',
+        reasonCode: parsed?.code || parsed?.reasonCode || parsed?.error || '',
         retryAfterMs: headerRetryAfterMs || bodyRetryAfterMs,
       });
     }
@@ -197,6 +211,10 @@ export function createExecutionStationClient({
     capabilities = [],
     pluginVersion = '',
     platformAccounts = [],
+    // V1.1 新增：可选参数，用于构造 activeLeases[] / capacity
+    activeLane = '',
+    localLease = null,
+    activeTask = null,
   } = {}) {
     const identity = await getStoredStationIdentity();
     const authorization = await resolveAuthorization();
@@ -207,36 +225,78 @@ export function createExecutionStationClient({
     }
 
     try {
-      const mailboxVersion = toOptionalInteger(identity.mailboxVersion);
-      const data = await postJson('/api/execution-stations/sync', {
+      // 旧 mailboxVersion（单数字）：从 identity 读，作为 V1.1 station cursor
+      const legacyMailboxVersion = toOptionalInteger(identity.mailboxVersion);
+      // V1.1 lane 版本：插件暂未持久化，从 identity 读（如果有）
+      const mailboxLaneVersions = isPlainObject(identity.mailboxLaneVersions)
+        ? identity.mailboxLaneVersions
+        : {};
+      const stationSessionId = await resolveStationSessionId({ storageArea });
+
+      const requestBody = buildSyncRequestV11({
         stationId,
         stationToken,
-        authorizationId: normalizeString(authorization?.authorizationId),
-        status: normalizeString(status) || 'online',
-        pluginVersion: normalizeString(pluginVersion),
-        capabilities: toStringArray(capabilities.length ? capabilities : identity.capabilities),
-        platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
-        claimMode: 'status_only',
-        ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
+        authorizationId: authorization?.authorizationId,
+        pluginVersion,
+        stationSessionId,
+        status,
+        capabilities: capabilities.length ? capabilities : identity.capabilities,
+        platformAccounts,
+        activeLane,
+        localLease,
+        activeTask,
+        mailboxStationVersion: legacyMailboxVersion,
+        mailboxLaneVersions,
       });
+
+      const data = await postJson('/api/execution-stations/sync', requestBody);
+
       const heartbeat = data?.heartbeat && typeof data.heartbeat === 'object' && !Array.isArray(data.heartbeat)
         ? data.heartbeat
         : data;
-      const nextMailboxVersion = toOptionalInteger(data?.mailbox?.version);
-      await saveStationIdentity({
+      const nextMailboxVersions = extractMailboxVersionsFromResponse(data);
+      const nextSync = extractNextSyncFromResponse(data);
+
+      // 持久化 mailbox 版本号（V1.1 station + lanes，或旧 mailbox.version）
+      const identityPatch = {
         stationId,
         stationToken,
         role: normalizeString(heartbeat?.station?.role) || normalizeString(identity.role),
         lastHeartbeatAt: now(),
-        ...(nextMailboxVersion !== undefined ? { mailboxVersion: nextMailboxVersion } : {}),
         capabilities: toStringArray(capabilities.length ? capabilities : identity.capabilities),
-      });
+      };
+      if (nextMailboxVersions.station !== undefined) {
+        identityPatch.mailboxVersion = nextMailboxVersions.station;
+      }
+      if (Object.keys(nextMailboxVersions.lanes).length > 0) {
+        identityPatch.mailboxLaneVersions = nextMailboxVersions.lanes;
+      }
+      await saveStationIdentity(identityPatch);
+
+      // 旧字段兼容：保留 mailbox 对象结构，便于上层旧解析路径继续工作
+      const mailbox = nextMailboxVersions.station !== undefined
+        ? { version: nextMailboxVersions.station }
+        : (data?.mailbox || null);
+
+      // V1.1 shouldPollNow 判定：
+      // 1) V1.1 响应：mailbox 变化（lane 版本号变化）或 nextSync.reason 含 mailbox/claim → 触发 poll
+      // 2) 旧响应：mode === 'full_sync' → 触发 poll（保留兼容）
+      const mailboxChanged = isV11SyncResponse(data)
+        ? Boolean(
+            (nextMailboxVersions.station !== undefined && legacyMailboxVersion !== undefined
+              && nextMailboxVersions.station !== legacyMailboxVersion)
+            || Object.keys(nextMailboxVersions.lanes).length > 0,
+          )
+        : data?.mode === 'full_sync';
+
       return {
         success: true,
         ...heartbeat,
         sync: data,
-        mailbox: data?.mailbox || null,
-        shouldPollNow: data?.mode === 'full_sync',
+        mailbox,
+        mailboxVersions: nextMailboxVersions,
+        nextSync,
+        shouldPollNow: mailboxChanged || /^(mailbox|claim)/.test(nextSync.reason),
       };
     } catch (error) {
       return {
@@ -291,6 +351,8 @@ export function createExecutionStationClient({
   }
 
   async function clearStationIdentity({ preserveStationKey = true } = {}) {
+    // 同步清理 V1.1 stationSessionId（换授权/换工位时服务端应看到新 session）
+    await clearStationSessionId({ storageArea });
     const existing = await getStoredStationIdentity();
     if (!preserveStationKey || !normalizeString(existing.stationKey)) {
       if (storageArea?.remove) {
@@ -315,5 +377,7 @@ export function createExecutionStationClient({
     sendHeartbeat,
     fetchVapidPublicKey,
     registerPushSubscription,
+    // V1.1：暴露 session id 解析给上层（用于诊断）
+    resolveStationSessionId: () => resolveStationSessionId({ storageArea }),
   };
 }

@@ -2641,6 +2641,82 @@ test('task poller fails running task when the result package handoff is lost', a
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller does NOT fail handoff-lost when attempt started recently even if dispatchedAt is stale (congestion-after-claim)', async () => {
+  // 回归测试（本轮修复）：任务派出后拥堵 ~3.5h 无人接单 → 工作台 dispatchedAt 停在首次派出时间（老）；
+  // 刚被工位接单（attemptStartedAtMs 新），采集页还没产出结果包（getResultPackage 报 not found）。
+  // 修复前：超时用 dispatchedAtMs（hydrate 时被工作台老值覆盖）→ 第一次轮询就判 result_package_handoff_lost 误杀。
+  // 修复后：超时用 attemptStartedAtMs（本轮接单时间）→ now - attemptStartedAtMs < 12min → 不误杀，给满启动窗口。
+  const patches = [];
+  const events = [];
+  let nowMs = Date.parse('2026-04-20T16:00:00.000Z');
+  const poller = createTaskPoller({
+    now: () => nowMs,
+    claimTaskLease: claimTask([
+      {
+        id: 'task_handoff_congested',
+        taskType: 'xhs.collectAuthor',
+        platform: 'xhs',
+        source: 'monitor',
+        taskStrategy: 'author_patrol',
+        target: 'https://www.xiaohongshu.com/user/content/congested-author',
+      },
+    ]),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_handoff_congested',
+      tabId: 321,
+      collectionRunId: 'run_handoff_congested',
+      resultLookup: {
+        externalTaskId: 'task_handoff_congested',
+        collectionRunId: 'run_handoff_congested',
+      },
+    }),
+    renewTaskLease: async () => ({ success: true, expiresAt: '2026-04-20T16:20:00.000Z' }),
+    getResultPackage: async () => ({
+      success: false,
+      error: 'collectionRun not found for collectionRunId: run_handoff_congested',
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  await poller.tick(); // claim：attemptStartedAtMs = nowMs(16:00)，dispatchedAtMs = nowMs(16:00)
+
+  // 模拟 service worker 重启后 hydrate：dispatchedAtMs 被工作台 task.dispatchedAt 老值覆盖（拥堵 3.5h）
+  const activeTask = poller.getState().activeTask;
+  assert.ok(activeTask, 'claim 后应存在 activeTask');
+  assert.ok(activeTask.attemptStartedAtMs > 0, 'claim 后 attemptStartedAtMs 应已设值');
+  activeTask.dispatchedAtMs = nowMs - 3.5 * 60 * 60 * 1000; // 11:00（3.5h 前），模拟工作台老 dispatchedAt 覆盖
+  // attemptStartedAtMs 保持 claim 时的 16:00（本轮接单时间，未被工作台覆盖）
+
+  nowMs += 3 * 60 * 1000; // 推进 3 分钟（复现今天 10:09 → 10:12 场景）
+  const result = await poller.tick();
+
+  // 关键断言：不应被 result_package_handoff_lost 误杀
+  assert.notEqual(result?.reason, 'result_package_handoff_lost');
+  assert.notEqual(result?.failed, true);
+  assert.equal(
+    patches.find(([, patch]) => patch.status === 'failed'),
+    undefined,
+    '不应产生 failed 状态的 patch',
+  );
+  assert.equal(
+    events.find((event) => event.eventType === 'task.failed'),
+    undefined,
+    '不应产生 task.failed 事件',
+  );
+  assert.equal(poller.getState().activeTask?.taskId, 'task_handoff_congested', '任务应仍存活');
+});
+
 test('task poller completes running task from streamed records when final result package handoff is lost', async () => {
   const patches = [];
   const events = [];

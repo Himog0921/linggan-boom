@@ -510,6 +510,7 @@ function normalizePersistedActiveTaskContext(value = {}) {
     executionPhase: String(source.executionPhase || '').trim(),
     pageFingerprint: normalizeObject(source.pageFingerprint),
     dispatchedAtMs: toFiniteNumber(source.dispatchedAtMs, 0),
+    attemptStartedAtMs: toFiniteNumber(source.attemptStartedAtMs, 0),
     pendingAccountUsageId: String(source.pendingAccountUsageId || '').trim(),
     firstRecordSeen: Boolean(source.firstRecordSeen),
     streamedRecordCounts: normalizeStreamedRecordCounts(source.streamedRecordCounts),
@@ -882,6 +883,10 @@ function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null
     pendingAccountUsageId: String(matchingPersisted?.pendingAccountUsageId || '').trim(),
     firstRecordSeen: Boolean(matchingPersisted?.firstRecordSeen),
     streamedRecordCounts: normalizeStreamedRecordCounts(matchingPersisted?.streamedRecordCounts),
+    attemptStartedAtMs:
+      toFiniteNumber(matchingPersisted?.attemptStartedAtMs, 0)
+      || parseTimestamp(task?.dispatchedAt)
+      || now,
     stopRequestedAtMs: toFiniteNumber(matchingPersisted?.stopRequestedAtMs, 0),
     stopControlAction: String(task?.controlAction || matchingPersisted?.stopControlAction || '').trim(),
     deleteRequested: Boolean(task?.deletedAt || matchingPersisted?.deleteRequested),
@@ -1618,6 +1623,7 @@ export function createTaskPoller(deps = {}) {
       executionPhase: String(task?.executionPhase || 'assigned').trim() || 'assigned',
       pageFingerprint,
       dispatchedAtMs: getNow(),
+      attemptStartedAtMs: getNow(),
       pendingAccountUsageId: '',
       firstRecordSeen: false,
       streamedRecordCounts: {},
@@ -1778,8 +1784,8 @@ export function createTaskPoller(deps = {}) {
     if (
       !state.activeLease &&
       !isMonitorTask(activeTask) &&
-      Number(activeTask.dispatchedAtMs || 0) > 0 &&
-      getNow() - Number(activeTask.dispatchedAtMs || 0) >= LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS
+      Number(activeTask.attemptStartedAtMs || 0) > 0 &&
+      getNow() - Number(activeTask.attemptStartedAtMs || 0) >= LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS
     ) {
       const message = '插件本地任务没有有效租约，已自动释放重试。';
       const notBeforeAt = new Date(getNow() + LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS).toISOString();
@@ -1889,7 +1895,7 @@ export function createTaskPoller(deps = {}) {
         const now = getNow();
         if (
           activeTask.workbenchStatus === 'running' &&
-          now - Number(activeTask.dispatchedAtMs || 0) >= RUNNING_RESULT_LOOKUP_TIMEOUT_MS
+          now - Number(activeTask.attemptStartedAtMs || 0) >= RUNNING_RESULT_LOOKUP_TIMEOUT_MS
         ) {
           if (countStreamedRecords(activeTask.streamedRecordCounts) > 0) {
             const streamedSummary = buildStreamedRecordResultSummary(activeTask);
@@ -1950,7 +1956,7 @@ export function createTaskPoller(deps = {}) {
         }
         if (
           activeTask.workbenchStatus === 'dispatched' &&
-          now - Number(activeTask.dispatchedAtMs || 0) >= DISPATCH_STARTUP_TIMEOUT_MS
+          now - Number(activeTask.attemptStartedAtMs || 0) >= DISPATCH_STARTUP_TIMEOUT_MS
         ) {
           const startupErrorMessage = '任务已派出，但页面没有真正启动，已自动释放重试。';
           const notBeforeAt = new Date(now + DISPATCH_STARTUP_RETRY_DELAY_MS).toISOString();

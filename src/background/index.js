@@ -2124,11 +2124,28 @@ async function sendExecutionStationHeartbeat(status = 'online') {
   }
   const identity = await executionStationClient.getStoredStationIdentity();
   const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
+
+  // V1.1：把当前活动任务状态喂给 sync 协议，用于构造 activeLeases[] + capacity lane
+  const taskPollerState = typeof taskPoller?.getState === 'function' ? taskPoller.getState() : null;
+  const activeTask = taskPollerState?.activeTask || null;
+  const localLease = taskPollerState?.activeLease || null;
+  const activeLane = String(activeTask?.platform || '').trim().toLowerCase();
+
   return executionStationClient.sendHeartbeat({
     status,
     capabilities: runtimeSnapshot.capabilities,
     pluginVersion: getPluginVersion(),
     platformAccounts: runtimeSnapshot.platformAccounts,
+    activeLane,
+    localLease,
+    activeTask: activeTask
+      ? {
+          platform: activeTask.platform,
+          stage: activeTask.executionPhase || activeTask.stage,
+          progress: activeTask.progress,
+          lastProgressAtMs: activeTask.lastProgressAtMs,
+        }
+      : null,
   });
 }
 

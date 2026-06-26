@@ -1,4 +1,9 @@
 import { normalizeServerUrl } from '../../shared/utils.js';
+import {
+  buildSyncRequestV11,
+  extractMailboxVersionsFromResponse,
+  resolveStationSessionId,
+} from '../protocol/syncEnvelopeV11.js';
 
 const DEFAULT_SERVER_URL = 'https://lingganboom.fun';
 const DEFAULT_LEASE_STORAGE_KEY = 'workbenchActiveTaskLease';
@@ -204,6 +209,21 @@ function attachMailboxVersion(snapshot = {}, mailboxVersion) {
   };
 }
 
+/**
+ * 同 attachMailboxVersion，但额外持久化 V1.1 lane 版本号。
+ * laneVersions 为空时退化为只 attach station 版本（向后兼容）。
+ */
+function attachMailboxLaneVersions(snapshot = {}, mailboxVersion, laneVersions = {}) {
+  const withStation = attachMailboxVersion(snapshot, mailboxVersion);
+  if (!laneVersions || typeof laneVersions !== 'object' || Object.keys(laneVersions).length === 0) {
+    return withStation;
+  }
+  return {
+    ...withStation,
+    mailboxLaneVersions: { ...laneVersions },
+  };
+}
+
 function normalizeStationSyncClaimResponse(data = {}) {
   if (!isStationSyncEnvelope(data)) return data;
   const mailboxVersion = extractMailboxVersion(data);
@@ -350,45 +370,60 @@ export async function claimCollectionTaskLease({
   forceFullSync = false,
   fetchFn,
   store = null,
+  storageArea = globalThis.chrome?.storage?.local,
 } = {}) {
   const localLease = typeof store?.read === 'function' ? await store.read() : null;
   const mailboxVersion = extractMailboxVersion(localLease || {});
+  // V1.1：持久化的 lane 版本（如果 store 里存了，使用它构造 mailboxCursors）
+  const mailboxLaneVersions = localLease && typeof localLease === 'object'
+    && localLease.mailboxLaneVersions && typeof localLease.mailboxLaneVersions === 'object'
+    ? localLease.mailboxLaneVersions
+    : {};
+  const stationSessionId = await resolveStationSessionId({ storageArea });
+
+  // V1.1 envelope body（含旧字段并存）
+  const requestBody = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    status: 'online',
+    capabilities,
+    platformAccounts,
+    localLease: localLease && typeof localLease === 'object'
+      ? normalizeLeaseSnapshot({ fallback: localLease })
+      : null,
+    mailboxStationVersion: mailboxVersion,
+    mailboxLaneVersions,
+    forceFullSync,
+  });
+
   const rawData = await postJson({
     serverUrl,
     path: '/api/execution-stations/sync',
     fetchFn,
     authorizationToken,
-    body: {
-      authorizationId: normalizeString(authorizationId),
-      pluginAuthorizationId: normalizeString(authorizationId),
-      stationId: normalizeString(stationId),
-      stationToken: normalizeString(stationToken),
-      status: 'online',
-      capabilities: toStringArray(capabilities),
-      platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
-      pluginVersion: normalizeString(pluginVersion),
-      ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
-      ...(forceFullSync ? { forceFullSync: true } : {}),
-      localLease: localLease && typeof localLease === 'object'
-        ? normalizeLeaseSnapshot({ fallback: localLease })
-        : null,
-    },
+    body: requestBody,
   });
   const data = normalizeStationSyncClaimResponse(rawData);
   const responseMailboxVersion = extractMailboxVersion(data);
+  // V1.1 响应里的 lane 版本（如果有），持久化以便下次构造 cursor
+  const responseMailboxVersions = extractMailboxVersionsFromResponse(rawData);
+  const responseLaneVersions = responseMailboxVersions.lanes || {};
 
   if (data?.task && data?.lease && store?.write) {
-    await store.write(attachMailboxVersion(normalizeLeaseSnapshot({
+    await store.write(attachMailboxLaneVersions(normalizeLeaseSnapshot({
       task: data.task,
       lease: data.lease,
       attempt: data.attempt,
-    }), responseMailboxVersion));
+    }), responseMailboxVersion, responseLaneVersions));
   } else if (data?.resumeLease?.taskId && data?.resumeLease?.leaseToken && store?.write) {
-    await store.write(attachMailboxVersion(data.resumeLease, responseMailboxVersion));
+    await store.write(attachMailboxLaneVersions(data.resumeLease, responseMailboxVersion, responseLaneVersions));
   } else if (store?.write) {
     const idleSnapshot = createTaskLeaseIdleSnapshot(data);
     if (idleSnapshot) {
-      await store.write(idleSnapshot);
+      await store.write(attachMailboxLaneVersions(idleSnapshot, responseMailboxVersion, responseLaneVersions));
     } else if (store?.clear) {
       await store.clear();
     }
@@ -463,6 +498,7 @@ export async function reconcileExecutionStationLease({
   pluginVersion = '',
   fetchFn,
   store = null,
+  storageArea = globalThis.chrome?.storage?.local,
 } = {}) {
   const normalizedLocalLease = localLease && typeof localLease === 'object'
     ? {
@@ -470,31 +506,40 @@ export async function reconcileExecutionStationLease({
       }
     : null;
 
-  const body = {
-    authorizationId: normalizeString(authorizationId),
-    pluginAuthorizationId: normalizeString(authorizationId),
-    stationId: normalizeString(stationId),
-    stationToken: normalizeString(stationToken),
-    localLease: normalizedLocalLease,
-    capabilities: toStringArray(capabilities),
-    platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
-    pluginVersion: normalizeString(pluginVersion),
-  };
-
   const mailboxVersion = extractMailboxVersion(localLease || {});
+  const mailboxLaneVersions = localLease && typeof localLease === 'object'
+    && localLease.mailboxLaneVersions && typeof localLease.mailboxLaneVersions === 'object'
+    ? localLease.mailboxLaneVersions
+    : {};
+  const stationSessionId = await resolveStationSessionId({ storageArea });
+
+  // V1.1 envelope body（含旧字段并存）
+  const body = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    status: 'online',
+    capabilities,
+    platformAccounts,
+    localLease: normalizedLocalLease,
+    mailboxStationVersion: mailboxVersion,
+    mailboxLaneVersions,
+    claimMode: 'status_only',
+  });
+
   const rawData = await postJson({
     serverUrl,
     path: '/api/execution-stations/sync',
     fetchFn,
     authorizationToken,
-    body: {
-      ...body,
-      claimMode: 'status_only',
-      ...(mailboxVersion !== undefined ? { mailboxVersion } : {}),
-    },
+    body,
   });
   const data = isStationSyncEnvelope(rawData) ? rawData.reconcile || {} : rawData;
   const responseMailboxVersion = extractMailboxVersion(rawData);
+  const responseMailboxVersions = extractMailboxVersionsFromResponse(rawData);
+  const responseLaneVersions = responseMailboxVersions.lanes || {};
 
   const action = normalizeString(data?.action || data?.status || '');
   const serverLease = data?.lease || data?.serverLease || null;
@@ -514,7 +559,7 @@ export async function reconcileExecutionStationLease({
   const leaseToken = normalizeString(normalizedServerLease.leaseToken);
 
   if (store?.write && taskId && leaseToken) {
-    await store.write(attachMailboxVersion(normalizedServerLease, responseMailboxVersion));
+    await store.write(attachMailboxLaneVersions(normalizedServerLease, responseMailboxVersion, responseLaneVersions));
   } else if (
     store?.write &&
     ['clear_local', 'idle', 'release', 'released', 'expired'].includes(action)
@@ -524,7 +569,7 @@ export async function reconcileExecutionStationLease({
       mailboxVersion: responseMailboxVersion,
     });
     if (idleSnapshot) {
-      await store.write(idleSnapshot);
+      await store.write(attachMailboxLaneVersions(idleSnapshot, responseMailboxVersion, responseLaneVersions));
     } else if (store?.clear) {
       await store.clear();
     }
@@ -535,9 +580,10 @@ export async function reconcileExecutionStationLease({
     ...data,
     sync: isStationSyncEnvelope(rawData) ? rawData : null,
     mailbox: isStationSyncEnvelope(rawData) ? rawData.mailbox || null : null,
+    mailboxVersions: responseMailboxVersions,
     action,
     lease: taskId && leaseToken
-      ? attachMailboxVersion(normalizedServerLease, responseMailboxVersion)
+      ? attachMailboxLaneVersions(normalizedServerLease, responseMailboxVersion, responseLaneVersions)
       : null,
   };
 }

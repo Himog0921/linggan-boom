@@ -135,6 +135,40 @@ POST /api/collection-tasks/:taskId/lease
 - `mode=full_sync` 表示信箱变化、本地有租约或插件要求完整同步，服务端会先对账，再按需返回可执行任务。
 - 插件状态型同步会带 `claimMode=status_only`，只更新在线状态和信箱版本，不会顺手接单；任务轮询同步才会领取任务。
 
+### V1.1 /sync 协议（v2.0.54+）
+
+v2.0.54 起，`/api/execution-stations/sync` 升级到 V1.1 协议，对应内容工作台手册第 5.5 节。插件发送 body 在保留旧字段（capabilities/platformAccounts/localLease/mailboxVersion/claimMode）的基础上，新增以下字段：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `protocolVersion` | string="3" | V1.1 协议版本，缺失或低于 "3" 会被服务端 401 拒绝 |
+| `pluginVersion` | string | 插件版本号，< 2.0.53 会被服务端 426 拒绝（VERSION_REJECTED） |
+| `stationSessionId` | string | 单次插件安装周期内的会话标识，持久化在 chrome.storage.local，换授权/换工位时清理 |
+| `mailboxCursors` | `{station: number, [lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
+| `capacity` | `{[lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 lane 的容量上报，服务端按此触发 claim 补货（当前插件用占位常量） |
+| `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组（替代旧 localLease 单对象，过渡期并存） |
+| `operations[]` | array | 6 类子操作（start_job/progress_update/commit_raw_snapshot/release_job/account_risk_control/control_ack）；插件本期恒为空数组，任务结果回传走 /ingest，风控走本地冷却 |
+| `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由旧 platformAccounts 字段转换 |
+
+V1.1 响应 body 结构：
+
+```json
+{
+  "serverTime": "2026-06-27T00:00:00.000Z",
+  "mailboxVersions": { "station": 108, "xhs": 5, "douyin": 7 },
+  "operationResults": {},
+  "reservations": [],
+  "controlCommands": [],
+  "nextSync": { "afterMs": 240000, "reason": "idle" }
+}
+```
+
+说明：
+- 插件兼容解析：V1.1 字段优先（mailboxVersions 对象 / nextSync 对象），缺失时回退旧字段（mailbox.version / nextSyncAfterMs 数字），保证过渡期插件继续工作。
+- `nextSync.reason` 前缀为 `mailbox` 或 `claim` 时，插件立即触发任务轮询（替代旧 `mode=full_sync` 判定）。
+- 426 错误：pluginVersion < 2.0.53 时返回，reasonCode=`VERSION_REJECTED`，用户需升级插件。
+- 401 错误：protocolVersion 缺失/低于 "3" 时返回，reasonCode=`PROTOCOL_VERSION_REJECTED`。
+
 Web Push 唤醒：
 
 ```text
