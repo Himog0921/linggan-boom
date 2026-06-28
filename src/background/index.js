@@ -2122,7 +2122,36 @@ async function sendExecutionStationHeartbeat(status = 'online') {
   if (!shouldPollWorkbenchTasks(config)) {
     return { success: false, retryable: false, reason: 'workbench_not_configured' };
   }
+
+  // V1.1 自动 claim：授权 active 但 identity 缺 stationId/stationToken（通过 request 流程授权，
+  // 服务端自动审批+建工位，但插件侧没收到 station 数据）→ 自动 claim 领取 station
+  const preIdentity = await executionStationClient.getStoredStationIdentity();
+  if (!preIdentity?.stationId || !preIdentity?.stationToken) {
+    try {
+      const stationKey = await executionStationClient.ensureStationKey();
+      const claimed = await pluginAuthorizationClient.claimApprovedRequest({
+        stationKey,
+        pluginVersion: getPluginVersion(),
+        browserLabel: navigator?.userAgent || '',
+        capabilities: (await collectExecutionStationRuntimeSnapshot(preIdentity)).capabilities,
+      });
+      if (claimed?.station) {
+        await saveConnectedWorkbenchStation({
+          station: claimed.station,
+          stationKey,
+          capabilities: (await collectExecutionStationRuntimeSnapshot(preIdentity)).capabilities,
+        });
+        console.log('[heartbeat] auto-claim 成功，已保存 station identity');
+      }
+    } catch (claimError) {
+      // claim 还没审批/已激活但没有 pending request → 静默跳过（不是每次心跳都要 log）
+    }
+  }
+
   const identity = await executionStationClient.getStoredStationIdentity();
+  if (!identity?.stationId || !identity?.stationToken) {
+    return { success: false, retryable: false, reason: 'station_not_registered' };
+  }
   const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
 
   // V1.1：把当前活动任务状态喂给 sync 协议，用于构造 activeLeases[] + capacity lane
