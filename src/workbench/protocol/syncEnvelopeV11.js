@@ -200,14 +200,23 @@ export function buildMailboxCursors({ stationVersion, laneVersions = {} } = {}) 
 export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
   const caps = toStringArray(capabilities);
   const lanes = new Set();
-  // 从 capabilities 推导 lane（兼容旧字段语义：capabilities 里通常含 'xhs' / 'douyin'）
+  // 从 capabilities 推导 platform：capabilities 格式是 'xhs.batchNotes' / 'douyin.collectAuthor'
+  // 提取 platform 前缀（'xhs' / 'douyin'）作为 capacity key
   for (const cap of caps) {
     const normalizedCap = normalizeString(cap).toLowerCase();
+    // 精确匹配（'xhs' / 'douyin'）
     if (KNOWN_CAPACITY_LANES.includes(normalizedCap)) {
       lanes.add(normalizedCap);
+      continue;
+    }
+    // 前缀匹配：'xhs.batchNotes' → 'xhs'
+    for (const knownLane of KNOWN_CAPACITY_LANES) {
+      if (normalizedCap.startsWith(knownLane + '.') || normalizedCap.startsWith(knownLane + '_')) {
+        lanes.add(knownLane);
+      }
     }
   }
-  // activeLane 优先（当前页面平台）
+  // activeLane（当前页面平台）
   const normalizedActiveLane = normalizeString(activeLane).toLowerCase();
   if (normalizedActiveLane && KNOWN_CAPACITY_LANES.includes(normalizedActiveLane)) {
     lanes.add(normalizedActiveLane);
@@ -215,7 +224,6 @@ export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
 
   const capacity = {};
   for (const lane of lanes) {
-    // 占位策略：所有 lane 都用相同常量；后续接入真实工时度量后替换
     capacity[lane] = { ...CAPACITY_PLACEHOLDER };
   }
   return capacity;
