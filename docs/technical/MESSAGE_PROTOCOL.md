@@ -12,7 +12,7 @@
 | Content → Background | `chrome.runtime.sendMessage` |
 | Content ↔ Injected Script | `window.postMessage` / `CustomEvent` / `postMessage` |
 | Content ↔ Dashboard | iframe `postMessage` |
-| Background ↔ 内容工作台 | HTTP JSON 轮询 / PATCH / ingest | 待执行任务查询、控制请求拉取、状态快照回写、事件/记录增量写入 |
+| Background ↔ 内容工作台 | HTTP JSON 轮询 / V1.1 sync / ingest | 执行工位同步、任务 reservation、续租进度、控制请求拉取、事件/记录增量写入 |
 | 内容工作台 → Background | Chrome Web Push | 有新任务或任务控制变化时叫醒插件，插件随后走原有 HTTP 接单链路 |
 
 > 说明：抖音链路除了 Content Script 自己的逻辑，还包含页面桥接、页面侧 fetch 和 API capture，不应再假设所有能力都只靠 Content 直接完成。
@@ -114,7 +114,6 @@ GET /api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after
 POST /api/plugin-authorizations/activate
 POST /api/execution-stations/register
 POST /api/execution-stations/sync
-POST /api/collection-tasks/:taskId/lease
 ```
 
 工位同步响应补充：
@@ -131,33 +130,61 @@ POST /api/collection-tasks/:taskId/lease
 ```
 
 说明：
-- `mode=mailbox_idle` 表示工位信箱没有变化，插件不需要进入完整接单。
-- `mode=full_sync` 表示信箱变化、本地有租约或插件要求完整同步，服务端会先对账，再按需返回可执行任务。
-- 插件状态型同步会带 `claimMode=status_only`，只更新在线状态和信箱版本，不会顺手接单；任务轮询同步才会领取任务。
+- `mode=mailbox_idle` / `mode=full_sync` 是旧响应兼容解析口径；当前 V1.1 服务端优先返回 `mailboxVersions`、`reservations[]`、`operationResults` 与 `nextSync`。
+- 插件从 v2.0.55 起不再发送 `claimMode`、`mailboxVersion`、`localLease` 等旧 body 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
+- 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成，不再调用旧 `/api/collection-tasks/:taskId/lease`。
 
-### V1.1 /sync 协议（v2.0.54+）
+### V1.1 /sync 协议（v2.0.55+）
 
-v2.0.54 起，`/api/execution-stations/sync` 升级到 V1.1 协议，对应内容工作台手册第 5.5 节。插件发送 body 在保留旧字段（capabilities/platformAccounts/localLease/mailboxVersion/claimMode）的基础上，新增以下字段：
+v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议，对应内容工作台手册第 5.5 节。插件授权身份走 `Authorization: Bearer <authorizationToken>` 请求头，body 只发送 V1.1 字段，不再混入旧 `authorizationId / pluginAuthorizationId / capabilities / platformAccounts / localLease / mailboxVersion / claimMode / forceFullSync`。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
 | `protocolVersion` | string="3" | V1.1 协议版本，缺失或低于 "3" 会被服务端 401 拒绝 |
-| `pluginVersion` | string | 插件版本号，< 2.0.53 会被服务端 426 拒绝（VERSION_REJECTED） |
+| `pluginVersion` | string | 插件版本号，低于服务端最低要求会被 426 拒绝（VERSION_REJECTED） |
 | `stationSessionId` | string | 单次插件安装周期内的会话标识，持久化在 chrome.storage.local，换授权/换工位时清理 |
-| `mailboxCursors` | `{station: number, [lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
-| `capacity` | `{[lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 lane 的容量上报，服务端按此触发 claim 补货（当前插件用占位常量） |
-| `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组（替代旧 localLease 单对象，过渡期并存） |
-| `operations[]` | array | 6 类子操作（start_job/progress_update/commit_raw_snapshot/release_job/account_risk_control/control_ack）；插件本期恒为空数组，任务结果回传走 /ingest，风控走本地冷却 |
-| `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由旧 platformAccounts 字段转换 |
+| `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
+| `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
+| `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组，替代旧 `localLease` 单对象 |
+| `operations[]` | array | 当前已接入 `start_job` 与 `progress_update`；`commit_raw_snapshot / release_job / account_risk_control / control_ack` 待后续迁移 |
+| `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
 V1.1 响应 body 结构：
 
 ```json
 {
   "serverTime": "2026-06-27T00:00:00.000Z",
-  "mailboxVersions": { "station": 108, "xhs": 5, "douyin": 7 },
-  "operationResults": {},
-  "reservations": [],
+  "mailboxVersions": {
+    "station": 108,
+    "xhs.monitor_patrol": 5,
+    "douyin.governance": 7
+  },
+  "operationResults": {
+    "start_job_123": {
+      "status": "accepted",
+      "attemptId": "attempt_123",
+      "leaseToken": "lease_123",
+      "leaseEpoch": 4,
+      "leaseExpiresAt": "2026-06-27T00:10:00.000Z"
+    }
+  },
+  "reservations": [
+    {
+      "jobId": "job_123",
+      "reserveToken": "reserve_123",
+      "reservationEpoch": 3,
+      "lane": "xhs.monitor_patrol",
+      "taskSpec": {
+        "id": "job_123",
+        "platform": "xhs",
+        "lane": "monitor_patrol",
+        "taskType": "xhs.batchNotes",
+        "source": "monitor",
+        "taskStrategy": "author_patrol",
+        "target": "https://www.xiaohongshu.com/user/profile/..."
+      }
+    }
+  ],
   "controlCommands": [],
   "nextSync": { "afterMs": 240000, "reason": "idle" }
 }
@@ -165,8 +192,10 @@ V1.1 响应 body 结构：
 
 说明：
 - 插件兼容解析：V1.1 字段优先（mailboxVersions 对象 / nextSync 对象），缺失时回退旧字段（mailbox.version / nextSyncAfterMs 数字），保证过渡期插件继续工作。
+- 插件收到 `reservations[]` 后不会直接执行，而是立刻再发一次 `/sync`，用 `start_job` operation 携带 `jobId / reserveToken / reservationEpoch` 确认开始；服务端接受后返回正式 `leaseToken`。
+- 插件运行中续租不再走旧 lease 口，而是发 `progress_update` operation，携带 `jobId / leaseToken / leaseEpoch / stage / progress`。
 - `nextSync.reason` 前缀为 `mailbox` 或 `claim` 时，插件立即触发任务轮询（替代旧 `mode=full_sync` 判定）。
-- 426 错误：pluginVersion < 2.0.53 时返回，reasonCode=`VERSION_REJECTED`，用户需升级插件。
+- 426 错误：pluginVersion 低于服务端最低要求时返回，reasonCode=`VERSION_REJECTED`，用户需升级插件。
 - 401 错误：protocolVersion 缺失/低于 "3" 时返回，reasonCode=`PROTOCOL_VERSION_REJECTED`。
 
 Web Push 唤醒：
@@ -185,7 +214,7 @@ collection_task_control
 
 说明：
 - 插件注册 push 订阅时仍要携带执行工位身份和插件授权，工作台会校验 station token 与授权归属。
-- `collection_task_available` / `collection_task_control` 只用于叫醒 Background；收到后插件立即运行既有任务检查，真正的任务内容仍从 `claim` 和后续租约接口读取。
+- `collection_task_available` / `collection_task_control` 只用于叫醒 Background；收到后插件立即运行既有任务检查，真正的任务内容仍从 `/sync` 的 `reservations[]` 与 `start_job` 结果读取。
 - 如果工作台未配置 VAPID、浏览器不支持 push、订阅过期或 push 发送失败，插件继续按低频对账节奏检查任务。
 
 授权与自动工位说明：

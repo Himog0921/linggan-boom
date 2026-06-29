@@ -80,12 +80,12 @@ function createMemoryOutboxStore() {
   };
 }
 
-test('delta outbox dedupes idempotency keys and flushes one ingest envelope', async () => {
+test('delta outbox dedupes idempotency keys and flushes one commit envelope', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       envelopes.push([taskId, envelope]);
       return {
         success: true,
@@ -127,12 +127,53 @@ test('delta outbox dedupes idempotency keys and flushes one ingest envelope', as
   assert.equal([...store.rows.values()][0].status, 'acked');
 });
 
+test('delta outbox waits for an in-flight flush instead of reporting a skipped flush', async () => {
+  const store = createMemoryOutboxStore();
+  let releaseCommit;
+  const commitGate = new Promise((resolve) => {
+    releaseCommit = resolve;
+  });
+  const outbox = createDeltaOutbox({
+    store,
+    commitDelta: async (taskId, envelope) => {
+      await commitGate;
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_wait_flush',
+    pluginRunId: 'run_wait_flush',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_PROGRESS,
+    source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+    sequence: 1,
+    payload: { message: 'waiting flush' },
+  });
+
+  const firstFlush = outbox.flush();
+  await Promise.resolve();
+  const secondFlush = outbox.flush();
+  releaseCommit();
+  const [firstResult, secondResult] = await Promise.all([firstFlush, secondFlush]);
+
+  assert.equal(firstResult.success, true);
+  assert.equal(secondResult.success, true);
+  assert.equal(secondResult.reason, undefined);
+  assert.equal([...store.rows.values()][0].status, 'acked');
+});
+
 test('delta outbox resolves executor identity at flush time', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       envelopes.push([taskId, envelope]);
       return {
         success: true,
@@ -160,12 +201,12 @@ test('delta outbox resolves executor identity at flush time', async () => {
   assert.equal(envelopes[0][1].executorInstanceId, 'persisted_executor_id');
 });
 
-test('delta outbox attaches lease credentials and page fingerprint to ingest envelope', async () => {
+test('delta outbox attaches lease credentials and page fingerprint to commit envelope', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       envelopes.push([taskId, envelope]);
       return {
         success: true,
@@ -214,7 +255,7 @@ test('delta outbox preserves explicit event execution identity fields', async ()
   const envelopes = [];
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       envelopes.push([taskId, envelope]);
       return {
         success: true,
@@ -253,7 +294,7 @@ test('delta outbox prepares record payloads before storing them', async () => {
   const envelopes = [];
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       envelopes.push([taskId, envelope]);
       return {
         success: true,
@@ -294,7 +335,7 @@ test('delta outbox can attach data foundation payload before storing note record
   const store = createMemoryOutboxStore();
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async () => ({ success: true }),
+    commitDelta: async () => ({ success: true }),
     prepareRecordPayload: async (record) => enrichNoteWithDataFoundationPayload(record.payload, record),
     executorInstanceId: 'plugin_1',
     autoFlush: false,
@@ -331,7 +372,7 @@ test('delta outbox rejects invalid extractor records before they enter the queue
   const store = createMemoryOutboxStore();
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async () => ({ success: true }),
+    commitDelta: async () => ({ success: true }),
     autoFlush: false,
   });
 
@@ -362,7 +403,7 @@ test('delta outbox schedules retry on network failure then accepts duplicate ack
   let calls = 0;
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       calls += 1;
       if (calls === 1) {
         const error = new Error('network down');
@@ -409,7 +450,7 @@ test('delta outbox recovers stale in-flight rows before flushing', async () => {
   let calls = 0;
   const outbox = createDeltaOutbox({
     store,
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       calls += 1;
       return {
         success: true,

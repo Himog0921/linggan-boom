@@ -4,12 +4,14 @@ import assert from 'node:assert/strict';
 import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
 import {
   claimCollectionTaskLease,
+  commitCollectionTaskDeltaThroughSync,
   createTaskLeaseMemoryStore,
   createTaskLeaseIdleSnapshot,
   formatTaskLeaseIdleNotice,
   createTaskLeaseStorageStore,
   reconcileExecutionStationLease,
   renewCollectionTaskLease,
+  syncCollectionTaskStatusThroughSync,
 } from '../src/workbench/runtime/taskLeaseClient.js';
 
 function createMemoryStorage(initial = {}) {
@@ -28,11 +30,369 @@ function createMemoryStorage(initial = {}) {
   };
 }
 
-test('task lease client claims through station sync and renews through lease endpoints', async () => {
+test('task lease client starts a V1.1 reservation immediately after claim sync', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    if (body.operations?.[0]?.type === 'start_job') {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            mailboxVersions: { station: 12, 'xhs.monitor_patrol': 3 },
+            operationResults: {
+              [body.operations[0].operationId]: {
+                status: 'accepted',
+                attemptId: 'attempt-v11',
+                leaseToken: 'lease-v11',
+                leaseEpoch: 4,
+                leaseExpiresAt: '2026-04-17T12:05:00.000Z',
+              },
+            },
+            reservations: [],
+            controlCommands: [],
+            nextSync: { afterMs: 30000, reason: 'running' },
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 11, 'xhs.monitor_patrol': 2 },
+          operationResults: {},
+          reservations: [{
+            jobId: 'job-v11',
+            reserveToken: 'reserve-v11',
+            reservationEpoch: 3,
+            lane: 'xhs.monitor_patrol',
+            startBefore: '2026-04-17T12:03:00.000Z',
+            taskSpec: {
+              platform: 'xhs',
+              lane: 'monitor_patrol',
+              taskType: 'xhs.collectAuthor',
+              taskStrategy: 'author_patrol',
+              target: 'https://www.xiaohongshu.com/user/profile/abc',
+              targetKey: 'xhs:author:abc',
+              payload: {},
+            },
+          }],
+          controlCommands: [],
+          nextSync: { afterMs: 1000, reason: 'reservations_granted' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore();
+
+  const claim = await claimCollectionTaskLease({
+    serverUrl: 'http://localhost:3000',
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationToken: 'auth_token_1',
+    capabilities: ['xhs.collectAuthor'],
+    platformAccounts: [{ platform: 'xhs', purpose: 'author_monitor', healthStatus: 'healthy' }],
+    pluginVersion: '2.0.56',
+    fetchFn,
+    store,
+  });
+  const firstBody = JSON.parse(requests[0][1].body);
+  const secondBody = JSON.parse(requests[1][1].body);
+  const stored = await store.read();
+
+  assert.equal(requests.length, 2);
+  assert.equal(firstBody.mode, 'claim');
+  assert.equal(secondBody.mode, 'claim');
+  assert.equal(secondBody.operations[0].type, 'start_job');
+  assert.equal(secondBody.operations[0].jobId, 'job-v11');
+  assert.equal(claim.task.id, 'job-v11');
+  assert.equal(claim.lease.leaseToken, 'lease-v11');
+  assert.equal(stored.taskId, 'job-v11');
+  assert.equal(stored.leaseToken, 'lease-v11');
+  assert.equal(stored.mailboxLaneVersions['xhs.monitor_patrol'], 3);
+});
+
+test('task lease client commits outbox records through V1.1 commit_raw_snapshot', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 14 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'accepted',
+              rawSnapshotId: 'raw-1',
+              captureId: op.captureId,
+              checksumAlgorithm: 'sha256',
+              checksumValue: 'abc',
+              contentLength: 123,
+              snapshotStatus: 'committed',
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-commit-1',
+    leaseToken: 'lease-commit-1',
+    leaseEpoch: 6,
+    attemptId: 'attempt-commit-1',
+  });
+
+  const response = await commitCollectionTaskDeltaThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-commit-1',
+    envelope: {
+      taskId: 'job-commit-1',
+      pluginRunId: 'run-commit-1',
+      cursor: 'cursor-1',
+      attemptId: 'attempt-commit-1',
+      leaseToken: 'lease-commit-1',
+      leaseEpoch: 6,
+      executionContext: { platform: 'xhs', expectedTargetKey: 'xhs:note:1' },
+      records: [{
+        recordType: 'note',
+        externalRecordId: 'note-1',
+        sequence: 1,
+        collectedAt: '2026-04-17T12:00:00.000Z',
+        idempotencyKey: 'record-key-1',
+        payload: { noteId: 'note-1', title: 'hello' },
+      }],
+      events: [{ idempotencyKey: 'event-key-1' }],
+    },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    capabilities: ['xhs.collectAuthor'],
+    pluginVersion: '2.0.58',
+    fetchFn,
+    store,
+  });
+  const body = JSON.parse(requests[0][1].body);
+  const op = body.operations[0];
+
+  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
+  assert.equal(body.mode, 'writeback');
+  assert.equal(body.capacity, undefined);
+  assert.equal(op.type, 'commit_raw_snapshot');
+  assert.equal(op.jobId, 'job-commit-1');
+  assert.equal(op.leaseToken, 'lease-commit-1');
+  assert.equal(op.leaseEpoch, 6);
+  assert.equal(op.records[0].recordType, 'note');
+  assert.equal(op.records[0].idempotencyKey, 'record-key-1');
+  assert.deepEqual(response.acceptedRecordKeys, ['record-key-1']);
+  assert.deepEqual(response.acceptedEventKeys, ['event-key-1']);
+});
+
+test('task lease client commits a terminal empty result as a raw snapshot', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 16 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'accepted',
+              rawSnapshotId: 'raw-empty-1',
+              captureId: op.captureId,
+              snapshotStatus: 'committed',
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-empty-1',
+    leaseToken: 'lease-empty-1',
+    leaseEpoch: 3,
+    attemptId: 'attempt-empty-1',
+  });
+
+  await commitCollectionTaskDeltaThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-empty-1',
+    envelope: {
+      taskId: 'job-empty-1',
+      pluginRunId: 'run-empty-1',
+      attemptId: 'attempt-empty-1',
+      leaseToken: 'lease-empty-1',
+      leaseEpoch: 3,
+      snapshot: { status: 'completed', progress: 100 },
+      records: [],
+      events: [{ idempotencyKey: 'event-empty-1' }],
+    },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.58',
+    fetchFn,
+    store,
+  });
+  const body = JSON.parse(requests[0][1].body);
+  const op = body.operations[0];
+
+  assert.equal(op.type, 'commit_raw_snapshot');
+  assert.equal(op.jobId, 'job-empty-1');
+  assert.equal(op.leaseToken, 'lease-empty-1');
+  assert.deepEqual(op.records, []);
+});
+
+test('task lease client syncs status updates without the retired collection task PATCH route', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 15 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'accepted',
+              leaseExpiresAt: '2026-04-17T12:10:00.000Z',
+              leaseEpoch: op.leaseEpoch,
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-status-1',
+    leaseToken: 'lease-status-1',
+    leaseEpoch: 2,
+  });
+
+  await syncCollectionTaskStatusThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-status-1',
+    patch: { status: 'running', progress: 50 },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.58',
+    fetchFn,
+    store,
+  });
+  const body = JSON.parse(requests[0][1].body);
+
+  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
+  assert.equal(body.mode, 'status');
+  assert.equal(body.capacity, undefined);
+  assert.equal(body.operations[0].type, 'progress_update');
+  assert.equal(body.operations[0].jobId, 'job-status-1');
+});
+
+test('task lease client can defer terminal release while raw result is still being committed', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 17 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'accepted',
+              leaseEpoch: op.leaseEpoch,
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-terminal-1',
+    leaseToken: 'lease-terminal-1',
+    leaseEpoch: 5,
+  });
+
+  await syncCollectionTaskStatusThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-terminal-1',
+    patch: { status: 'failed', progress: 100, deferRelease: true },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.58',
+    fetchFn,
+    store,
+  });
+  const body = JSON.parse(requests[0][1].body);
+
+  assert.equal(body.operations[0].type, 'progress_update');
+  assert.equal(body.operations[0].stage, 'failed');
+});
+
+test('task lease client claims through station sync and renews through progress_update', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
     if (url.endsWith('/api/execution-stations/sync')) {
+      const body = JSON.parse(options.body || '{}');
+      if (body.operations?.[0]?.type === 'progress_update') {
+        return {
+          ok: true,
+          status: 200,
+          async json() {
+            return {
+              mailboxVersions: { station: 13 },
+              operationResults: {
+                [body.operations[0].operationId]: {
+                  status: 'accepted',
+                  leaseToken: 'lease-token-1',
+                  leaseEpoch: 4,
+                  leaseExpiresAt: '2026-04-17T12:10:00.000Z',
+                },
+              },
+              reservations: [],
+              controlCommands: [],
+              nextSync: { afterMs: 30000, reason: 'running' },
+            };
+          },
+        };
+      }
       return {
         ok: true,
         status: 200,
@@ -95,6 +455,7 @@ test('task lease client claims through station sync and renews through lease end
     authorizationId: 'auth_1',
     authorizationToken: 'auth_token_1',
     status: 'running',
+    pluginVersion: '2.0.55',
     fetchFn,
     store,
   });
@@ -103,25 +464,30 @@ test('task lease client claims through station sync and renews through lease end
   assert.equal((await store.read()).leaseToken, 'lease-token-1');
   assert.equal((await store.read()).attemptId, 'attempt-1');
   assert.equal((await store.read()).attemptNumber, 2);
-  assert.equal((await store.read()).leaseEpoch, 3);
+  assert.equal((await store.read()).leaseEpoch, 4);
   assert.equal(renewal.expiresAt, '2026-04-17T12:10:00.000Z');
   assert.equal((await store.read()).expiresAt, '2026-04-17T12:10:00.000Z');
-  assert.equal((await store.read()).mailboxVersion, 12);
+  assert.equal((await store.read()).mailboxVersion, 13);
   assert.equal(requests.length, 2);
   assert.ok(requests[0][0].endsWith('/api/execution-stations/sync'));
   assert.equal(requests[0][0].includes('/api/execution-stations/dispatch'), false);
   assert.equal(requests[0][0].includes('/api/collection-tasks/claim'), false);
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
-  assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
-  assert.equal(JSON.parse(requests[0][1].body).pluginAuthorizationId, 'auth_1');
-  assert.equal(JSON.parse(requests[0][1].body).pluginVersion, '2.0.35');
-  assert.deepEqual(JSON.parse(requests[0][1].body).localLease, null);
-  assert.equal(JSON.parse(requests[0][1].body).mailboxVersion, undefined);
+  const claimBody = JSON.parse(requests[0][1].body);
+  assert.equal(claimBody.pluginVersion, '2.0.35');
+  assert.equal(claimBody.mode, 'claim');
+  assert.equal(Object.prototype.hasOwnProperty.call(claimBody, 'authorizationId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(claimBody, 'pluginAuthorizationId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(claimBody, 'localLease'), false);
+  assert.equal(claimBody.mailboxVersion, undefined);
+  assert.ok(requests[1][0].endsWith('/api/execution-stations/sync'));
+  assert.equal(requests[1][0].includes('/api/collection-tasks/'), false);
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
-  assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
-  assert.equal(JSON.parse(requests[1][1].body).attemptId, 'attempt-1');
-  assert.equal(JSON.parse(requests[1][1].body).attemptNumber, 2);
-  assert.equal(JSON.parse(requests[1][1].body).leaseEpoch, 3);
+  const renewBody = JSON.parse(requests[1][1].body);
+  assert.equal(renewBody.operations[0].type, 'progress_update');
+  assert.equal(renewBody.operations[0].jobId, 'task-lease-1');
+  assert.equal(renewBody.operations[0].leaseToken, 'lease-token-1');
+  assert.equal(renewBody.operations[0].leaseEpoch, 3);
 });
 
 test('task lease client can force a full station sync while keeping mailbox version', async () => {
@@ -163,8 +529,10 @@ test('task lease client can force a full station sync while keeping mailbox vers
   });
 
   const body = JSON.parse(requests[0][1].body);
-  assert.equal(body.mailboxVersion, 12);
-  assert.equal(body.forceFullSync, true);
+  assert.equal(body.mailboxCursors.station, 12);
+  assert.equal(body.mode, 'claim');
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxVersion'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'forceFullSync'), false);
 });
 
 test('task lease client exposes renewal conflict status', async () => {
@@ -391,9 +759,9 @@ test('task lease client reconciles a server lease into local storage', async () 
   assert.equal(requests[0][1].headers.Authorization, 'Bearer auth_token_1');
   const body = JSON.parse(requests[0][1].body);
   assert.equal(body.stationId, 'station-1');
-  assert.equal(body.localLease.leaseToken, 'local-token');
+  assert.equal(body.activeLeases[0].leaseToken, 'local-token');
   assert.equal(body.mailboxVersion, undefined);
-  assert.equal(body.claimMode, 'status_only');
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'claimMode'), false);
   assert.equal(body.pluginVersion, '2.0.7');
 });
 

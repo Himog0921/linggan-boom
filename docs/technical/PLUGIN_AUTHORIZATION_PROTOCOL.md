@@ -135,14 +135,15 @@ Authorization: Bearer <authorizationToken>
 
 ### 4.3 心跳 / 接单 / 续租 / 同步
 
-以下请求都必须携带插件授权 Bearer Token，且服务端同时校验 `authorizationId`：
+以下请求都必须携带插件授权 Bearer Token；V1.1 派单/续租身份以请求头为准，不再要求 body 重复携带旧 `authorizationId`：
 
 - `POST /api/execution-stations/sync`
-- `POST /api/collection-tasks/:taskId/lease`
 - `POST /api/collect/batch`
 - `POST /api/media-assets/cover`（上传采集封面图片本体，返回工作台稳定 `publicUrl`）
 - `POST /api/collection-tasks/:taskId/ingest`
 - `GET /api/collection-tasks/:taskId/control-requests`
+
+接单通过 `/api/execution-stations/sync` 的 `capacity → reservations[] → start_job` 完成；运行中的续租和进度上报通过同一路径的 `progress_update` operation 完成，不再调用旧 `/api/collection-tasks/:taskId/lease`。
 
 执行工位模式下，插件不再调用 `GET /api/collection-tasks` 恢复扫描任务列表，也不再调用旧的 `heartbeat / reconcile / dispatch` 工位接口；旧版本如果继续高频轮询，会被工作台入口层拦截。
 

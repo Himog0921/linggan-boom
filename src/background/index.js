@@ -5,9 +5,6 @@ import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
-  patchCollectionTask,
-  fetchCollectionTaskControlRequests,
-  ingestCollectionTaskDelta,
   ensureFlywheelDataSession,
   prepareNotesWithStableCovers,
   prepareRecordWithStableCover,
@@ -29,9 +26,11 @@ import { canDispatchTaskFromCapabilityReport } from '../workbench/runtime/capabi
 import { createExecutionStationClient } from '../workbench/runtime/executionStationClient.js';
 import {
   claimCollectionTaskLease,
+  commitCollectionTaskDeltaThroughSync,
   createTaskLeaseStorageStore,
   reconcileExecutionStationLease,
   renewCollectionTaskLease,
+  syncCollectionTaskStatusThroughSync,
 } from '../workbench/runtime/taskLeaseClient.js';
 import {
   collectStationRuntimeStates,
@@ -913,8 +912,30 @@ async function clearBadge(tabId) {
   await chrome.action.setBadgeText({ text: '', tabId }).catch(() => {});
 }
 
-async function handleRiskControl300017(activeTask) {
+async function syncStatusForActiveTask(activeTask = {}, patch = {}) {
   const config = await getAuthorizedFlywheelConfig();
+  const identity = await executionStationClient.getStoredStationIdentity();
+  const authorization = await pluginAuthorizationClient.getStoredAuthorization();
+  if (!shouldPollWorkbenchTasks(config) || !identity?.stationId || !identity?.stationToken) {
+    return { success: true, skipped: true, reason: 'station_not_registered' };
+  }
+  const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
+  return syncCollectionTaskStatusThroughSync({
+    serverUrl: config.serverUrl,
+    taskId: activeTask.taskId,
+    patch,
+    stationId: identity.stationId,
+    stationToken: identity.stationToken,
+    authorizationId: authorization.authorizationId,
+    authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
+    capabilities: runtimeSnapshot.capabilities,
+    platformAccounts: runtimeSnapshot.platformAccounts,
+    pluginVersion: getPluginVersion(),
+    store: taskLeaseStore,
+  });
+}
+
+async function handleRiskControl300017(activeTask) {
   const accountId = resolveRiskControlAccountId(activeTask);
 
   if (accountId) {
@@ -924,7 +945,7 @@ async function handleRiskControl300017(activeTask) {
   const nextAccount = await selectAvailableAccount('xhs');
   if (!nextAccount) {
     const errorMessage = '所有账号均已触发风控限制，请等待冷却或添加新账号';
-    await patchCollectionTask(config, activeTask.taskId, {
+    await syncStatusForActiveTask(activeTask, {
       status: 'paused',
       errorMessage,
     });
@@ -943,7 +964,7 @@ async function handleRiskControl300017(activeTask) {
   const result = await injectCookiesForAccount(nextAccount.cookieJson);
   if (!result.success) {
     const errorMessage = '切换账号 Cookie 注入失败';
-    await patchCollectionTask(config, activeTask.taskId, {
+    await syncStatusForActiveTask(activeTask, {
       status: 'paused',
       errorMessage,
     });
@@ -963,7 +984,7 @@ async function handleRiskControl300017(activeTask) {
     accountId: nextAccount.accountId,
     accountName: nextAccount.name,
   });
-  await patchCollectionTask(config, activeTask.taskId, {
+  await syncStatusForActiveTask(activeTask, {
     status: 'paused',
     errorMessage: activeTaskPatch.errorMessage,
   });
@@ -2182,7 +2203,29 @@ let getCurrentTaskExecutionContext = () => null;
 
 const taskDeltaReporter = createTaskDeltaReporter({
   store: workbenchOutboxStore,
-  ingestCollectionTaskDelta,
+  commitTaskDelta: async (config, taskId, envelope) => {
+    const identity = await executionStationClient.getStoredStationIdentity();
+    const authorization = await pluginAuthorizationClient.getStoredAuthorization();
+    if (!identity?.stationId || !identity?.stationToken) {
+      const error = new Error('station_not_registered');
+      error.retryable = true;
+      throw error;
+    }
+    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
+    return commitCollectionTaskDeltaThroughSync({
+      serverUrl: config.serverUrl,
+      taskId,
+      envelope,
+      stationId: identity.stationId,
+      stationToken: identity.stationToken,
+      authorizationId: authorization.authorizationId,
+      authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
+      capabilities: runtimeSnapshot.capabilities,
+      platformAccounts: runtimeSnapshot.platformAccounts,
+      pluginVersion: getPluginVersion(),
+      store: taskLeaseStore,
+    });
+  },
   getFlywheelConfig: getAuthorizedFlywheelConfig,
   prepareRecordPayload: async (config, record) => {
     if (String(record?.recordType || '').trim() !== WORKBENCH_RECORD_TYPE.NOTE) {
@@ -2345,6 +2388,7 @@ const taskPoller = createTaskPoller({
       authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       status: options?.status || 'running',
+      pluginVersion: getPluginVersion(),
       store: taskLeaseStore,
     });
   },
@@ -2380,12 +2424,30 @@ const taskPoller = createTaskPoller({
   patchTask: async (taskId, patch) => {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return null;
-    return patchCollectionTask(config, taskId, patch);
+    const identity = await executionStationClient.getStoredStationIdentity();
+    const authorization = await pluginAuthorizationClient.getStoredAuthorization();
+    if (!identity?.stationId || !identity?.stationToken) {
+      return { success: true, skipped: true, reason: 'station_not_registered' };
+    }
+    const runtimeSnapshot = await collectExecutionStationRuntimeSnapshot(identity);
+    return syncCollectionTaskStatusThroughSync({
+      serverUrl: config.serverUrl,
+      taskId,
+      patch,
+      stationId: identity.stationId,
+      stationToken: identity.stationToken,
+      authorizationId: authorization.authorizationId,
+      authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
+      capabilities: runtimeSnapshot.capabilities,
+      platformAccounts: runtimeSnapshot.platformAccounts,
+      pluginVersion: getPluginVersion(),
+      store: taskLeaseStore,
+    });
   },
   fetchControlRequests: async (taskId, options) => {
-    const config = await getAuthorizedFlywheelConfig();
-    if (!shouldPollWorkbenchTasks(config)) return { success: true, controls: [], nextCursor: '' };
-    return fetchCollectionTaskControlRequests(config, taskId, options);
+    void taskId;
+    void options;
+    return { success: true, controls: [], nextCursor: '' };
   },
   applyTaskControl: async (control = {}) => {
     const taskId = String(control.taskId || '').trim();
@@ -2713,6 +2775,35 @@ chrome.runtime.onInstalled?.addListener(() => {
 globalThis.self?.addEventListener?.('push', (event) => {
   event.waitUntil(handleWorkbenchPushEvent(event));
 });
+
+// V1.1（2026-06-29）：tabs.onRemoved — 用户手动关闭标签页时自动释放关联任务。
+// 此前无此监听器，关闭的标签页导致任务永久卡在"执行中"。
+chrome.tabs?.onRemoved?.addListener((tabId) => {
+  for (const [taskId, trackedTabId] of navigatedTabs.entries()) {
+    if (trackedTabId === tabId) {
+      navigatedTabs.delete(taskId);
+      void persistNavigatedTaskTabsSnapshot();
+      console.log(`[background] tab ${tabId} removed — cleaned up navigated task ${taskId}`);
+      break;
+    }
+  }
+  // 也通知 workbenchTaskRegistry 清理（让 taskPoller 感知 tab 已消失）
+  for (const [taskId, binding] of workbenchTaskRegistry.entries()) {
+    if (binding?.tabId === tabId) {
+      workbenchTaskRegistry.delete(taskId);
+      break;
+    }
+  }
+});
+
+// V1.1（2026-06-29）：runtime.onSuspend — SW 即将被 Chrome 终止时持久化关键状态。
+// 此前 SW 重启丢失内存状态导致任务成为孤儿。
+if (typeof chrome?.runtime?.onSuspend?.addListener === 'function') {
+  chrome.runtime.onSuspend.addListener(() => {
+    void persistNavigatedTaskTabsSnapshot().catch(() => {});
+    void persistActiveTaskContext().catch(() => {});
+  });
+}
 
 chrome.alarms?.create(WORKBENCH_TASK_POLL_ALARM, { periodInMinutes: INITIAL_WORKBENCH_TASK_POLL_MINUTES });
 chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 });

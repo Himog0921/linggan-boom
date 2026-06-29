@@ -63,6 +63,14 @@ function normalizeLeaseSnapshot({
   return snapshot;
 }
 
+function isPlainObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value);
+}
+
+function normalizePayload(value = {}) {
+  return isPlainObject(value) ? { ...value } : {};
+}
+
 function addLeaseAttemptFields(body = {}, lease = {}) {
   const attemptId = normalizeString(lease?.attemptId);
   const leaseEpoch = toOptionalInteger(lease?.leaseEpoch);
@@ -186,6 +194,9 @@ function isStationSyncEnvelope(data = {}) {
       || Object.prototype.hasOwnProperty.call(data, 'reconcile')
       || Object.prototype.hasOwnProperty.call(data, 'claim')
       || Object.prototype.hasOwnProperty.call(data, 'mailbox')
+      || Object.prototype.hasOwnProperty.call(data, 'mailboxVersions')
+      || Object.prototype.hasOwnProperty.call(data, 'reservations')
+      || Object.prototype.hasOwnProperty.call(data, 'operationResults')
       || Object.prototype.hasOwnProperty.call(data, 'mode')
     )
   );
@@ -193,7 +204,8 @@ function isStationSyncEnvelope(data = {}) {
 
 function extractMailboxVersion(data = {}) {
   return toOptionalInteger(
-    data?.mailboxVersion
+    data?.mailboxVersions?.station
+    ?? data?.mailboxVersion
     ?? data?.mailbox?.version
     ?? data?.sync?.mailbox?.version
     ?? data?.dispatch?.mailbox?.version,
@@ -221,6 +233,246 @@ function attachMailboxLaneVersions(snapshot = {}, mailboxVersion, laneVersions =
   return {
     ...withStation,
     mailboxLaneVersions: { ...laneVersions },
+  };
+}
+
+function acceptedDeltaKeys(envelope = {}) {
+  return {
+    acceptedEventKeys: Array.isArray(envelope?.events)
+      ? envelope.events.map((event) => normalizeString(event?.idempotencyKey)).filter(Boolean)
+      : [],
+    acceptedRecordKeys: Array.isArray(envelope?.records)
+      ? envelope.records.map((record) => normalizeString(record?.idempotencyKey)).filter(Boolean)
+      : [],
+  };
+}
+
+function isTerminalSnapshotStatus(status = '') {
+  const normalized = normalizeString(status).toLowerCase();
+  return normalized === 'completed'
+    || normalized === 'failed'
+    || normalized === 'stopped'
+    || normalized === 'cancelled'
+    || normalized === 'canceled';
+}
+
+function normalizeRawRecordType(value = '') {
+  const normalized = normalizeString(value);
+  if (normalized === 'note' || normalized === 'comment' || normalized === 'author') return normalized;
+  return 'metric';
+}
+
+function operationObservedAt(envelope = {}, fallback = new Date().toISOString()) {
+  const snapshotAt = normalizeString(envelope?.snapshot?.latestHeartbeatAt);
+  if (snapshotAt) return snapshotAt;
+  const recordAt = Array.isArray(envelope?.records)
+    ? normalizeString(envelope.records.find((record) => normalizeString(record?.collectedAt))?.collectedAt)
+    : '';
+  return recordAt || fallback;
+}
+
+function captureIdForEnvelope(taskId = '', envelope = {}) {
+  const cursor = normalizeString(envelope?.cursor);
+  const pluginRunId = normalizeString(envelope?.pluginRunId);
+  const attemptId = normalizeString(envelope?.attemptId);
+  return [
+    'plugin-v11',
+    normalizeString(taskId),
+    pluginRunId || 'run',
+    attemptId || 'attempt',
+    cursor || Date.now(),
+  ].join(':');
+}
+
+function rawRecordsFromEnvelope(envelope = {}, fallbackObservedAt = new Date().toISOString()) {
+  return (Array.isArray(envelope?.records) ? envelope.records : [])
+    .filter((record) => record && typeof record === 'object' && !Array.isArray(record))
+    .map((record, index) => ({
+      recordType: normalizeRawRecordType(record.recordType),
+      platform: normalizeString(record.platform || envelope?.executionContext?.platform),
+      targetKey: normalizeString(record.targetKey || ''),
+      externalRecordId: normalizeString(record.externalRecordId || ''),
+      sequence: toOptionalInteger(record.sequence) ?? index,
+      payload: isPlainObject(record.payload) ? record.payload : {},
+      payloadHash: normalizeString(record.payloadHash || ''),
+      observedAt: normalizeString(record.observedAt || record.collectedAt) || fallbackObservedAt,
+      collectedAt: normalizeString(record.collectedAt) || null,
+      idempotencyKey: normalizeString(record.idempotencyKey),
+      dedupeKey: normalizeString(record.dedupeKey || ''),
+    }))
+    .filter((record) => record.idempotencyKey);
+}
+
+function nextPollAfterMsFromSync(data = {}) {
+  return toFiniteNumber(data?.nextSync?.afterMs, 0)
+    || toFiniteNumber(data?.nextSyncAfterMs, 0);
+}
+
+function inferTaskTypeFromReservation(reservation = {}) {
+  const spec = normalizePayload(reservation.taskSpec);
+  const payload = normalizePayload(spec.payload);
+  const platform = normalizeString(spec.platform || reservation.platform || payload.platform);
+  const collectionProfile = normalizeString(spec.collectionProfile || payload.collectionProfile);
+  const jobType = normalizeString(spec.jobType || payload.jobType);
+
+  const explicitTaskType = normalizeString(
+    spec.taskType
+    || payload.taskType
+    || payload.originalTaskType
+    || payload.externalTaskType,
+  );
+  if (explicitTaskType) return explicitTaskType;
+
+  if (platform === 'xhs') {
+    if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'xhs.batchComments';
+    if (jobType.includes('author')) return 'xhs.collectAuthor';
+    return 'xhs.batchNotes';
+  }
+  if (platform === 'douyin') {
+    if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'douyin.batchComments';
+    if (jobType.includes('author') || collectionProfile === 'note_detail') return 'douyin.collectAuthor';
+    return 'douyin.batchNotes';
+  }
+  return '';
+}
+
+function buildTaskFromReservation(reservation = {}) {
+  const spec = normalizePayload(reservation.taskSpec);
+  const payload = normalizePayload(spec.payload);
+  const jobId = normalizeString(reservation.jobId || spec.id || payload.id || payload.taskId);
+  const platform = normalizeString(spec.platform || reservation.platform || payload.platform);
+  const taskType = inferTaskTypeFromReservation(reservation);
+  const taskStrategy = normalizeString(spec.taskStrategy || payload.taskStrategy || payload.strategy);
+  const source = normalizeString(spec.source || payload.source || payload.sourceSystem || 'workbench');
+  const target = normalizeString(
+    spec.target
+    || payload.target
+    || payload.url
+    || payload.canonicalUrl
+    || payload.profileUrl
+    || payload.noteUrl
+    || spec.targetKey,
+  );
+
+  return {
+    id: jobId,
+    taskId: jobId,
+    platform,
+    taskType,
+    source,
+    taskStrategy,
+    target,
+    lane: normalizeString(reservation.lane || spec.lane),
+    collectionProfile: normalizeString(spec.collectionProfile),
+    jobType: normalizeString(spec.jobType),
+    payload: {
+      ...payload,
+      platform,
+      target,
+      targetKey: normalizeString(spec.targetKey || payload.targetKey),
+      taskStrategy,
+      collectionProfile: normalizeString(spec.collectionProfile),
+      jobType: normalizeString(spec.jobType),
+    },
+  };
+}
+
+function buildLeaseFromStartResult(reservation = {}, result = {}) {
+  const taskId = normalizeString(reservation.jobId);
+  const leaseToken = normalizeString(result.leaseToken);
+  if (!taskId || !leaseToken) return null;
+  const lease = {
+    taskId,
+    leaseToken,
+    expiresAt: normalizeString(result.leaseExpiresAt || result.expiresAt),
+  };
+  const attemptId = normalizeString(result.attemptId);
+  const leaseEpoch = toOptionalInteger(result.leaseEpoch);
+  if (attemptId) lease.attemptId = attemptId;
+  if (leaseEpoch !== undefined) lease.leaseEpoch = leaseEpoch;
+  return lease;
+}
+
+function firstReservation(data = {}) {
+  return Array.isArray(data?.reservations) && data.reservations.length > 0
+    ? data.reservations[0]
+    : null;
+}
+
+async function startReservationThroughSync({
+  rawData = {},
+  serverUrl = '',
+  stationId = '',
+  stationToken = '',
+  authorizationId = '',
+  authorizationToken = '',
+  capabilities = [],
+  platformAccounts = [],
+  pluginVersion = '',
+  stationSessionId = '',
+  fetchFn,
+} = {}) {
+  const reservation = firstReservation(rawData);
+  if (!reservation?.jobId || !reservation?.reserveToken) return rawData;
+
+  const mailboxVersions = extractMailboxVersionsFromResponse(rawData);
+  const operationId = `start_${normalizeString(reservation.jobId)}_${Date.now()}`;
+  const body = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    status: 'online',
+    capabilities,
+    platformAccounts,
+    mailboxStationVersion: mailboxVersions.station,
+    mailboxLaneVersions: mailboxVersions.lanes,
+    mode: 'claim',
+    includeCapacity: false,
+    operations: [{
+      operationId,
+      type: 'start_job',
+      jobId: normalizeString(reservation.jobId),
+      reserveToken: normalizeString(reservation.reserveToken),
+      reservationEpoch: toOptionalInteger(reservation.reservationEpoch),
+      startedAt: new Date().toISOString(),
+    }],
+  });
+
+  const startData = await postJson({
+    serverUrl,
+    path: '/api/execution-stations/sync',
+    fetchFn,
+    authorizationToken,
+    body,
+  });
+  const result = startData?.operationResults?.[operationId] || null;
+  if (result?.status !== 'accepted') {
+    return {
+      ...startData,
+      claim: {
+        task: null,
+        reason: {
+          code: normalizeString(result?.reason || 'start_job_rejected'),
+          message: normalizeString(result?.reason || '预留任务未能开始执行。'),
+        },
+        nextPollAfterMs: nextPollAfterMsFromSync(startData) || 30000,
+      },
+    };
+  }
+
+  const lease = buildLeaseFromStartResult(reservation, result);
+  return {
+    ...startData,
+    reservation,
+    claim: {
+      task: buildTaskFromReservation(reservation),
+      lease,
+      attempt: {
+        attemptId: normalizeString(result.attemptId),
+      },
+    },
   };
 }
 
@@ -286,6 +538,8 @@ async function postJson({
   body = {},
   fetchFn = globalThis.fetch?.bind(globalThis),
   authorizationToken = '',
+  /** V1.1（2026-06-29）：请求超时（毫秒），防止 fetch 永久挂起阻塞 tick。 */
+  timeoutMs = 30000,
 } = {}) {
   if (typeof fetchFn !== 'function') throw new Error('fetch unavailable');
   const headers = { 'Content-Type': 'application/json' };
@@ -293,11 +547,15 @@ async function postJson({
   if (normalizedAuthorizationToken) {
     headers.Authorization = `Bearer ${normalizedAuthorizationToken}`;
   }
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   const response = await fetchFn(`${normalizeServerUrl(serverUrl, DEFAULT_SERVER_URL)}${path}`, {
     method: 'POST',
     headers,
     body: JSON.stringify(body),
+    signal: controller?.signal ?? undefined,
   });
+  if (timer) clearTimeout(timer);
   if (!response.ok) {
     const text = await readErrorText(response);
     const parsed = parseErrorBody(text);
@@ -381,7 +639,7 @@ export async function claimCollectionTaskLease({
     : {};
   const stationSessionId = await resolveStationSessionId({ storageArea });
 
-  // V1.1 envelope body（含旧字段并存）
+  // V1.1 envelope body
   const requestBody = buildSyncRequestV11({
     stationId,
     stationToken,
@@ -396,15 +654,29 @@ export async function claimCollectionTaskLease({
       : null,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
+    mode: 'claim',
     forceFullSync,
   });
 
-  const rawData = await postJson({
+  const initialRawData = await postJson({
     serverUrl,
     path: '/api/execution-stations/sync',
     fetchFn,
     authorizationToken,
     body: requestBody,
+  });
+  const rawData = await startReservationThroughSync({
+    rawData: initialRawData,
+    serverUrl,
+    stationId,
+    stationToken,
+    authorizationId,
+    authorizationToken,
+    capabilities,
+    platformAccounts,
+    pluginVersion,
+    stationSessionId,
+    fetchFn,
   });
   const data = normalizeStationSyncClaimResponse(rawData);
   const responseMailboxVersion = extractMailboxVersion(data);
@@ -432,6 +704,239 @@ export async function claimCollectionTaskLease({
   return data;
 }
 
+export async function commitCollectionTaskDeltaThroughSync({
+  serverUrl = '',
+  taskId = '',
+  envelope = {},
+  stationId = '',
+  stationToken = '',
+  authorizationId = '',
+  authorizationToken = '',
+  capabilities = [],
+  platformAccounts = [],
+  pluginVersion = '',
+  fetchFn,
+  store = null,
+  storageArea = globalThis.chrome?.storage?.local,
+} = {}) {
+  const normalizedTaskId = normalizeString(taskId || envelope?.taskId);
+  if (!normalizedTaskId) {
+    throw createHttpError('taskId required', { status: 400, reasonCode: 'task_id_required' });
+  }
+  const leaseToken = normalizeString(envelope?.leaseToken);
+  const leaseEpoch = toOptionalInteger(envelope?.leaseEpoch);
+  const attemptId = normalizeString(envelope?.attemptId);
+  const nowIso = new Date().toISOString();
+  const observedAt = operationObservedAt(envelope, nowIso);
+  const records = rawRecordsFromEnvelope(envelope, observedAt);
+  const shouldCommitRawSnapshot = records.length > 0 || isTerminalSnapshotStatus(envelope?.snapshot?.status);
+  const operationId = `${shouldCommitRawSnapshot ? 'commit' : 'progress'}_${normalizedTaskId}_${Date.now()}`;
+
+  const existingLease = typeof store?.read === 'function' ? await store.read() : null;
+  const mailboxVersion = extractMailboxVersion(existingLease || {});
+  const mailboxLaneVersions = existingLease && typeof existingLease === 'object'
+    && existingLease.mailboxLaneVersions && typeof existingLease.mailboxLaneVersions === 'object'
+    ? existingLease.mailboxLaneVersions
+    : {};
+  const stationSessionId = await resolveStationSessionId({ storageArea });
+  const localLease = normalizeLeaseSnapshot({
+    fallback: {
+      taskId: normalizedTaskId,
+      leaseToken,
+      attemptId,
+      leaseEpoch,
+    },
+  });
+
+  const operations = shouldCommitRawSnapshot
+    ? [{
+        operationId,
+        type: 'commit_raw_snapshot',
+        jobId: normalizedTaskId,
+        attemptId,
+        leaseToken,
+        leaseEpoch,
+        captureId: captureIdForEnvelope(normalizedTaskId, envelope),
+        expectedTargetKey: normalizeString(envelope?.executionContext?.expectedTargetKey || ''),
+        observedTargetKey: normalizeString(envelope?.executionContext?.observedTargetKey || ''),
+        observedAt,
+        records,
+      }]
+    : [{
+        operationId,
+        type: 'progress_update',
+        jobId: normalizedTaskId,
+        leaseToken,
+        leaseEpoch,
+        progress: toOptionalInteger(envelope?.snapshot?.progress),
+        stage: normalizeString(envelope?.snapshot?.status || 'running'),
+        observedAt,
+      }];
+
+  const body = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    status: 'online',
+    capabilities,
+    platformAccounts,
+    mailboxStationVersion: mailboxVersion,
+    mailboxLaneVersions,
+    mode: 'writeback',
+    includeCapacity: false,
+    localLease,
+    operations,
+  });
+
+  const data = await postJson({
+    serverUrl,
+    path: '/api/execution-stations/sync',
+    fetchFn,
+    authorizationToken,
+    body,
+  });
+  const result = data?.operationResults?.[operationId] || {};
+  if (result?.status !== 'accepted') {
+    const rejectionReason = normalizeString(result.reason || 'sync_operation_rejected');
+    // V1.1（2026-06-29）：区分永久性拒绝（LEASE_EXPIRED/IDENTITY_MISMATCH 等）
+    // 和临时性拒绝。永久拒绝不应无限重试。
+    const permanentRejections = new Set([
+      'lease_epoch_mismatch',
+      'identity_mismatch',
+      'job_not_found',
+      'station_workspace_mismatch',
+    ]);
+    const isPermanent = permanentRejections.has(rejectionReason);
+    throw createHttpError(rejectionReason, {
+      status: isPermanent ? 410 : 409,
+      reasonCode: rejectionReason,
+      retryable: !isPermanent,
+      nextPollAfterMs: isPermanent ? null : (nextPollAfterMsFromSync(data) || 30000),
+    });
+  }
+
+  return {
+    success: true,
+    ...acceptedDeltaKeys(envelope),
+    operationResult: result,
+    sync: data,
+  };
+}
+
+export async function syncCollectionTaskStatusThroughSync({
+  serverUrl = '',
+  taskId = '',
+  patch = {},
+  stationId = '',
+  stationToken = '',
+  authorizationId = '',
+  authorizationToken = '',
+  capabilities = [],
+  platformAccounts = [],
+  pluginVersion = '',
+  fetchFn,
+  store = null,
+  storageArea = globalThis.chrome?.storage?.local,
+} = {}) {
+  const normalizedTaskId = normalizeString(taskId);
+  if (!normalizedTaskId) {
+    throw createHttpError('taskId required', { status: 400, reasonCode: 'task_id_required' });
+  }
+  const existingLease = typeof store?.read === 'function' ? await store.read() : null;
+  const mailboxVersion = extractMailboxVersion(existingLease || {});
+  const mailboxLaneVersions = existingLease && typeof existingLease === 'object'
+    && existingLease.mailboxLaneVersions && typeof existingLease.mailboxLaneVersions === 'object'
+    ? existingLease.mailboxLaneVersions
+    : {};
+  const leaseAuth = normalizeLeaseSnapshot({ fallback: existingLease || {} });
+  const stationSessionId = await resolveStationSessionId({ storageArea });
+  const status = normalizeString(patch?.status);
+  const operationId = `status_${normalizedTaskId}_${Date.now()}`;
+  const leaseEpoch = toOptionalInteger(patch?.leaseEpoch ?? leaseAuth.leaseEpoch);
+  const leaseToken = normalizeString(patch?.leaseToken || leaseAuth.leaseToken);
+  if (!leaseToken) {
+    return {
+      success: true,
+      skipped: true,
+      reason: 'missing_lease_for_v11_status_sync',
+      task: { id: normalizedTaskId, status },
+      event: null,
+    };
+  }
+
+  const isTerminalFailure = status === 'failed' || status === 'stopped' || status === 'cancelled';
+  const isRequeue = status === 'pending' || status === 'queued';
+  const shouldReleaseLease = (isTerminalFailure || isRequeue) && leaseToken && patch?.deferRelease !== true;
+  const operations = shouldReleaseLease
+    ? [{
+        operationId,
+        type: 'release_job',
+        jobId: normalizedTaskId,
+        leaseToken,
+        leaseEpoch,
+        reasonCode: normalizeString(patch?.reasonCode || patch?.errorCode || patch?.errorMessage || status || 'station_status_update'),
+        retryable: isRequeue,
+      }]
+    : [{
+        operationId,
+        type: 'progress_update',
+        jobId: normalizedTaskId,
+        leaseToken,
+        leaseEpoch,
+        progress: toOptionalInteger(patch?.progress),
+        stage: status || 'running',
+        observedAt: new Date().toISOString(),
+      }];
+
+  const body = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    status: 'online',
+    capabilities,
+    platformAccounts,
+    mailboxStationVersion: mailboxVersion,
+    mailboxLaneVersions,
+    mode: 'status',
+    includeCapacity: false,
+    localLease: leaseAuth.taskId ? leaseAuth : null,
+    operations,
+  });
+
+  const data = await postJson({
+    serverUrl,
+    path: '/api/execution-stations/sync',
+    fetchFn,
+    authorizationToken,
+    body,
+  });
+  const result = data?.operationResults?.[operationId] || {};
+  if (result?.status !== 'accepted') {
+    throw createHttpError(normalizeString(result.reason || result.message || 'sync_status_rejected'), {
+      status: 409,
+      reasonCode: normalizeString(result.reason || 'sync_status_rejected'),
+      nextPollAfterMs: nextPollAfterMsFromSync(data) || 30000,
+    });
+  }
+
+  return {
+    success: true,
+    task: {
+      id: normalizedTaskId,
+      status,
+      progress: patch?.progress,
+      pluginRunId: patch?.pluginRunId,
+    },
+    event: null,
+    operationResult: result,
+    sync: data,
+  };
+}
+
 export async function renewCollectionTaskLease({
   serverUrl = '',
   taskId = '',
@@ -444,8 +949,10 @@ export async function renewCollectionTaskLease({
   attemptId = '',
   leaseEpoch,
   attemptNumber,
+  pluginVersion = '',
   fetchFn,
   store = null,
+  storageArea = globalThis.chrome?.storage?.local,
 } = {}) {
   const normalizedTaskId = normalizeString(taskId);
   const leaseAuth = normalizeLeaseSnapshot({
@@ -459,31 +966,69 @@ export async function renewCollectionTaskLease({
   });
   const existingLease = typeof store?.read === 'function' ? await store.read() : null;
   const mailboxVersion = extractMailboxVersion(existingLease || {});
-  const data = await postJson({
-    serverUrl,
-    path: `/api/collection-tasks/${encodeURIComponent(normalizedTaskId)}/lease`,
-    fetchFn,
-    authorizationToken,
-    body: addLeaseAttemptFields({
-      authorizationId: normalizeString(authorizationId),
-      stationId: normalizeString(stationId),
-      stationToken: normalizeString(stationToken),
+  const mailboxLaneVersions = existingLease && typeof existingLease === 'object'
+    && existingLease.mailboxLaneVersions && typeof existingLease.mailboxLaneVersions === 'object'
+    ? existingLease.mailboxLaneVersions
+    : {};
+  const stationSessionId = await resolveStationSessionId({ storageArea });
+  const operationId = `progress_${normalizedTaskId}_${Date.now()}`;
+  const body = buildSyncRequestV11({
+    stationId,
+    stationToken,
+    authorizationId,
+    pluginVersion,
+    stationSessionId,
+    mailboxStationVersion: mailboxVersion,
+    mailboxLaneVersions,
+    includeCapacity: false,
+    localLease: leaseAuth,
+    operations: [{
+      operationId,
+      type: 'progress_update',
+      jobId: normalizedTaskId,
       leaseToken: normalizeString(leaseToken),
-      status: normalizeString(status) || 'running',
-    }, leaseAuth),
+      leaseEpoch: toOptionalInteger(leaseEpoch),
+      progress: normalizeString(status) === 'running' ? 50 : undefined,
+      stage: normalizeString(status) || 'running',
+    }],
   });
 
-  if (store?.write && data?.expiresAt) {
-    await store.write(attachMailboxVersion(normalizeLeaseSnapshot({
-      lease: data,
-      fallback: {
-        ...leaseAuth,
-        expiresAt: data.expiresAt,
-      },
-    }), mailboxVersion));
+  const data = await postJson({
+    serverUrl,
+    path: '/api/execution-stations/sync',
+    fetchFn,
+    authorizationToken,
+    body,
+  });
+  const result = data?.operationResults?.[operationId] || {};
+  if (result?.status === 'rejected') {
+    throw createHttpError(normalizeString(result.reason || 'lease_renew_rejected'), {
+      status: 409,
+      reasonCode: normalizeString(result.reason || 'lease_renew_rejected'),
+    });
+  }
+  const responseMailboxVersion = extractMailboxVersion(data);
+  const responseMailboxVersions = extractMailboxVersionsFromResponse(data);
+  const responseLaneVersions = responseMailboxVersions.lanes || {};
+  const nextLease = normalizeLeaseSnapshot({
+    fallback: {
+      ...leaseAuth,
+      expiresAt: result.leaseExpiresAt || result.expiresAt,
+      leaseEpoch: result.leaseEpoch ?? leaseAuth.leaseEpoch,
+    },
+  });
+
+  if (store?.write && nextLease.expiresAt) {
+    await store.write(attachMailboxLaneVersions(nextLease, responseMailboxVersion, responseLaneVersions));
   }
 
-  return data;
+  return {
+    success: result?.status === 'accepted',
+    ...result,
+    expiresAt: result.leaseExpiresAt || result.expiresAt,
+    sync: data,
+    mailboxVersions: responseMailboxVersions,
+  };
 }
 
 export async function reconcileExecutionStationLease({
@@ -513,7 +1058,7 @@ export async function reconcileExecutionStationLease({
     : {};
   const stationSessionId = await resolveStationSessionId({ storageArea });
 
-  // V1.1 envelope body（含旧字段并存）
+  // V1.1 envelope body
   const body = buildSyncRequestV11({
     stationId,
     stationToken,

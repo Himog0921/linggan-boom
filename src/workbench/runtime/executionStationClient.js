@@ -247,6 +247,8 @@ export function createExecutionStationClient({
         activeTask,
         mailboxStationVersion: legacyMailboxVersion,
         mailboxLaneVersions,
+        mode: 'heartbeat',
+        includeCapacity: false,
       });
 
       const data = await postJson('/api/execution-stations/sync', requestBody);

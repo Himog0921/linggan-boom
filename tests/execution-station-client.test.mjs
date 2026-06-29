@@ -75,8 +75,15 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(JSON.parse(requests[0][1].body).authorizationId, 'auth_1');
   assert.equal(requests[1][0], 'http://localhost:3000/api/execution-stations/sync');
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
-  assert.equal(JSON.parse(requests[1][1].body).authorizationId, 'auth_1');
-  assert.equal(JSON.parse(requests[1][1].body).claimMode, 'status_only');
+  const heartbeatBody = JSON.parse(requests[1][1].body);
+  assert.equal(heartbeatBody.protocolVersion, '3');
+  assert.equal(heartbeatBody.mode, 'heartbeat');
+  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'authorizationId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'claimMode'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'capacity'), false);
+  assert.deepEqual(heartbeatBody.accountReports, [
+    { platform: 'xhs', healthStatus: 'healthy' },
+  ]);
 });
 
 test('execution station client reuses stable station key before registration', async () => {
@@ -215,8 +222,12 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
   const body = JSON.parse(requests[0][1].body);
 
   assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
-  assert.equal(body.mailboxVersion, 6);
-  assert.equal(body.claimMode, 'status_only');
+  assert.deepEqual(body.mailboxCursors, { station: 6 });
+  assert.equal(body.protocolVersion, '3');
+  assert.equal(body.mode, 'heartbeat');
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxVersion'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'claimMode'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'capacity'), false);
   assert.equal(heartbeat.success, true);
   assert.equal(heartbeat.shouldPollNow, true);
   assert.equal(heartbeat.mailbox.version, 7);

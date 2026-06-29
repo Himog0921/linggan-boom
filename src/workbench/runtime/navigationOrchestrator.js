@@ -131,6 +131,8 @@ export function navigateToTask(taskType, target, options = {}) {
         if (completed) return;
         completed = true;
         chrome.tabs.onUpdated.removeListener(listener);
+        // V1.1（2026-06-29）：导航超时后关闭标签页，防止僵尸窗口累积。
+        closeTab(tabId).catch(() => {});
         resolve({ tabId, error: 'navigation_timeout', timedOut: true });
       }, NAVIGATION_TIMEOUT_MS);
 

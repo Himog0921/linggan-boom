@@ -1,5 +1,5 @@
 import {
-  buildIngestEnvelope,
+  buildIngestEnvelope as buildCommitEnvelope,
   buildTaskEvent,
   buildTaskRecord,
 } from '../protocol/deltaEnvelope.js';
@@ -58,7 +58,7 @@ function rowToRecord(row = {}) {
 
 export function createDeltaOutbox({
   store,
-  ingestDelta,
+  commitDelta,
   executorInstanceId = '',
   getExecutorInstanceId = null,
   getTaskExecutionContext = null,
@@ -69,15 +69,12 @@ export function createDeltaOutbox({
   const state = {
     flushing: false,
     scheduled: false,
+    currentFlush: null,
   };
 
-  async function flush() {
-    if (!store || typeof store.listPending !== 'function' || typeof ingestDelta !== 'function') {
+  async function runFlush() {
+    if (!store || typeof store.listPending !== 'function' || typeof commitDelta !== 'function') {
       return { success: true, skipped: true, reason: 'missing_dependencies' };
-    }
-    if (state.flushing) {
-      state.scheduled = true;
-      return { success: true, skipped: true, reason: 'flush_in_flight' };
     }
     state.flushing = true;
     try {
@@ -99,7 +96,7 @@ export function createDeltaOutbox({
           ? normalizeObject(await getTaskExecutionContext(first.taskId))
           : {};
         const leaseEpoch = Number(executionContext.leaseEpoch);
-        const envelope = buildIngestEnvelope({
+        const envelope = buildCommitEnvelope({
           taskId: first.taskId,
           pluginRunId: first.pluginRunId,
           executorInstanceId: resolvedExecutorInstanceId,
@@ -114,7 +111,7 @@ export function createDeltaOutbox({
           executionContext,
         });
         try {
-          const response = await ingestDelta(first.taskId, envelope);
+          const response = await commitDelta(first.taskId, envelope);
           const ackedKeys = extractAckKeys(response);
           const duplicateKeys = Array.isArray(response?.duplicateKeys) ? response.duplicateKeys : [];
           if (ackedKeys.length) await store.markAcked?.(ackedKeys);
@@ -140,11 +137,28 @@ export function createDeltaOutbox({
       return { success, sent };
     } finally {
       state.flushing = false;
+      state.currentFlush = null;
       if (state.scheduled) {
         state.scheduled = false;
         queueMicrotask(() => {
           void flush();
         });
+      }
+    }
+  }
+
+  async function flush() {
+    if (state.currentFlush) {
+      state.scheduled = true;
+      return state.currentFlush;
+    }
+    const flushPromise = runFlush();
+    state.currentFlush = flushPromise;
+    try {
+      return await flushPromise;
+    } finally {
+      if (state.currentFlush === flushPromise) {
+        state.currentFlush = null;
       }
     }
   }

@@ -2004,6 +2004,71 @@ test('task poller releases the account execution lock when a task finishes', asy
   ]);
 });
 
+test('task poller flushes final result deltas before clearing the active lease', async () => {
+  let poller;
+  let contextAtFlush = null;
+  let clearLeaseCalls = 0;
+  poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_flush_before_clear',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+      },
+      lease: {
+        leaseToken: 'lease-flush-before-clear',
+        attemptId: 'attempt-flush-before-clear',
+        leaseEpoch: 4,
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_flush_before_clear',
+      collectionRunId: 'run_flush_before_clear',
+      resultLookup: {
+        externalTaskId: 'task_flush_before_clear',
+        collectionRunId: 'run_flush_before_clear',
+      },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_flush_before_clear',
+        status: 'done',
+        resultSummary: { notes: 1, itemsPlanned: 1, itemsSucceeded: 1, failedItems: 0 },
+        records: {
+          notes: [{ noteId: 'note_flush_1', title: '已采笔记' }],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+    enqueueRecords: async (records) => records,
+    enqueueEvent: async (event) => event,
+    flushDeltas: async () => {
+      contextAtFlush = poller.getExecutionContext('task_flush_before_clear');
+      return { success: true };
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  await poller.tick();
+  const result = await poller.tick();
+
+  assert.equal(result.final, true);
+  assert.equal(contextAtFlush.leaseToken, 'lease-flush-before-clear');
+  assert.equal(contextAtFlush.attemptId, 'attempt-flush-before-clear');
+  assert.equal(contextAtFlush.leaseEpoch, 4);
+  assert.equal(clearLeaseCalls, 1);
+  assert.equal(poller.getState().activeTask, null);
+});
+
 test('task poller refreshes the account execution lock while a task is running', async () => {
   const acquiredLocks = [];
   const poller = createTaskPoller({
@@ -2268,6 +2333,7 @@ test('task poller maps stopped status to final stopped patch with partial result
         },
       },
       errorMessage: null,
+      deferRelease: true,
     },
   ]);
   assert.equal(poller.getState().activeTask, null);

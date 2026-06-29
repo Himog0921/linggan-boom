@@ -32,6 +32,8 @@ function buildStartupPatch({ pluginRunId = '', activeExecutor = '' } = {}) {
 
 const DISPATCH_STARTUP_TIMEOUT_MS = 45 * 1000;
 const DISPATCH_STARTUP_RETRY_DELAY_MS = 2 * 60 * 1000;
+const MAX_TASK_EXECUTION_TIME_MS = 30 * 60 * 1000; // 30 分钟硬超时
+const PAUSED_TASK_AUTO_RELEASE_MS = 10 * 60 * 1000; // 暂停 10 分钟自动释放
 const RUNNING_RESULT_LOOKUP_TIMEOUT_MS = 12 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_TIMEOUT_MS = 5 * 60 * 1000;
 const LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS = 2 * 60 * 1000;
@@ -1153,6 +1155,18 @@ export function createTaskPoller(deps = {}) {
     }
   }
 
+  async function flushDeltasBeforeCleanup() {
+    if (typeof deps.flushDeltas !== 'function') return { success: true, skipped: true };
+    const result = await deps.flushDeltas();
+    if (result?.success === false) {
+      const error = new Error(String(result.reason || result.error || 'delta_flush_failed_before_cleanup'));
+      error.retryable = true;
+      error.flushResult = result;
+      throw error;
+    }
+    return result;
+  }
+
   async function finalizeControlledStop(activeTask = state.activeTask, terminalControl = {}) {
     if (!activeTask) return { success: true, idle: true };
     const action = String(
@@ -1781,6 +1795,63 @@ export function createTaskPoller(deps = {}) {
     if (activeTask.workbenchStatus === 'stopping' || activeTask.deleteRequested) {
       return finalizeControlledStop(activeTask);
     }
+    // V1.1（2026-06-29）：硬超时。任务执行超过 30 分钟强制终止，
+    // 防止内容脚本死循环或页面卡死导致任务永久占用工位。
+    if (
+      Number(activeTask.attemptStartedAtMs || 0) > 0 &&
+      getNow() - Number(activeTask.attemptStartedAtMs || 0) >= MAX_TASK_EXECUTION_TIME_MS
+    ) {
+      const timeoutMsg = `任务执行超过 ${Math.round(MAX_TASK_EXECUTION_TIME_MS / 60000)} 分钟，已自动终止。`;
+      await notifyContentScriptToStop(activeTask);
+      try {
+        await patchTask(activeTask.taskId, {
+          status: 'failed',
+          pluginRunId: activeTask.pluginRunId || null,
+          errorMessage: timeoutMsg,
+        });
+      } catch { /* 网络错误不阻塞本地清理 */ }
+      await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+        status: 'failed',
+        errorMessage: timeoutMsg,
+        reason: 'max_execution_time_exceeded',
+      });
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease(activeTask);
+      return {
+        success: true,
+        final: true,
+        released: true,
+        reason: 'max_execution_time_exceeded',
+        cleanupTask: cleanupTaskSnapshot(activeTask),
+      };
+    }
+    // V1.1（2026-06-29）：非监控任务暂停超过阈值自动释放。
+    // BUG B2：此前 paused 任务永不自动释放，state.activeTask 永久残留。
+    if (
+      activeTask.workbenchStatus === 'paused' &&
+      !isMonitorTask(activeTask) &&
+      Number(activeTask.pausedAtMs || activeTask.attemptStartedAtMs || 0) > 0 &&
+      getNow() - Number(activeTask.pausedAtMs || activeTask.attemptStartedAtMs || 0) >= PAUSED_TASK_AUTO_RELEASE_MS
+    ) {
+      const msg = '任务已暂停超过 10 分钟，自动释放。';
+      await patchTask(activeTask.taskId, {
+        status: 'pending',
+        progress: 0,
+        pluginRunId: activeTask.pluginRunId || null,
+        errorMessage: msg,
+        notBeforeAt: new Date(getNow() + LOCAL_ACTIVE_TASK_WITHOUT_LEASE_RETRY_DELAY_MS).toISOString(),
+      });
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease(activeTask);
+      return {
+        success: true,
+        released: true,
+        reason: 'paused_task_auto_release',
+        cleanupTask: cleanupTaskSnapshot(activeTask),
+      };
+    }
     if (
       !state.activeLease &&
       !isMonitorTask(activeTask) &&
@@ -1853,11 +1924,33 @@ export function createTaskPoller(deps = {}) {
             cleanupTask: cleanupTaskSnapshot(activeTask),
           };
         }
+        // V1.1（2026-06-29）：网络错误导致续期失败时不静默。
+        // 标记租约可能已过期，下次 poll 时调 reconcile 而非继续用旧租约。
+        if (state.activeLease) {
+          state.activeLease.renewalFailedAtMs = getNow();
+          state.activeLease.renewalFailedReason = String(error?.message || error || 'lease_renewal_failed');
+        }
         await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT, {
           leaseRenewalFailed: true,
           errorMessage: String(error?.message || error || 'lease_renewal_failed'),
         });
       }
+    }
+    // V1.1（2026-06-29）：租约续期连续失败时强制 reconcile。
+    if (
+      state.activeLease?.renewalFailedAtMs &&
+      getNow() - state.activeLease.renewalFailedAtMs >= 60_000
+    ) {
+      console.warn('[taskPoller] lease renewal failed for 60s, forcing release');
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease(activeTask);
+      return {
+        success: true,
+        released: true,
+        reason: 'lease_renewal_persistent_failure',
+        cleanupTask: cleanupTaskSnapshot(activeTask),
+      };
     }
     await refreshExecutionLock(activeTask);
     const controlResult = await consumeControlRequests(activeTask);
@@ -2043,6 +2136,11 @@ export function createTaskPoller(deps = {}) {
     await consumePendingAccountUsage(activeTask, mapped.status, pluginRunId);
     const resultSummary = buildWorkbenchResultSummary(run);
     const errorMessage = resolveRunErrorMessage(run);
+    const recordDeltas = buildWorkbenchRecordDeltas(
+      activeTask,
+      pluginRunId || getPluginRunId(activeTask),
+      resultSummary,
+    );
     const failurePayload = mapped.status === 'failed'
       ? buildFailureEventPayload({
           run,
@@ -2071,16 +2169,12 @@ export function createTaskPoller(deps = {}) {
         pluginRunId: pluginRunId || null,
         resultSummary,
         errorMessage: errorMessage || null,
+        ...(mapped.final === true && mapped.status !== 'completed' ? { deferRelease: true } : {}),
       });
       activeTask.pluginRunId = pluginRunId;
       activeTask.workbenchStatus = mapped.status;
       activeTask.resultFingerprint = fingerprint;
       activeTask.errorMessage = errorMessage;
-      const recordDeltas = buildWorkbenchRecordDeltas(
-        activeTask,
-        pluginRunId || getPluginRunId(activeTask),
-        resultSummary,
-      );
       if (recordDeltas.length && typeof deps.enqueueRecords === 'function') {
         try {
           await deps.enqueueRecords(recordDeltas);
@@ -2146,9 +2240,29 @@ export function createTaskPoller(deps = {}) {
 
     if (mapped.final) {
       const cleanupTask = cleanupTaskSnapshot(activeTask);
+      // V1.1（2026-06-29）：flushDeltasBeforeCleanup 抛错时仍要清理本地状态，
+      // 否则 state.activeTask 永久残留，任务在服务器侧已完成但插件无限轮询。
+      let flushError = null;
+      try {
+        await flushDeltasBeforeCleanup();
+      } catch (err) {
+        flushError = err;
+        console.warn('[taskPoller] flushDeltasBeforeCleanup failed, continuing cleanup:', err?.message || err);
+      }
       state.activeTask = null;
       state.seenControlIds.clear();
       await clearActiveLease(activeTask);
+      if (flushError) {
+        // Delta 未刷完但任务已终端：返回 final 让上层停止轮询，
+        // delta 会由 outbox retry 机制在后续 tick 重试。
+        return {
+          success: true,
+          final: true,
+          status: mapped.status,
+          flushPending: true,
+          cleanupTask,
+        };
+      }
       return {
         success: true,
         final: true,

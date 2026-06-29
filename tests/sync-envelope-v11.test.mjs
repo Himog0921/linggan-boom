@@ -4,7 +4,7 @@
  * 单元测试：V1.1 /sync 协议字段构造 + 响应解析。
  *
  * 覆盖：
- *   - buildSyncRequestV11 输出全字段（V1.1 + 旧字段并存）
+ *   - buildSyncRequestV11 输出纯 V1.1 字段
  *   - stationSessionId 持久化 + 清理
  *   - mailboxCursors 构造（station + lanes）
  *   - capacity 按 lane 推导（capabilities + activeLane）
@@ -59,7 +59,7 @@ function createMemoryStorage() {
 
 test('SYNC_PROTOCOL_VERSION_V11 是 "3"，与服务端对齐', () => {
   assert.equal(SYNC_PROTOCOL_VERSION_V11, '3');
-  assert.equal(SYNC_MIN_PLUGIN_VERSION_V11, '2.0.53');
+  assert.equal(SYNC_MIN_PLUGIN_VERSION_V11, '2.0.58');
 });
 
 test('resolveStationSessionId 持久化（同 storageArea 多次调用返回相同 id）', async () => {
@@ -91,9 +91,9 @@ test('clearStationSessionId 后 resolve 生成新 id', async () => {
 test('buildMailboxCursors 构造 station + lanes 对象', () => {
   const cursors = buildMailboxCursors({
     stationVersion: 42,
-    laneVersions: { xhs: 5, douyin: 7 },
+    laneVersions: { 'xhs.monitor_patrol': 5, 'douyin.governance': 7 },
   });
-  assert.deepEqual(cursors, { station: 42, xhs: 5, douyin: 7 });
+  assert.deepEqual(cursors, { station: 42, 'xhs.monitor_patrol': 5, 'douyin.governance': 7 });
 });
 
 test('buildMailboxCursors 忽略非法 lane/version', () => {
@@ -115,8 +115,8 @@ test('buildLaneCapacity 从 capabilities + activeLane 推导 lane', () => {
     activeLane: 'xhs',
   });
   assert.deepEqual(capacity, {
-    xhs: { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
-    douyin: { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
+    'xhs.monitor_patrol': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
+    'douyin.governance': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
   });
 });
 
@@ -168,31 +168,33 @@ test('buildAccountReports 缺 healthStatus 时填 unknown', () => {
   assert.equal(reports[0].healthStatus, 'unknown');
 });
 
-test('buildSyncRequestV11 输出 V1.1 字段 + 旧字段并存', () => {
+test('buildSyncRequestV11 输出纯 V1.1 字段且不混入旧字段', () => {
   const body = buildSyncRequestV11({
     stationId: 'station-1',
     stationToken: 'token-1',
     authorizationId: 'auth-1',
-    pluginVersion: '2.0.54',
+    pluginVersion: '2.0.55',
     stationSessionId: 'sess-1',
     capabilities: ['xhs'],
     platformAccounts: [{ platform: 'xhs', id: 'acc-1', health: 'healthy' }],
     localLease: { taskId: 'task-1', leaseToken: 'tok-1', leaseEpoch: 3 },
     activeTask: { platform: 'xhs' },
     mailboxStationVersion: 12,
-    mailboxLaneVersions: { xhs: 5 },
+    mailboxLaneVersions: { 'xhs.monitor_patrol': 5 },
+    mode: 'claim',
     forceFullSync: true,
   });
 
   // V1.1 字段
   assert.equal(body.stationId, 'station-1');
   assert.equal(body.stationToken, 'token-1');
-  assert.equal(body.pluginVersion, '2.0.54');
+  assert.equal(body.pluginVersion, '2.0.55');
   assert.equal(body.protocolVersion, '3');
   assert.equal(body.stationSessionId, 'sess-1');
-  assert.deepEqual(body.mailboxCursors, { station: 12, xhs: 5 });
+  assert.equal(body.mode, 'claim');
+  assert.deepEqual(body.mailboxCursors, { station: 12, 'xhs.monitor_patrol': 5 });
   assert.deepEqual(body.capacity, {
-    xhs: { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
+    'xhs.monitor_patrol': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
   });
   assert.equal(body.activeLeases.length, 1);
   assert.equal(body.activeLeases[0].jobId, 'task-1');
@@ -200,38 +202,35 @@ test('buildSyncRequestV11 输出 V1.1 字段 + 旧字段并存', () => {
   assert.equal(body.accountReports.length, 1);
   assert.equal(body.accountReports[0].platform, 'xhs');
 
-  // 旧字段并存
-  assert.equal(body.authorizationId, 'auth-1');
-  assert.equal(body.pluginAuthorizationId, 'auth-1');
-  assert.equal(body.status, 'online');
-  assert.equal(body.claimMode, 'status_only');
-  assert.equal(body.mailboxVersion, 12);
-  assert.equal(body.forceFullSync, true);
-  assert.equal(body.localLease.taskId, 'task-1');
-  assert.equal(body.platformAccounts.length, 1);
-  assert.deepEqual(body.capabilities, ['xhs']);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'authorizationId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'pluginAuthorizationId'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'status'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'claimMode'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxVersion'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'forceFullSync'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'localLease'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'platformAccounts'), false);
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'capabilities'), false);
 });
 
 test('buildSyncRequestV11 在 mailboxStationVersion 未定义时不发 mailboxCursors/mailboxVersion', () => {
   const body = buildSyncRequestV11({
     stationId: 's1', stationToken: 't1', authorizationId: 'a1',
-    pluginVersion: '2.0.54', stationSessionId: 'sess',
+    pluginVersion: '2.0.55', stationSessionId: 'sess',
     capabilities: [], platformAccounts: [],
   });
   assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxCursors'), false);
   assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxVersion'), false);
-  // localLease 即使 null 也输出（服务端兼容）
-  assert.equal(body.localLease, null);
-  // operations[] 始终输出空数组
+  assert.equal(Object.prototype.hasOwnProperty.call(body, 'localLease'), false);
   assert.deepEqual(body.operations, []);
 });
 
 test('extractMailboxVersionsFromResponse 解析 V1.1 响应', () => {
   const result = extractMailboxVersionsFromResponse({
-    mailboxVersions: { station: 42, xhs: 5, douyin: 7 },
+    mailboxVersions: { station: 42, 'xhs.monitor_patrol': 5, 'douyin.governance': 7 },
   });
   assert.equal(result.station, 42);
-  assert.deepEqual(result.lanes, { xhs: 5, douyin: 7 });
+  assert.deepEqual(result.lanes, { 'xhs.monitor_patrol': 5, 'douyin.governance': 7 });
 });
 
 test('extractMailboxVersionsFromResponse 兼容旧 mailbox.version', () => {

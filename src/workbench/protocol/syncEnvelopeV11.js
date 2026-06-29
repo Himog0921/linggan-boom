@@ -8,20 +8,16 @@
  *   - stationSessionId / protocolVersion="3"
  *   - capacity（按 lane 上报 remainingWorkSeconds/targetWorkSeconds/maxReservedTasks）
  *   - activeLeases[]（数组，替代旧 activeLease 单对象）
- *   - operations[]（6 类 operation；本期插件不发，统一空数组）
+ *   - operations[]（6 类 operation；接到 reservation 后用 start_job 确认开始）
  *   - accountReports[]（基础账号健康上报，由 platformAccounts 转换）
  *   - mailboxCursors（station + 各 lane，对象）
  *
  * 设计原则：
- *   1. 旧字段保留并发送（capabilities/platformAccounts/claimMode/mailboxVersion/
- *      localLease/authorizationId/pluginAuthorizationId），与 V1.1 字段并存。
- *      原因：内容工作台 /sync route 直接透传 body 到 service，service 的
- *      SyncRequest 类型不约束额外字段（TS 不报错），旧字段被无视但不报错，
- *      保证过渡期插件继续工作；后续 Agent E 清理旧字段时再去掉。
- *   2. operations[] 本期恒为空数组：插件任务结果回传走 /api/collection-tasks/
- *      [id]/ingest（Delta Outbox 路径），300017 风控走本地 markCooldown，
- *      这两条路径直连 /sync 需要后续大改（不在 V1.1 字段补齐范围内）。
- *      服务端在 operations 为空时正确处理（nextSync 走 idle 4min）。
+ *   1. /sync body 只发送 V1.1 字段；插件授权身份走 Authorization 请求头，
+ *      不再把旧 authorizationId / claimMode / mailboxVersion / localLease 等字段混入协议。
+ *   2. operations[] 本期只接入 start_job：插件先通过 capacity 领取 reservation，
+ *      再回传 start_job 换取正式 lease。任务结果回传仍走 Delta Outbox，
+ *      300017 风控仍走本地 markCooldown，后续再迁到完整 operations。
  *   3. capacity 是估算占位：插件没有工时度量基础，按 lane 用 maxReservedTasks=1
  *      作为软上限，remainingWorkSeconds/targetWorkSeconds 用粗略常量。
  *      这部分会被服务端的 claim 逻辑消费（remainingWorkSeconds <
@@ -47,10 +43,10 @@
 export const SYNC_PROTOCOL_VERSION_V11 = '3';
 
 /**
- * 插件最低协议版本。与服务端 V11_MIN_PLUGIN_VERSION = "2.0.53" 对齐。
+ * 插件最低协议版本。与服务端 V11_MIN_PLUGIN_VERSION = "2.0.58" 对齐。
  * 低于此版本，服务端返回 426 VERSION_REJECTED。
  */
-export const SYNC_MIN_PLUGIN_VERSION_V11 = '2.0.53';
+export const SYNC_MIN_PLUGIN_VERSION_V11 = '2.0.58';
 
 /**
  * capacity 占位常量。
@@ -68,11 +64,32 @@ const CAPACITY_PLACEHOLDER = {
 };
 
 /**
- * 默认 lane 命名。手册 5.5 节 lane 是 platform 维度，xhs/douyin 是已知平台。
- * 如果插件在 xhs 页面，lane='xhs'；在 douyin 页面，lane='douyin'。
- * 当插件不在已知平台页面时，不上报 capacity（服务端走 no_capacity 分支）。
+ * V1.1 正式车道命名。服务端只接受 "platform.lane" 形式，不能再发送
+ * 旧的 "xhs" / "douyin" 平台级 key。
+ *
+ * 当前本地验证优先打通正在排队的两类任务：
+ *   - xhs.monitor_patrol：小红书监控巡检
+ *   - douyin.governance：抖音治理任务
  */
-const KNOWN_CAPACITY_LANES = ['xhs', 'douyin'];
+const PLATFORM_DEFAULT_CAPACITY_LANES = {
+  xhs: ['xhs.monitor_patrol'],
+  douyin: ['douyin.governance'],
+};
+
+const CAPABILITY_CAPACITY_LANES = {
+  'xhs.authorsurfacescan': ['xhs.monitor_patrol'],
+  'xhs.batchnotes': ['xhs.monitor_patrol'],
+  'xhs.collectauthor': ['xhs.monitor_patrol'],
+  'xhs.authornotelinks': ['xhs.monitor_patrol'],
+  'xhs.batchcomments': ['xhs.comments'],
+  'douyin.authorsurfacescan': ['douyin.governance'],
+  'douyin.batchnotes': ['douyin.governance'],
+  'douyin.collectauthor': ['douyin.governance'],
+  'douyin.batchcomments': ['douyin.comments'],
+  'douyin.singlecomments': ['douyin.comments'],
+};
+
+const KNOWN_PLATFORMS = Object.keys(PLATFORM_DEFAULT_CAPACITY_LANES);
 
 // ---------------------------------------------------------------------------
 // 工具函数
@@ -185,41 +202,39 @@ export function buildMailboxCursors({ stationVersion, laneVersions = {} } = {}) 
 // ---------------------------------------------------------------------------
 
 /**
- * 把 capabilities（字符串数组）+ 当前页面平台转换为 V1.1 capacity 对象（按 lane）。
+ * 把 capabilities（字符串数组）+ 当前页面平台转换为 V1.1 capacity 对象（按正式车道）。
  *
  * 服务端期望：{ [lane]: { remainingWorkSeconds, targetWorkSeconds, maxReservedTasks } }
- * 客户端按自己能跑的平台 lane 上报。手册要求 capacity 反映「真实剩余工时」，
+ * 客户端按自己能跑的 platform.lane 上报。手册要求 capacity 反映「真实剩余工时」，
  * 但插件没有工时度量基础，这里用占位策略（见 CAPACITY_PLACEHOLDER 注释）。
  *
  * @param {object} options
  * @param {string[]} options.capabilities - 插件能力列表（旧 capabilities 字段，含 'xhs' / 'douyin' 等）
- * @param {string} options.activeLane - 当前活跃 lane（'xhs' / 'douyin' / ''），可选
+ * @param {string} options.activeLane - 当前活跃平台（'xhs' / 'douyin' / ''），可选
  * @returns {Record<string, {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}>}
- *          按 lane 的 capacity 对象；无 lane 时返回空对象（服务端走 no_capacity 分支）
+ *          按 platform.lane 的 capacity 对象；无 lane 时返回空对象（服务端走 no_capacity 分支）
  */
 export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
   const caps = toStringArray(capabilities);
   const lanes = new Set();
-  // 从 capabilities 推导 platform：capabilities 格式是 'xhs.batchNotes' / 'douyin.collectAuthor'
-  // 提取 platform 前缀（'xhs' / 'douyin'）作为 capacity key
+  // 从 capabilities 推导正式车道：capabilities 格式是 'xhs.batchNotes' / 'douyin.collectAuthor'
   for (const cap of caps) {
     const normalizedCap = normalizeString(cap).toLowerCase();
-    // 精确匹配（'xhs' / 'douyin'）
-    if (KNOWN_CAPACITY_LANES.includes(normalizedCap)) {
-      lanes.add(normalizedCap);
+    const mappedLanes = CAPABILITY_CAPACITY_LANES[normalizedCap];
+    if (mappedLanes) {
+      mappedLanes.forEach((lane) => lanes.add(lane));
       continue;
     }
-    // 前缀匹配：'xhs.batchNotes' → 'xhs'
-    for (const knownLane of KNOWN_CAPACITY_LANES) {
-      if (normalizedCap.startsWith(knownLane + '.') || normalizedCap.startsWith(knownLane + '_')) {
-        lanes.add(knownLane);
+    for (const platform of KNOWN_PLATFORMS) {
+      if (normalizedCap === platform || normalizedCap.startsWith(platform + '.') || normalizedCap.startsWith(platform + '_')) {
+        PLATFORM_DEFAULT_CAPACITY_LANES[platform].forEach((lane) => lanes.add(lane));
       }
     }
   }
-  // activeLane（当前页面平台）
+  // activeLane（当前页面平台）：没有具体 capability 时至少声明平台默认 V1.1 车道。
   const normalizedActiveLane = normalizeString(activeLane).toLowerCase();
-  if (normalizedActiveLane && KNOWN_CAPACITY_LANES.includes(normalizedActiveLane)) {
-    lanes.add(normalizedActiveLane);
+  if (normalizedActiveLane && PLATFORM_DEFAULT_CAPACITY_LANES[normalizedActiveLane]) {
+    PLATFORM_DEFAULT_CAPACITY_LANES[normalizedActiveLane].forEach((lane) => lanes.add(lane));
   }
 
   const capacity = {};
@@ -318,7 +333,7 @@ export function buildAccountReports(platformAccounts = []) {
 // ---------------------------------------------------------------------------
 
 /**
- * 构造 V1.1 /sync 请求的完整 body（含旧字段并存）。
+ * 构造 V1.1 /sync 请求的完整 body。
  *
  * 调用方：
  *   - executionStationClient.sendHeartbeat（心跳路径，localLease=null）
@@ -339,6 +354,9 @@ export function buildAccountReports(platformAccounts = []) {
  * @param {object|null} [options.activeTask=null] - 当前活动任务
  * @param {number|undefined} [options.mailboxStationVersion] - 上次响应的 station mailbox 版本
  * @param {Record<string, number>} [options.mailboxLaneVersions={}] - 上次响应的 lane 版本
+ * @param {Array} [options.operations=[]] - V1.1 operation 列表
+ * @param {boolean} [options.includeCapacity=true] - 是否上报 capacity；start_job 回执不再重复补货
+ * @param {string} [options.mode=''] - 同步目的：heartbeat 只保活，claim 才允许领 reservation
  * @param {string} [options.claimMode='status_only'] - 旧 claimMode（保留）
  * @param {boolean} [options.forceFullSync=false] - 旧 forceFullSync（保留）
  * @returns {object} /sync 请求 body
@@ -357,6 +375,9 @@ export function buildSyncRequestV11({
   activeTask = null,
   mailboxStationVersion,
   mailboxLaneVersions = {},
+  operations = [],
+  includeCapacity = true,
+  mode = '',
   claimMode = 'status_only',
   forceFullSync = false,
 } = {}) {
@@ -368,6 +389,10 @@ export function buildSyncRequestV11({
     protocolVersion: SYNC_PROTOCOL_VERSION_V11,
     stationSessionId: normalizeString(stationSessionId),
   };
+  const normalizedMode = normalizeString(mode);
+  if (normalizedMode) {
+    v11Fields.mode = normalizedMode;
+  }
 
   // mailboxCursors
   const cursors = buildMailboxCursors({
@@ -379,7 +404,7 @@ export function buildSyncRequestV11({
   }
 
   // capacity（按 lane）
-  const capacity = buildLaneCapacity({ capabilities, activeLane });
+  const capacity = includeCapacity ? buildLaneCapacity({ capabilities, activeLane }) : {};
   if (Object.keys(capacity).length > 0) {
     v11Fields.capacity = capacity;
   }
@@ -390,8 +415,8 @@ export function buildSyncRequestV11({
     v11Fields.activeLeases = activeLeases;
   }
 
-  // operations[]（本期恒为空数组）
-  v11Fields.operations = [];
+  // operations[]
+  v11Fields.operations = Array.isArray(operations) ? operations : [];
 
   // accountReports[]
   const accountReports = buildAccountReports(platformAccounts);
@@ -399,29 +424,7 @@ export function buildSyncRequestV11({
     v11Fields.accountReports = accountReports;
   }
 
-  // --- 旧字段并存（过渡期保留，便于服务端逐步清理） ---
-  const legacyFields = {
-    authorizationId: normalizeString(authorizationId),
-    pluginAuthorizationId: normalizeString(authorizationId),
-    status: normalizeString(status) || 'online',
-    capabilities: toStringArray(capabilities),
-    platformAccounts: Array.isArray(platformAccounts) ? platformAccounts : [],
-    claimMode: normalizeString(claimMode) || 'status_only',
-  };
-
-  // 旧 mailboxVersion（单数字）：取 station cursor 值，兼容旧服务端
-  const legacyMailboxVersion = toOptionalInteger(mailboxStationVersion);
-  if (legacyMailboxVersion !== undefined) {
-    legacyFields.mailboxVersion = legacyMailboxVersion;
-  }
-
-  if (forceFullSync) legacyFields.forceFullSync = true;
-
-  // 旧 localLease（单对象）：始终发送（即使为 null），便于服务端 reconcile 逻辑
-  // （V1.1 用 activeLeases[] 替代，但过渡期服务端可能仍读 localLease 字段）
-  legacyFields.localLease = isPlainObject(localLease) ? localLease : null;
-
-  return { ...v11Fields, ...legacyFields };
+  return v11Fields;
 }
 
 // ---------------------------------------------------------------------------

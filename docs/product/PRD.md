@@ -390,7 +390,7 @@ flowchart TD
 | **状态** | 🟡 部分完成（代码 + 单测已覆盖，待完整实机闭环） |
 | **入口** | Background `taskPoller`（由 `chrome.alarms` 唤醒，无用户操作） |
 | **前置条件** | 工作台地址已配置 + 插件已授权 + **执行工位已配对**（三层缺一不认领） |
-| **接单链路** | `reconcile(对账) → claim(认领 lease) → capabilityCheck(能力检查) → dispatchTask(派单) → 创建/绑定 collectionRun → 平台采集器执行 → deltaOutbox 增量上传 → patchCollectionTask(回写最终状态)` |
+| **接单链路** | `/sync capacity(报可用车道) → reservations[](服务端预留任务) → start_job(确认领取 lease) → capabilityCheck(能力检查) → dispatchTask(派单) → 创建/绑定 collectionRun → 平台采集器执行 → deltaOutbox 增量上传 → patchCollectionTask(回写最终状态)` |
 | **调度机制** | 任务轮询 alarm `30s`（`periodInMinutes = 0.5`）；工位心跳 alarm `1 分钟`；collectionRun 心跳 `30s` 间隔（3s 去抖）；lease 超时 `2h`；**Web Push 唤醒**（D21，push 只唤醒不替代接单）；push 失效时 alarm 兜底 |
 | **outbox 韧性** | 重试间隔 `1s→2s→5s→15s→60s`（指数退避，`nextAttemptAt` 持久化到 IndexedDB）；`in_flight` 行 `5 分钟`超时自动复位；`chrome.alarms` 唤醒 SW 时 flush |
 | **页面策略** | 优先复用已打开的匹配 tab；若只剩"用户当前正在看的前台页"则改开独立执行窗口，不劫持前台页；**插件自开的任务页**（`pluginOpenedTabId`）终态自动关闭，用户原有页面不误关 |
@@ -409,7 +409,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     WB["内容工作台<br/>创建 pending 任务"] --> POLL["插件 Background<br/>taskPoller.tick() 30s alarm"]
-    POLL --> RECON["reconcile 对账<br/>+ claim 认领 lease"]
+    POLL --> RECON["/sync 对账<br/>reservation + start_job 领取 lease"]
     RECON --> CAP["能力检查<br/>capabilityCheck"]
     CAP -->|不可执行| REL["释放租约<br/>回 pending"]
     CAP -->|可执行| DISP["dispatchTask<br/>打开/复用任务页"]
@@ -651,14 +651,14 @@ flowchart LR
         API2["POST /api/collect/batch"]
         API3["POST /api/media-assets/cover"]
         API4["POST /api/execution-stations/sync"]
-        API5["POST /api/collection-tasks/[id]/lease"]
+        API5["POST /api/execution-stations/sync<br/>progress_update"]
         API6["POST /api/collection-tasks/[id]/ingest"]
         API7["GET /api/collection-tasks/[id]/control-requests"]
         API8["PATCH /api/collection-tasks/[id]"]
     end
     subgraph 插件运行时
         AUTH["pluginAuthorizationClient<br/>授权码激活 / 设备资格"]
-        POLL["taskPoller<br/>reconcile→claim→renew→submit"]
+        POLL["taskPoller<br/>sync→start_job→progress_update→submit"]
         STN["executionStationClient<br/>工位配对 / 心跳"]
         LEASE["taskLeaseClient<br/>租约认领 / 续租"]
         OUTBOX["deltaOutbox<br/>增量上传 + 离线重试"]

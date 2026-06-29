@@ -1,3 +1,12 @@
+2026-06-29
+- 本地插件源仓同步到 v2.0.55，并把“本地仓库永远为最新”作为执行铁律落实到实际文件：`manifest.json`、`package.json`、`package-lock.json`、`dist/manifest.json`、根目录 `dist.zip`、`releases/linggan-boom-v2.0.55.zip` 全部对齐到 `2.0.55`；内容工作台 `plugin-releases/linggan-boom-latest.zip` 也改为同一份源仓 release 包，SHA256 `05f8f6d2b029f5b230552e1c96a9e85530321afe5f11766a8bf108ef7da5390f`，大小 `415555` 字节。
+  · 派单接单协议从 v2.0.54 的“旧字段并存”推进到 v2.0.55 的本地纯 V1.1 派单段：`/sync` body 不再发送 `authorizationId / pluginAuthorizationId / capabilities / platformAccounts / claimMode / mailboxVersion / localLease / forceFullSync` 等旧字段；授权身份只走 `Authorization: Bearer <authorizationToken>` 请求头。
+  · capacity 改为真实 V1.1 车道 key：小红书默认上报 `xhs.monitor_patrol`，抖音默认上报 `douyin.governance`，评论类能力映射到 `xhs.comments / douyin.comments`；不再发送裸 `xhs / douyin` 平台级 key。
+  · 接单流程接通 `reservations[] → start_job`：插件第一次 `/sync` 上报容量拿到 reservation 后，会二次 `/sync` 发送 `start_job` operation，携带 `jobId / reserveToken / reservationEpoch` 换取正式 `leaseToken`；任务对象从 reservation.taskSpec 组装，不再依赖旧 claim envelope。
+  · 续租改走 V1.1 `progress_update`：运行中任务续租通过 `/api/execution-stations/sync` 发送 `progress_update` operation，不再调用旧 `/api/collection-tasks/:id/lease`。
+  · 同步文档：`docs/technical/MESSAGE_PROTOCOL.md` 改为 v2.0.55 纯 V1.1 派单/续租说明；`docs/product/PRD.md` 的自动接单链路和拓扑从 `claim/lease` 改为 `reservation/start_job/progress_update`。
+  · 验证：`node --test tests/sync-envelope-v11.test.mjs tests/workbench-task-lease.test.mjs` 34/34 通过；`npm run build` 通过（仅既有 webpack 包体积 warning）；`npm run release:verify -- --version 2.0.55 --zip releases/linggan-boom-v2.0.55.zip` 通过；zip 内 manifest 校验为 2.0.55。已知剩余：结果写回仍走 `/api/collection-tasks/:taskId/ingest`，后续需迁到 V1.1 raw snapshot commit 后再删除旧 ingest 入口。
+
 2026-06-27
 - 内容工作台 V1.1 采集架构重构 — 插件 /sync 协议字段补齐（v2.0.54）：内容工作台 V1.1 重构把 `/api/execution-stations/sync` 升级为手册第 5.5 节完整协议（服务端 execution-sync-service.ts 1238 行已落地），插件需配合发送 V1.1 新字段。
   · 新增 V1.1 envelope builder：`src/workbench/protocol/syncEnvelopeV11.js`（约 380 行，导出 buildSyncRequestV11 / buildMailboxCursors / buildLaneCapacity / buildActiveLeases / buildAccountReports / resolveStationSessionId / clearStationSessionId / extractMailboxVersionsFromResponse / extractNextSyncFromResponse / isV11SyncResponse 等函数）。统一负责 V1.1 字段构造，三处调用方复用。

@@ -6,7 +6,7 @@ function normalizeConfigResult(value) {
 
 export function createTaskDeltaReporter({
   store,
-  ingestCollectionTaskDelta,
+  commitTaskDelta,
   getFlywheelConfig,
   prepareRecordPayload,
   shouldPollWorkbenchTasks = () => true,
@@ -29,7 +29,7 @@ export function createTaskDeltaReporter({
         ? prepareRecordPayload(config, record)
         : record.payload;
     },
-    ingestDelta: async (taskId, envelope) => {
+    commitDelta: async (taskId, envelope) => {
       const config = typeof getFlywheelConfig === 'function'
         ? normalizeConfigResult(await getFlywheelConfig())
         : {};
@@ -38,7 +38,12 @@ export function createTaskDeltaReporter({
         error.retryable = true;
         throw error;
       }
-      return ingestCollectionTaskDelta(config, taskId, envelope);
+      if (typeof commitTaskDelta !== 'function') {
+        const error = new Error('workbench_commit_delta_missing');
+        error.retryable = true;
+        throw error;
+      }
+      return commitTaskDelta(config, taskId, envelope);
     },
   });
 

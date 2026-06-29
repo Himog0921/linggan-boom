@@ -694,14 +694,14 @@ record: {taskId}:{pluginRunId}:record:{recordType}:{externalRecordId || sequence
 }
 ```
 
-- `mode=mailbox_idle`：信箱无变化，不进入完整接单
-- `mode=full_sync`：信箱变化/本地有租约/插件要求完整同步，服务端先对账再按需返回可执行任务
-- 状态型同步带 `claimMode=status_only`，只更新在线状态和信箱版本，**不接单**；任务轮询同步才领取任务
+- `mode=mailbox_idle` / `mode=full_sync`：旧响应兼容解析口径；当前 V1.1 服务端优先返回 `mailboxVersions`、`reservations[]`、`operationResults` 与 `nextSync`
+- 插件不再发送 `claimMode`、`mailboxVersion`、`localLease` 等旧 body 字段；任务领取通过 `capacity → reservations[] → start_job` 完成
+- 运行中续租通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成，不再调用旧 lease 口
 
 **Web Push**：
 
 - 推送消息类型：`collection_task_available` / `collection_task_control`
-- 收到推送**只**把接单检查提前执行，**不**绕过 claim/lease/control/ingest 安全链路
+- 收到推送**只**把接单检查提前执行，**不**绕过 `/sync` reservation、`start_job`、control、ingest 安全链路
 - VAPID 未配置/不支持/订阅过期/发送失败 → 回退低频对账
 
 ### 6.10 授权两层身份（铁律）

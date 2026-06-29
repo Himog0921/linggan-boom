@@ -72,21 +72,59 @@ function createV11MockServer({ minPluginVersion = '2.0.53' } = {}) {
         return;
       }
 
+      const operationResults = {};
+      for (const op of Array.isArray(body.operations) ? body.operations : []) {
+        if (op.type === 'start_job') {
+          operationResults[op.operationId] = {
+            status: 'accepted',
+            attemptId: `attempt-${op.jobId}`,
+            leaseToken: `lease-${op.jobId}`,
+            leaseEpoch: Number(op.reservationEpoch || 0) + 1,
+            leaseExpiresAt: new Date(Date.now() + 120000).toISOString(),
+          };
+        }
+      }
+
+      const reservations = [];
+      if (body.capacity?.['douyin.governance'] && (!Array.isArray(body.operations) || body.operations.length === 0)) {
+        reservations.push({
+          jobId: 'job-douyin-governance-1',
+          reserveToken: 'reserve-douyin-1',
+          reservationEpoch: 4,
+          lane: 'douyin.governance',
+          startBefore: new Date(Date.now() + 300000).toISOString(),
+          taskSpec: {
+            id: 'job-douyin-governance-1',
+            platform: 'douyin',
+            lane: 'governance',
+            taskType: 'douyin.collectAuthor',
+            source: 'data_governance',
+            taskStrategy: 'author_patrol',
+            target: 'https://www.douyin.com/user/demo',
+            targetKey: 'douyin:author:demo',
+            collectionProfile: 'note_detail',
+            jobType: 'collect_detail',
+            requiredFields: {},
+            payload: { taskStrategy: 'author_patrol' },
+          },
+        });
+      }
+
       // 构造 V1.1 成功响应
       const stationMailboxVersion = ++nextMailboxVersion;
       const response = {
         serverTime: new Date().toISOString(),
         mailboxVersions: {
           station: stationMailboxVersion,
-          ...(body.capacity && body.capacity.xhs ? { xhs: 5 } : {}),
-          ...(body.capacity && body.capacity.douyin ? { douyin: 7 } : {}),
+          ...(body.capacity?.['xhs.monitor_patrol'] ? { 'xhs.monitor_patrol': 5 } : {}),
+          ...(body.capacity?.['douyin.governance'] ? { 'douyin.governance': 7 } : {}),
         },
-        operationResults: {},
-        reservations: [],
+        operationResults,
+        reservations,
         controlCommands: [],
         nextSync: {
-          afterMs: body.activeLeases && body.activeLeases.length > 0 ? 30000 : 240000,
-          reason: body.activeLeases && body.activeLeases.length > 0 ? 'running' : 'idle',
+          afterMs: reservations.length > 0 ? 1000 : body.activeLeases && body.activeLeases.length > 0 ? 30000 : 240000,
+          reason: reservations.length > 0 ? 'reservations_granted' : body.activeLeases && body.activeLeases.length > 0 ? 'running' : 'idle',
         },
       };
       res.writeHead(200, { 'Content-Type': 'application/json' });
@@ -183,7 +221,7 @@ async function main() {
   const heartbeatResult = await client.sendHeartbeat({
     status: 'online',
     capabilities: ['xhs'],
-    pluginVersion: '2.0.54',
+    pluginVersion: '2.0.55',
     platformAccounts: [
       { platform: 'xhs', id: 'acc-1', health: 'healthy' },
       { platform: 'douyin', platformAccountId: 'acc-2', healthStatus: 'cooldown', cooldownUntil: '2026-12-01T00:00:00.000Z' },
@@ -201,9 +239,9 @@ async function main() {
   check('protocolVersion="3"', body1.protocolVersion === '3', `actual=${body1.protocolVersion}`);
   check('stationSessionId 是非空字符串', typeof body1.stationSessionId === 'string' && body1.stationSessionId.length > 0, `actual=${body1.stationSessionId}`);
   check('stationId 正确', body1.stationId === 'station-e2e-1');
-  check('pluginVersion="2.0.54"', body1.pluginVersion === '2.0.54');
+  check('pluginVersion="2.0.55"', body1.pluginVersion === '2.0.55');
   check('mailboxCursors 含 station + xhs', body1.mailboxCursors && body1.mailboxCursors.station === 99, `actual=${JSON.stringify(body1.mailboxCursors)}`);
-  check('capacity 含 xhs lane', body1.capacity && body1.capacity.xhs && body1.capacity.xhs.maxReservedTasks === 1, `actual=${JSON.stringify(body1.capacity)}`);
+  check('capacity 含 xhs.monitor_patrol lane', body1.capacity && body1.capacity['xhs.monitor_patrol'] && body1.capacity['xhs.monitor_patrol'].maxReservedTasks === 1, `actual=${JSON.stringify(body1.capacity)}`);
   check('activeLeases 是数组且含 1 个', Array.isArray(body1.activeLeases) && body1.activeLeases.length === 1, `actual=${JSON.stringify(body1.activeLeases)}`);
   check('activeLeases[0].jobId=task-active-1', body1.activeLeases[0]?.jobId === 'task-active-1');
   check('activeLeases[0].lane=xhs', body1.activeLeases[0]?.lane === 'xhs');
@@ -213,16 +251,15 @@ async function main() {
   check('accountReports[0].platform=xhs', body1.accountReports[0]?.platform === 'xhs');
   check('accountReports[1].healthStatus=cooldown', body1.accountReports[1]?.healthStatus === 'cooldown');
 
-  // 旧字段并存
-  check('旧 authorizationId 保留', body1.authorizationId === 'auth-e2e-1');
-  check('旧 platformAccounts 保留', Array.isArray(body1.platformAccounts) && body1.platformAccounts.length === 2);
-  check('旧 claimMode 保留', body1.claimMode === 'status_only');
-  check('旧 mailboxVersion 保留', body1.mailboxVersion === 99);
-  check('旧 localLease 保留', body1.localLease && body1.localLease.taskId === 'task-active-1');
+  check('不再发送旧 authorizationId', !Object.prototype.hasOwnProperty.call(body1, 'authorizationId'));
+  check('不再发送旧 platformAccounts', !Object.prototype.hasOwnProperty.call(body1, 'platformAccounts'));
+  check('不再发送旧 claimMode', !Object.prototype.hasOwnProperty.call(body1, 'claimMode'));
+  check('不再发送旧 mailboxVersion', !Object.prototype.hasOwnProperty.call(body1, 'mailboxVersion'));
+  check('不再发送旧 localLease', !Object.prototype.hasOwnProperty.call(body1, 'localLease'));
 
   console.log('\n  --- 解析响应 ---');
   check('mailboxVersions.station > 99', heartbeatResult.mailboxVersions?.station > 99, `actual=${JSON.stringify(heartbeatResult.mailboxVersions)}`);
-  check('mailboxVersions.lanes 含 xhs', heartbeatResult.mailboxVersions?.lanes?.xhs === 5);
+  check('mailboxVersions.lanes 含 xhs.monitor_patrol', heartbeatResult.mailboxVersions?.lanes?.['xhs.monitor_patrol'] === 5);
   check('nextSync.afterMs=30000（running）', heartbeatResult.nextSync?.afterMs === 30000, `actual=${JSON.stringify(heartbeatResult.nextSync)}`);
   check('nextSync.reason=running', heartbeatResult.nextSync?.reason === 'running');
   check('shouldPollNow=true（有 activeLease 触发）', heartbeatResult.shouldPollNow === true);
@@ -230,7 +267,7 @@ async function main() {
   // 持久化检查
   const identity = await client.getStoredStationIdentity();
   check('identity.mailboxVersion 已更新为新版本', identity.mailboxVersion > 99, `actual=${identity.mailboxVersion}`);
-  check('identity.mailboxLaneVersions 已持久化', identity.mailboxLaneVersions && identity.mailboxLaneVersions.xhs === 5, `actual=${JSON.stringify(identity.mailboxLaneVersions)}`);
+  check('identity.mailboxLaneVersions 已持久化', identity.mailboxLaneVersions && identity.mailboxLaneVersions['xhs.monitor_patrol'] === 5, `actual=${JSON.stringify(identity.mailboxLaneVersions)}`);
 
   // =========================================================================
   // 2. session id 持久化（第二次调用应返回相同 session）
@@ -252,18 +289,23 @@ async function main() {
     authorizationToken: 'auth-token-e2e-2',
     capabilities: ['douyin'],
     platformAccounts: [],
-    pluginVersion: '2.0.54',
+    pluginVersion: '2.0.55',
     fetchFn: globalThis.fetch.bind(globalThis),
     storageArea: storage,
     store: { read: async () => null, write: async () => null, clear: async () => null },
   });
 
-  const claimBody = mock.receivedRequests[mock.receivedRequests.length - 1].body;
+  const claimBody = mock.receivedRequests[mock.receivedRequests.length - 2].body;
+  const startBody = mock.receivedRequests[mock.receivedRequests.length - 1].body;
   check('claim 请求 protocolVersion="3"', claimBody.protocolVersion === '3', `actual=${claimBody.protocolVersion}`);
   check('claim 请求 stationSessionId 非空', typeof claimBody.stationSessionId === 'string' && claimBody.stationSessionId.length > 0);
-  check('claim 请求 capacity 含 douyin lane', claimBody.capacity && claimBody.capacity.douyin, `actual=${JSON.stringify(claimBody.capacity)}`);
+  check('claim 请求 capacity 含 douyin.governance lane', claimBody.capacity && claimBody.capacity['douyin.governance'], `actual=${JSON.stringify(claimBody.capacity)}`);
   check('claim 请求 operations 是空数组', Array.isArray(claimBody.operations) && claimBody.operations.length === 0);
-  check('claim 请求 localLease 显式 null', claimBody.localLease === null, `actual=${claimBody.localLease}`);
+  check('claim 请求不再发送 localLease', !Object.prototype.hasOwnProperty.call(claimBody, 'localLease'), `actual=${claimBody.localLease}`);
+  check('start_job 请求不带 capacity', !startBody.capacity, `actual=${JSON.stringify(startBody.capacity)}`);
+  check('start_job 操作已发送', startBody.operations?.[0]?.type === 'start_job', `actual=${JSON.stringify(startBody.operations)}`);
+  check('claimResponse 返回任务', claimResponse.task?.id === 'job-douyin-governance-1', `actual=${JSON.stringify(claimResponse.task)}`);
+  check('claimResponse 返回租约', claimResponse.lease?.leaseToken === 'lease-job-douyin-governance-1', `actual=${JSON.stringify(claimResponse.lease)}`);
 
   // =========================================================================
   // 4. minPluginVersion 426 拒绝
