@@ -1167,6 +1167,50 @@ export function createTaskPoller(deps = {}) {
     return result;
   }
 
+  function buildTerminalSnapshot({ status = 'completed', progress = 100, latestSummary = {} } = {}) {
+    return {
+      status,
+      progress,
+      latestSummary: latestSummary && typeof latestSummary === 'object' && !Array.isArray(latestSummary)
+        ? latestSummary
+        : {},
+      latestHeartbeatAt: new Date().toISOString(),
+    };
+  }
+
+  async function enqueueTerminalTaskEvent(activeTask, eventType, payload = {}, options = {}) {
+    const status = String(options.status || payload.status || '').trim() || 'failed';
+    const progress = Number.isFinite(Number(options.progress ?? payload.progress))
+      ? Number(options.progress ?? payload.progress)
+      : 100;
+    return enqueueTaskEvent(activeTask, eventType, {
+      status,
+      progress,
+      ...payload,
+    }, {
+      ...options,
+      snapshot: options.snapshot || buildTerminalSnapshot({
+        status,
+        progress,
+        latestSummary: options.latestSummary || payload.latestSummary || {},
+      }),
+    });
+  }
+
+  async function flushTerminalDeltasBeforeCleanup(reason = 'terminal_snapshot_flush') {
+    try {
+      await flushDeltasBeforeCleanup();
+      return { success: true };
+    } catch (err) {
+      console.warn(`[taskPoller] ${reason} failed, keeping active lease for retry:`, err?.message || err);
+      return {
+        success: false,
+        error: err,
+        reason,
+      };
+    }
+  }
+
   async function finalizeControlledStop(activeTask = state.activeTask, terminalControl = {}) {
     if (!activeTask) return { success: true, idle: true };
     const action = String(
@@ -1192,18 +1236,40 @@ export function createTaskPoller(deps = {}) {
         status: 'stopped',
         pluginRunId: activeTask.pluginRunId || null,
         errorMessage: null,
+        deferRelease: true,
       });
     } catch {
       // The task may already be deleted; local cleanup still has to continue.
     }
-    await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPED, {
+    await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_STOPPED, {
       status: 'stopped',
+      progress: 100,
       action,
       controlRequestId,
       deleteRequested,
       reasonCode: 'control_stop_applied',
       userMessage,
     }, { controlRequestId });
+    const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_stop_snapshot_flush');
+    if (!flushResult.success) {
+      return {
+        success: true,
+        final: false,
+        flushPending: true,
+        status: 'stopped',
+        reason: 'terminal_stop_snapshot_pending',
+        cleanupTask,
+      };
+    }
+    try {
+      await patchTask(activeTask.taskId, {
+        status: 'stopped',
+        pluginRunId: activeTask.pluginRunId || null,
+        errorMessage: null,
+      });
+    } catch {
+      // Remote release can be retried by reconciliation; local cleanup still has to continue.
+    }
     state.activeTask = null;
     state.seenControlIds.clear();
     await clearActiveLease(activeTask);
@@ -1808,13 +1874,32 @@ export function createTaskPoller(deps = {}) {
           status: 'failed',
           pluginRunId: activeTask.pluginRunId || null,
           errorMessage: timeoutMsg,
+          deferRelease: true,
         });
       } catch { /* 网络错误不阻塞本地清理 */ }
-      await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+      await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
         status: 'failed',
+        progress: 100,
         errorMessage: timeoutMsg,
         reason: 'max_execution_time_exceeded',
       });
+      const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_timeout_snapshot_flush');
+      if (!flushResult.success) {
+        return {
+          success: true,
+          final: false,
+          flushPending: true,
+          reason: 'max_execution_time_snapshot_pending',
+          cleanupTask: cleanupTaskSnapshot(activeTask),
+        };
+      }
+      try {
+        await patchTask(activeTask.taskId, {
+          status: 'failed',
+          pluginRunId: activeTask.pluginRunId || null,
+          errorMessage: timeoutMsg,
+        });
+      } catch { /* release retry is handled by later reconciliation */ }
       state.activeTask = null;
       state.seenControlIds.clear();
       await clearActiveLease(activeTask);
@@ -2000,7 +2085,7 @@ export function createTaskPoller(deps = {}) {
               resultSummary: streamedSummary,
               errorMessage: null,
             });
-            await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED, {
+            await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED, {
               status: 'completed',
               progress: 100,
               reason: 'result_package_handoff_lost_streamed_records',
@@ -2008,7 +2093,18 @@ export function createTaskPoller(deps = {}) {
               message: recoveredMessage,
               userMessage: recoveredMessage,
               latestSummary: streamedSummary,
-            });
+            }, { status: 'completed', progress: 100, latestSummary: streamedSummary });
+            const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_streamed_result_snapshot_flush');
+            if (!flushResult.success) {
+              return {
+                success: true,
+                final: false,
+                flushPending: true,
+                status: 'completed',
+                reason: 'result_package_handoff_lost_streamed_records_snapshot_pending',
+                cleanupTask: cleanupTaskSnapshot(activeTask),
+              };
+            }
             await notifyContentScriptToStop(activeTask);
             state.activeTask = null;
             state.seenControlIds.clear();
@@ -2027,8 +2123,9 @@ export function createTaskPoller(deps = {}) {
             progress: 100,
             pluginRunId: activeTask.pluginRunId || null,
             errorMessage: handoffErrorMessage,
+            deferRelease: true,
           });
-          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+          await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
             status: 'failed',
             progress: 100,
             reason: 'result_package_handoff_lost',
@@ -2036,6 +2133,24 @@ export function createTaskPoller(deps = {}) {
             errorMessage: handoffErrorMessage,
             userMessage: handoffErrorMessage,
           });
+          const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_handoff_lost_snapshot_flush');
+          if (!flushResult.success) {
+            return {
+              success: true,
+              final: false,
+              flushPending: true,
+              reason: 'result_package_handoff_lost_snapshot_pending',
+              cleanupTask: cleanupTaskSnapshot(activeTask),
+            };
+          }
+          try {
+            await patchTask(activeTask.taskId, {
+              status: 'failed',
+              progress: 100,
+              pluginRunId: activeTask.pluginRunId || null,
+              errorMessage: handoffErrorMessage,
+            });
+          } catch { /* release retry is handled by later reconciliation */ }
           await notifyContentScriptToStop(activeTask);
           state.activeTask = null;
           state.seenControlIds.clear();
@@ -2089,13 +2204,35 @@ export function createTaskPoller(deps = {}) {
           progress: recoveryStatus.status === 'failed' ? 100 : pausedProgress,
           pluginRunId: activeTask.pluginRunId || null,
           errorMessage,
+          ...(recoveryStatus.status === 'failed' ? { deferRelease: true } : {}),
         });
-        await enqueueTaskEvent(activeTask, recoveryStatus.eventType, {
+        const enqueueRecoveryEvent = recoveryStatus.status === 'failed'
+          ? enqueueTerminalTaskEvent
+          : enqueueTaskEvent;
+        await enqueueRecoveryEvent(activeTask, recoveryStatus.eventType, {
           status: recoveryStatus.status,
           errorMessage,
           message: recoveryStatus.message,
         });
         if (recoveryStatus.status === 'failed') {
+          const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_connection_failed_snapshot_flush');
+          if (!flushResult.success) {
+            return {
+              success: true,
+              final: false,
+              flushPending: true,
+              reason: 'connection_failed_snapshot_pending',
+              cleanupTask: cleanupTaskSnapshot(activeTask),
+            };
+          }
+          try {
+            await patchTask(activeTask.taskId, {
+              status: recoveryStatus.status,
+              progress: 100,
+              pluginRunId: activeTask.pluginRunId || null,
+              errorMessage,
+            });
+          } catch { /* release retry is handled by later reconciliation */ }
           await notifyContentScriptToStop(activeTask);
           state.activeTask = null;
           await clearActiveLease(activeTask);
@@ -2113,13 +2250,33 @@ export function createTaskPoller(deps = {}) {
         progress: 100,
         pluginRunId: activeTask.pluginRunId || null,
         errorMessage: errorMessage,
+        deferRelease: true,
       });
-      await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+      await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
         status: 'failed',
+        progress: 100,
         errorMessage,
         userMessage: result?.userMessage || '任务执行失败',
         errorCode: result?.errorCode || result?.reasonCode || '',
       });
+      const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_result_lookup_failed_snapshot_flush');
+      if (!flushResult.success) {
+        return {
+          success: true,
+          final: false,
+          flushPending: true,
+          reason: 'result_lookup_failed_snapshot_pending',
+          cleanupTask: cleanupTaskSnapshot(activeTask),
+        };
+      }
+      try {
+        await patchTask(activeTask.taskId, {
+          status: 'failed',
+          progress: 100,
+          pluginRunId: activeTask.pluginRunId || null,
+          errorMessage,
+        });
+      } catch { /* release retry is handled by later reconciliation */ }
       await notifyContentScriptToStop(activeTask);
       state.activeTask = null;
       await clearActiveLease(activeTask);
@@ -2178,28 +2335,48 @@ export function createTaskPoller(deps = {}) {
       if (recordDeltas.length && typeof deps.enqueueRecords === 'function') {
         try {
           await deps.enqueueRecords(recordDeltas);
-        } catch (error) {
-          if (!isRecordSchemaValidationError(error)) throw error;
-          const schemaErrorMessage = buildRecordSchemaFailureMessage(error);
-          await patchTask(activeTask.taskId, {
-            status: 'failed',
-            progress: 100,
-            pluginRunId: pluginRunId || null,
-            resultSummary,
-            errorMessage: schemaErrorMessage,
-          });
-          await enqueueTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
-            status: 'failed',
-            progress: 100,
-            errorMessage: schemaErrorMessage,
-            userMessage: '采集结果不完整，已停止本轮同步并记录健康告警。',
-            reasonCode: error.reasonCode || error.code || 'record_payload_schema_invalid',
-            errorCode: error.code || error.reasonCode || 'record_payload_schema_invalid',
-            recordType: error.observability?.recordType || '',
-            observability: error.observability || {},
-            latestSummary: run?.resultSummary || {},
-          }, { reportRuntime: true });
-          await notifyContentScriptToStop(activeTask);
+	        } catch (error) {
+	          if (!isRecordSchemaValidationError(error)) throw error;
+	          const schemaErrorMessage = buildRecordSchemaFailureMessage(error);
+	          await patchTask(activeTask.taskId, {
+	            status: 'failed',
+	            progress: 100,
+	            pluginRunId: pluginRunId || null,
+	            resultSummary,
+	            errorMessage: schemaErrorMessage,
+	            deferRelease: true,
+	          });
+	          await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_FAILED, {
+	            status: 'failed',
+	            progress: 100,
+	            errorMessage: schemaErrorMessage,
+	            userMessage: '采集结果不完整，已停止本轮同步并记录健康告警。',
+	            reasonCode: error.reasonCode || error.code || 'record_payload_schema_invalid',
+	            errorCode: error.code || error.reasonCode || 'record_payload_schema_invalid',
+	            recordType: error.observability?.recordType || '',
+	            observability: error.observability || {},
+	            latestSummary: run?.resultSummary || {},
+	          }, { reportRuntime: true });
+	          const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_schema_invalid_snapshot_flush');
+	          if (!flushResult.success) {
+	            return {
+	              success: true,
+	              final: false,
+	              flushPending: true,
+	              reason: 'record_payload_schema_invalid_snapshot_pending',
+	              cleanupTask: cleanupTaskSnapshot(activeTask),
+	            };
+	          }
+	          try {
+	            await patchTask(activeTask.taskId, {
+	              status: 'failed',
+	              progress: 100,
+	              pluginRunId: pluginRunId || null,
+	              resultSummary,
+	              errorMessage: schemaErrorMessage,
+	            });
+	          } catch { /* release retry is handled by later reconciliation */ }
+	          await notifyContentScriptToStop(activeTask);
           const cleanupTask = cleanupTaskSnapshot(activeTask);
           state.activeTask = null;
           state.seenControlIds.clear();
@@ -2240,30 +2417,38 @@ export function createTaskPoller(deps = {}) {
 
     if (mapped.final) {
       const cleanupTask = cleanupTaskSnapshot(activeTask);
-      // V1.1（2026-06-29）：flushDeltasBeforeCleanup 抛错时仍要清理本地状态，
-      // 否则 state.activeTask 永久残留，任务在服务器侧已完成但插件无限轮询。
-      let flushError = null;
-      try {
-        await flushDeltasBeforeCleanup();
-      } catch (err) {
-        flushError = err;
-        console.warn('[taskPoller] flushDeltasBeforeCleanup failed, continuing cleanup:', err?.message || err);
-      }
-      state.activeTask = null;
-      state.seenControlIds.clear();
-      await clearActiveLease(activeTask);
-      if (flushError) {
-        // Delta 未刷完但任务已终端：返回 final 让上层停止轮询，
-        // delta 会由 outbox retry 机制在后续 tick 重试。
-        return {
-          success: true,
-          final: true,
-          status: mapped.status,
-          flushPending: true,
-          cleanupTask,
-        };
-      }
-      return {
+	      // 终态结果包必须先提交成功，才能清理本地执行凭证。
+	      let flushError = null;
+	      try {
+	        await flushDeltasBeforeCleanup();
+	      } catch (err) {
+	        flushError = err;
+	        console.warn('[taskPoller] flushDeltasBeforeCleanup failed, keeping active lease for retry:', err?.message || err);
+	      }
+	      if (flushError) {
+	        return {
+	          success: true,
+	          final: false,
+	          status: mapped.status,
+	          flushPending: true,
+	          cleanupTask,
+	        };
+	      }
+	      if (mapped.status !== 'completed') {
+	        try {
+	          await patchTask(activeTask.taskId, {
+	            status: mapped.status,
+	            progress: mapped.progress ?? buildRunningProgress(run),
+	            pluginRunId: pluginRunId || null,
+	            resultSummary,
+	            errorMessage: errorMessage || null,
+	          });
+	        } catch { /* release retry is handled by later reconciliation */ }
+	      }
+	      state.activeTask = null;
+	      state.seenControlIds.clear();
+	      await clearActiveLease(activeTask);
+	      return {
         success: true,
         final: true,
         status: mapped.status,

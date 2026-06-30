@@ -2393,6 +2393,7 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
       progress: 100,
       pluginRunId: null,
       errorMessage: 'Could not establish connection. Receiving end does not exist.',
+      deferRelease: true,
       leaseToken: 'lease-monitor-1',
     },
   ]);
@@ -2862,6 +2863,127 @@ test('task poller completes running task from streamed records when final result
   assert.equal(events.at(-1).eventType, 'task.completed');
   assert.equal(events.at(-1).payload.reason, 'result_package_handoff_lost_streamed_records');
   assert.equal(poller.getState().activeTask, null);
+});
+
+test('task poller flushes a terminal stopped snapshot before clearing the active lease', async () => {
+  const patches = [];
+  const events = [];
+  const flushContexts = [];
+  let clearLeaseCalls = 0;
+  let poller;
+
+  poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_stop_snapshot',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/user/profile/demo',
+      },
+      lease: {
+        leaseToken: 'lease-stop-snapshot',
+        attemptId: 'attempt-stop-snapshot',
+        leaseEpoch: 9,
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_stop_snapshot',
+      resultLookup: { externalTaskId: 'task_stop_snapshot' },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_stop_snapshot',
+        status: 'running',
+        resultSummary: { itemsPlanned: 1, itemsSucceeded: 0, failedItems: 0 },
+        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+      },
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    flushDeltas: async () => {
+      flushContexts.push(poller.getExecutionContext('task_stop_snapshot'));
+      return { success: true };
+    },
+    clearTaskLease: async () => {
+      clearLeaseCalls += 1;
+    },
+  });
+
+  await poller.tick();
+  poller.updateActiveTask({
+    workbenchStatus: 'stopping',
+    pluginRunId: 'run_stop_snapshot',
+  });
+
+  const result = await poller.tick();
+  const stoppedEvent = events.find((event) => event.eventType === 'task.stopped');
+
+  assert.equal(result.status, 'stopped');
+  assert.equal(stoppedEvent.snapshot.status, 'stopped');
+  assert.equal(flushContexts[0].leaseToken, 'lease-stop-snapshot');
+  assert.equal(flushContexts[0].attemptId, 'attempt-stop-snapshot');
+  assert.equal(clearLeaseCalls, 1);
+  assert.equal(patches.at(-2)[1].deferRelease, true);
+  assert.equal(patches.at(-1)[1].deferRelease, undefined);
+  assert.equal(poller.getState().activeTask, null);
+});
+
+test('task poller keeps the active lease when a terminal snapshot flush fails', async () => {
+  let poller;
+
+  poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_failed_snapshot_retry',
+        taskType: 'xhs.batchNotes',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/user/profile/demo',
+      },
+      lease: {
+        leaseToken: 'lease-failed-snapshot',
+        attemptId: 'attempt-failed-snapshot',
+        leaseEpoch: 4,
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_failed_snapshot_retry',
+      resultLookup: { externalTaskId: 'task_failed_snapshot_retry' },
+    }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run_failed_snapshot_retry',
+        status: 'failed',
+        errorMessage: '页面采集失败',
+        resultSummary: { itemsPlanned: 1, itemsSucceeded: 0, failedItems: 1 },
+        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+      },
+    }),
+    enqueueEvent: async (event) => event,
+    flushDeltas: async () => ({ success: false, reason: 'network_down' }),
+  });
+
+  await poller.tick();
+  const result = await poller.tick();
+
+  assert.equal(result.flushPending, true);
+  assert.equal(result.final, false);
+  assert.equal(poller.getState().activeTask?.taskId, 'task_failed_snapshot_retry');
+  assert.equal(poller.getExecutionContext('task_failed_snapshot_retry').leaseToken, 'lease-failed-snapshot');
 });
 
 test('task poller does not startup-timeout tasks that were locally marked paused', async () => {

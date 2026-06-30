@@ -728,7 +728,9 @@ export async function commitCollectionTaskDeltaThroughSync({
   const attemptId = normalizeString(envelope?.attemptId);
   const nowIso = new Date().toISOString();
   const observedAt = operationObservedAt(envelope, nowIso);
+  const inputRecordCount = Array.isArray(envelope?.records) ? envelope.records.length : 0;
   const records = rawRecordsFromEnvelope(envelope, observedAt);
+  const droppedRecordCount = Math.max(0, inputRecordCount - records.length);
   const shouldCommitRawSnapshot = records.length > 0 || isTerminalSnapshotStatus(envelope?.snapshot?.status);
   const operationId = `${shouldCommitRawSnapshot ? 'commit' : 'progress'}_${normalizedTaskId}_${Date.now()}`;
 
@@ -820,6 +822,12 @@ export async function commitCollectionTaskDeltaThroughSync({
   return {
     success: true,
     ...acceptedDeltaKeys(envelope),
+    clientRecordStats: {
+      inputRecordCount,
+      committedRecordCount: records.length,
+      droppedRecordCount,
+      dropReason: droppedRecordCount > 0 ? 'missing_idempotency_key_or_invalid_record' : '',
+    },
     operationResult: result,
     sync: data,
   };

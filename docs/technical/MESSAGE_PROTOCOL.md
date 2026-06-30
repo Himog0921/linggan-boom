@@ -91,7 +91,7 @@
 >
 > 工作台远程任务的最终结果包必须从执行页读取，不能从 Background 本地库兜底伪装。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
-> 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `POST /api/collection-tasks/:taskId/ingest`，按事件与单条记录增量写入 `CollectionTaskEvent / CollectionTaskRecord`。
+> 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation，按终态结果包写入内容工作台 `RawSnapshot / RawRecord`。任务完成、失败、停止、超时、结果包丢失或结构化记录被过滤为空时，都必须提交终态 raw snapshot；`records: []` 是合法终态包。
 > 笔记记录进入 outbox 前会补齐数据地基出站字段，包括 `standardContentCode`、`standardAuthorCode`、`keywords`、`authorFans`、`authorFansCollectedAt`、`mediaUnderstanding`、`sourceRun` 和 `dataFoundation` 摘要，供内容工作台做低粉爆文、爆款聚类和 Claude Agent 打标。
 
 ### 2.7 工作台 HTTP 协议补充
@@ -133,6 +133,7 @@ POST /api/execution-stations/sync
 - `mode=mailbox_idle` / `mode=full_sync` 是旧响应兼容解析口径；当前 V1.1 服务端优先返回 `mailboxVersions`、`reservations[]`、`operationResults` 与 `nextSync`。
 - 插件从 v2.0.55 起不再发送 `claimMode`、`mailboxVersion`、`localLease` 等旧 body 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
 - 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成，不再调用旧 `/api/collection-tasks/:taskId/lease`。
+- 任务终态结果通过 `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation 完成；终态空结果也必须提交，失败/停止分支先提交 raw snapshot，再释放任务。
 
 ### V1.1 /sync 协议（v2.0.55+）
 
@@ -146,7 +147,7 @@ v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议�
 | `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
 | `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
 | `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组，替代旧 `localLease` 单对象 |
-| `operations[]` | array | 当前已接入 `start_job` 与 `progress_update`；`commit_raw_snapshot / release_job / account_risk_control / control_ack` 待后续迁移 |
+| `operations[]` | array | 当前已接入 `start_job`、`progress_update`、`commit_raw_snapshot` 与 `release_job`；`account_risk_control / control_ack` 待后续迁移 |
 | `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
 V1.1 响应 body 结构：
@@ -239,13 +240,14 @@ pause | resume | stop | delete
 
 ```text
 Content/platform runtime → Background local/progress events
-Background outbox → Workbench API ingest → CollectionTaskEvent/CollectionTaskRecord
+Background outbox → Workbench /sync commit_raw_snapshot → RawSnapshot/RawRecord
 ```
 
 插件写入：
 
 ```text
-POST /api/collection-tasks/:taskId/ingest
+POST /api/execution-stations/sync
+operation.type = commit_raw_snapshot
 ```
 
 delta envelope：
@@ -269,6 +271,11 @@ delta envelope：
   "snapshot": {}
 }
 ```
+
+终态规则：
+- `snapshot.status` 为 `completed / failed / stopped / cancelled` 时，插件必须提交 `commit_raw_snapshot`。
+- `records: []` 代表“本轮采集已终态，但没有可写入的结构化记录”，不是失败协议。
+- 如果本地记录因为缺少幂等键等原因被过滤为空，`taskLeaseClient` 会返回 `clientRecordStats`，用于区分“提交了空终态包”和“没有提交”。
 
 事件类型：
 

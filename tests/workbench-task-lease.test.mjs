@@ -263,6 +263,76 @@ test('task lease client commits a terminal empty result as a raw snapshot', asyn
   assert.deepEqual(op.records, []);
 });
 
+test('task lease client commits a terminal failed result even when invalid records are filtered out', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 18 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'accepted',
+              rawSnapshotId: 'raw-filtered-empty-1',
+              captureId: op.captureId,
+              snapshotStatus: 'committed',
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-filtered-empty-1',
+    leaseToken: 'lease-filtered-empty-1',
+    leaseEpoch: 8,
+    attemptId: 'attempt-filtered-empty-1',
+  });
+
+  const response = await commitCollectionTaskDeltaThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-filtered-empty-1',
+    envelope: {
+      taskId: 'job-filtered-empty-1',
+      pluginRunId: 'run-filtered-empty-1',
+      attemptId: 'attempt-filtered-empty-1',
+      leaseToken: 'lease-filtered-empty-1',
+      leaseEpoch: 8,
+      snapshot: { status: 'failed', progress: 100 },
+      records: [{
+        recordType: 'note',
+        externalRecordId: 'note-without-key',
+        payload: { noteId: 'note-without-key' },
+      }],
+      events: [{ idempotencyKey: 'event-filtered-empty-1' }],
+    },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationId: 'auth_1',
+    authorizationToken: 'auth_token_1',
+    pluginVersion: '2.0.59',
+    fetchFn,
+    store,
+  });
+  const body = JSON.parse(requests[0][1].body);
+  const op = body.operations[0];
+
+  assert.equal(op.type, 'commit_raw_snapshot');
+  assert.deepEqual(op.records, []);
+  assert.equal(response.clientRecordStats.inputRecordCount, 1);
+  assert.equal(response.clientRecordStats.committedRecordCount, 0);
+  assert.equal(response.clientRecordStats.droppedRecordCount, 1);
+  assert.equal(response.clientRecordStats.dropReason, 'missing_idempotency_key_or_invalid_record');
+});
+
 test('task lease client syncs status updates without the retired collection task PATCH route', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
