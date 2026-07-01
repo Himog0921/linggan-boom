@@ -4,16 +4,24 @@
 
   window.__lgboom_xhs_comment_pages = window.__lgboom_xhs_comment_pages || {};
   window.__lgboom_xhs_sub_comment_pages = window.__lgboom_xhs_sub_comment_pages || {};
+  window.__lgboom_xhs_user_posted_pages = window.__lgboom_xhs_user_posted_pages || [];
+  window.__lgboom_xhs_search_note_pages = window.__lgboom_xhs_search_note_pages || [];
 
   const BRIDGE_SOURCE = 'lgboom-xhs-api-capture';
   const REQUEST_SOURCE = 'lgboom-xhs-content';
   const SNAPSHOT_REQUEST_TYPE = '__lgboom_xhs_comment_api_request__';
   const SNAPSHOT_RESPONSE_TYPE = '__lgboom_xhs_comment_api_response__';
+  const PROFILE_NOTES_REQUEST_TYPE = '__lgboom_xhs_profile_notes_request__';
+  const PROFILE_NOTES_RESPONSE_TYPE = '__lgboom_xhs_profile_notes_response__';
+  const SEARCH_NOTES_REQUEST_TYPE = '__lgboom_xhs_search_notes_request__';
+  const SEARCH_NOTES_RESPONSE_TYPE = '__lgboom_xhs_search_notes_response__';
   const PAGE_FETCH_REQUEST_TYPE = '__lgboom_xhs_page_fetch_request__';
   const PAGE_FETCH_RESPONSE_TYPE = '__lgboom_xhs_page_fetch_response__';
   const API_PATTERNS = [
     '/api/sns/web/v2/comment/page',
     '/api/sns/web/v2/comment/sub/page',
+    '/api/sns/web/v1/user_posted',
+    '/api/sns/web/v2/search/notes',
   ];
 
   function safeClone(value) {
@@ -28,6 +36,22 @@
   function isRelevantApi(url) {
     const raw = String(url || '');
     return API_PATTERNS.some((pattern) => raw.includes(pattern));
+  }
+
+  function isProfileNotesApi(url) {
+    return String(url || '').includes('/api/sns/web/v1/user_posted');
+  }
+
+  function isSearchNotesApi(url) {
+    return String(url || '').includes('/api/sns/web/v2/search/notes');
+  }
+
+  function safeDecode(value = '') {
+    try {
+      return decodeURIComponent(String(value || ''));
+    } catch {
+      return String(value || '');
+    }
   }
 
   function normalizeText(value) {
@@ -92,6 +116,92 @@
     return false;
   }
 
+  function extractProfileNotes(json) {
+    const payload = readPayload(json);
+    const candidates = [
+      payload?.notes,
+      payload?.items,
+      payload?.list,
+      json?.notes,
+      json?.items,
+      json?.list,
+      Array.isArray(payload) ? payload : null,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        return candidate.map((item) => safeClone(item)).filter(Boolean);
+      }
+    }
+    return [];
+  }
+
+  function extractSearchNotes(json) {
+    const payload = readPayload(json);
+    const candidates = [
+      payload?.items,
+      payload?.notes,
+      payload?.list,
+      json?.items,
+      json?.notes,
+      json?.list,
+      Array.isArray(payload) ? payload : null,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) {
+        return candidate.map((item) => safeClone(item)).filter(Boolean);
+      }
+    }
+    return [];
+  }
+
+  function buildSearchNotesSnapshot(json, sourceUrl = '') {
+    let parsedPageUrl = null;
+    try {
+      parsedPageUrl = new URL(window.location.href, window.location.origin);
+    } catch {
+      parsedPageUrl = null;
+    }
+
+    const notes = extractSearchNotes(json);
+    if (notes.length === 0) return null;
+    return {
+      keyword: safeDecode(parsedPageUrl?.searchParams.get('keyword') || ''),
+      pageUrl: normalizeText(window.location.href),
+      notes,
+      sourceUrl: normalizeText(sourceUrl),
+      capturedAt: Date.now(),
+    };
+  }
+
+  function buildProfileNotesSnapshot(json, sourceUrl = '') {
+    let parsedUrl = null;
+    try {
+      parsedUrl = new URL(sourceUrl, window.location.origin);
+    } catch {
+      parsedUrl = null;
+    }
+
+    const payload = readPayload(json);
+    const userId = normalizeText(
+      parsedUrl?.searchParams.get('user_id')
+      || payload?.user_id
+      || payload?.userId
+      || json?.user_id
+      || json?.userId
+    );
+    const notes = extractProfileNotes(json);
+    if (!userId && notes.length === 0) return null;
+
+    return {
+      userId,
+      cursor: readCursor(json) || normalizeText(parsedUrl?.searchParams.get('cursor')),
+      hasMore: readHasMore(json),
+      notes,
+      sourceUrl: normalizeText(sourceUrl),
+      capturedAt: Date.now(),
+    };
+  }
+
   function buildSnapshot(json, sourceUrl = '') {
     let parsedUrl = null;
     try {
@@ -145,6 +255,40 @@
   }
 
   function handleJson(url, json) {
+    if (isSearchNotesApi(url)) {
+      const snapshot = buildSearchNotesSnapshot(json, url);
+      if (!snapshot) return;
+      const current = Array.isArray(window.__lgboom_xhs_search_note_pages)
+        ? window.__lgboom_xhs_search_note_pages
+        : [];
+      const snapshotKey = `${snapshot.keyword || '__keyword__'}|${snapshot.sourceUrl || '__source__'}|${snapshot.capturedAt}`;
+      const filtered = current.filter((item) => {
+        const itemKey = `${normalizeText(item?.keyword) || '__keyword__'}|${normalizeText(item?.sourceUrl) || '__source__'}|${Number(item?.capturedAt || 0)}`;
+        return itemKey !== snapshotKey;
+      });
+      filtered.push(snapshot);
+      filtered.sort((a, b) => Number(a?.capturedAt || 0) - Number(b?.capturedAt || 0));
+      window.__lgboom_xhs_search_note_pages = filtered.slice(-12);
+      return;
+    }
+
+    if (isProfileNotesApi(url)) {
+      const snapshot = buildProfileNotesSnapshot(json, url);
+      if (!snapshot) return;
+      const current = Array.isArray(window.__lgboom_xhs_user_posted_pages)
+        ? window.__lgboom_xhs_user_posted_pages
+        : [];
+      const snapshotKey = `${snapshot.userId || '__user__'}|${snapshot.cursor || '__first__'}|${snapshot.sourceUrl || '__source__'}`;
+      const filtered = current.filter((item) => {
+        const itemKey = `${normalizeText(item?.userId) || '__user__'}|${normalizeText(item?.cursor) || '__first__'}|${normalizeText(item?.sourceUrl) || '__source__'}`;
+        return itemKey !== snapshotKey;
+      });
+      filtered.push(snapshot);
+      filtered.sort((a, b) => Number(a?.capturedAt || 0) - Number(b?.capturedAt || 0));
+      window.__lgboom_xhs_user_posted_pages = filtered.slice(-16);
+      return;
+    }
+
     const snapshot = buildSnapshot(json, url);
     if (!snapshot) return;
 
@@ -255,6 +399,42 @@
           noteId,
           pages,
           subPages,
+        });
+        return;
+      }
+
+      if (data.type === PROFILE_NOTES_REQUEST_TYPE) {
+        const requestId = normalizeText(data.payload?.requestId);
+        const userId = normalizeText(data.payload?.userId);
+        const pages = (Array.isArray(window.__lgboom_xhs_user_posted_pages)
+          ? window.__lgboom_xhs_user_posted_pages
+          : [])
+          .filter((item) => !userId || normalizeText(item?.userId) === userId)
+          .map((item) => safeClone(item))
+          .filter(Boolean);
+        respond(PROFILE_NOTES_RESPONSE_TYPE, {
+          requestId,
+          ok: true,
+          userId,
+          pages,
+        });
+        return;
+      }
+
+      if (data.type === SEARCH_NOTES_REQUEST_TYPE) {
+        const requestId = normalizeText(data.payload?.requestId);
+        const keyword = normalizeText(data.payload?.keyword);
+        const pages = (Array.isArray(window.__lgboom_xhs_search_note_pages)
+          ? window.__lgboom_xhs_search_note_pages
+          : [])
+          .filter((item) => !keyword || normalizeText(item?.keyword) === keyword)
+          .map((item) => safeClone(item))
+          .filter(Boolean);
+        respond(SEARCH_NOTES_RESPONSE_TYPE, {
+          requestId,
+          ok: true,
+          keyword,
+          pages,
         });
         return;
       }

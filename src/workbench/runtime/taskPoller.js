@@ -41,7 +41,6 @@ const LEASE_CONFLICT_RETRY_DELAY_MS = 2 * 60 * 1000;
 const RECONCILE_IDLE_INTERVAL_MS = 60 * 1000;
 const AUTHORIZATION_FAILURE_IDLE_MS = 15 * 60 * 1000;
 const TICK_STALE_TIMEOUT_MS = 2 * 60 * 1000;
-const FULL_SYNC_FALLBACK_INTERVAL_MS = 10 * 60 * 1000;
 
 function isRecoverableConnectionError(error) {
   const msg = String(error?.message || error || '');
@@ -962,9 +961,6 @@ function buildAuthorizationFailureIdleResult(error = {}) {
 }
 
 export function createTaskPoller(deps = {}) {
-  const fullSyncFallbackIntervalMs = Number.isFinite(Number(deps.fullSyncFallbackIntervalMs))
-    ? Math.max(0, Number(deps.fullSyncFallbackIntervalMs))
-    : FULL_SYNC_FALLBACK_INTERVAL_MS;
   const state = {
     activeTask: null,
     activeLease: null,
@@ -976,7 +972,6 @@ export function createTaskPoller(deps = {}) {
   let tickPromise = null;
   let tickStartedAtMs = 0;
   let lastReconcileAtMs = 0;
-  let lastForceFullSyncAtMs = getNow();
 
   function getNow() {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
@@ -2010,7 +2005,7 @@ export function createTaskPoller(deps = {}) {
           };
         }
         // V1.1（2026-06-29）：网络错误导致续期失败时不静默。
-        // 标记租约可能已过期，下次 poll 时调 reconcile 而非继续用旧租约。
+        // 标记租约可能已过期，下次 poll 时调 reconcile。
         if (state.activeLease) {
           state.activeLease.renewalFailedAtMs = getNow();
           state.activeLease.renewalFailedReason = String(error?.message || error || 'lease_renewal_failed');
@@ -2576,15 +2571,7 @@ export function createTaskPoller(deps = {}) {
 
         let claimed;
         try {
-          const shouldForceFullSync =
-            fullSyncFallbackIntervalMs > 0 &&
-            getNow() - lastForceFullSyncAtMs >= fullSyncFallbackIntervalMs;
-          claimed = await deps.claimTaskLease({
-            forceFullSync: shouldForceFullSync,
-          });
-          if (shouldForceFullSync) {
-            lastForceFullSyncAtMs = getNow();
-          }
+          claimed = await deps.claimTaskLease();
         } catch (error) {
           if (isAuthorizationFailureError(error)) {
             return handleAuthorizationFailure(error);

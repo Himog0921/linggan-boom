@@ -5,6 +5,10 @@ const PAGE_BRIDGE_SOURCE = 'lgboom-xhs-api-capture';
 const PAGE_FETCH_REQUEST_SOURCE = 'lgboom-xhs-content';
 const SNAPSHOT_REQUEST_TYPE = '__lgboom_xhs_comment_api_request__';
 const SNAPSHOT_RESPONSE_TYPE = '__lgboom_xhs_comment_api_response__';
+const PROFILE_NOTES_REQUEST_TYPE = '__lgboom_xhs_profile_notes_request__';
+const PROFILE_NOTES_RESPONSE_TYPE = '__lgboom_xhs_profile_notes_response__';
+const SEARCH_NOTES_REQUEST_TYPE = '__lgboom_xhs_search_notes_request__';
+const SEARCH_NOTES_RESPONSE_TYPE = '__lgboom_xhs_search_notes_response__';
 const PAGE_FETCH_REQUEST_TYPE = '__lgboom_xhs_page_fetch_request__';
 const PAGE_FETCH_RESPONSE_TYPE = '__lgboom_xhs_page_fetch_response__';
 
@@ -259,7 +263,40 @@ function mergeSnapshotPages(existingPages = [], nextPage) {
   return filtered;
 }
 
-function buildXhsCommentPageRequestUrls(noteId = '', cursor = '') {
+function readXsecTokenFromUrl(url = '') {
+  try {
+    return normalizeText(new URL(url, 'https://www.xiaohongshu.com').searchParams.get('xsec_token'));
+  } catch {
+    return '';
+  }
+}
+
+function readCurrentXsecToken() {
+  try {
+    return readXsecTokenFromUrl(window.location?.href || '');
+  } catch {
+    return '';
+  }
+}
+
+function resolveSnapshotXsecToken(snapshot = {}) {
+  const pageLists = [
+    ...(Array.isArray(snapshot?.pages) ? snapshot.pages : []),
+    ...(Array.isArray(snapshot?.subPages) ? snapshot.subPages : []),
+  ];
+  for (let i = pageLists.length - 1; i >= 0; i--) {
+    const token = readXsecTokenFromUrl(pageLists[i]?.sourceUrl);
+    if (token) return token;
+  }
+  return readCurrentXsecToken();
+}
+
+function withOptionalXsecToken(query = {}, xsecToken = '') {
+  const token = normalizeText(xsecToken);
+  return token ? { ...query, xsec_token: token } : query;
+}
+
+function buildXhsCommentPageRequestUrls(noteId = '', cursor = '', { xsecToken = '' } = {}) {
   const query = {
     note_id: normalizeText(noteId),
     cursor: normalizeText(cursor),
@@ -267,7 +304,7 @@ function buildXhsCommentPageRequestUrls(noteId = '', cursor = '') {
     image_formats: 'jpg,webp,avif',
   };
   return [
-    `/api/sns/web/v2/comment/page?${toQueryString(query)}`,
+    `/api/sns/web/v2/comment/page?${toQueryString(withOptionalXsecToken(query, xsecToken))}`,
     `/api/sns/web/v2/comment/page?${toQueryString({
       note_id: normalizeText(noteId),
       cursor: normalizeText(cursor),
@@ -275,15 +312,17 @@ function buildXhsCommentPageRequestUrls(noteId = '', cursor = '') {
   ];
 }
 
-function buildXhsSubCommentPageRequestUrls(noteId = '', rootCommentId = '', cursor = '') {
+function buildXhsSubCommentPageRequestUrls(noteId = '', rootCommentId = '', cursor = '', { xsecToken = '' } = {}) {
   const query = {
     note_id: normalizeText(noteId),
     root_comment_id: normalizeText(rootCommentId),
-    cursor: normalizeText(cursor),
     num: 10,
+    cursor: normalizeText(cursor),
+    image_formats: 'jpg,webp,avif',
+    top_comment_id: '',
   };
   return [
-    `/api/sns/web/v2/comment/sub/page?${toQueryString(query)}`,
+    `/api/sns/web/v2/comment/sub/page?${toQueryString(withOptionalXsecToken(query, xsecToken))}`,
     `/api/sns/web/v2/comment/sub/page?${toQueryString({
       note_id: normalizeText(noteId),
       root_comment_id: normalizeText(rootCommentId),
@@ -511,6 +550,7 @@ export async function hydrateXhsCommentSnapshot(snapshot = {}, {
     pages: Array.isArray(snapshot?.pages) ? snapshot.pages.map((page) => safeClone(page)).filter(Boolean) : [],
     subPages: Array.isArray(snapshot?.subPages) ? snapshot.subPages.map((page) => safeClone(page)).filter(Boolean) : [],
   };
+  const xsecToken = resolveSnapshotXsecToken(hydrated);
 
   let mainFetchCount = 0;
   while (mainFetchCount < maxMainPages && !shouldStop()) {
@@ -518,7 +558,7 @@ export async function hydrateXhsCommentSnapshot(snapshot = {}, {
     if (!lastPage?.hasMore) break;
     await waitIfPaused();
     if (shouldStop()) break;
-    const requestUrls = buildXhsCommentPageRequestUrls(normalizedNoteId, lastPage.cursor);
+    const requestUrls = buildXhsCommentPageRequestUrls(normalizedNoteId, lastPage.cursor, { xsecToken });
     const json = await fetchJson(requestUrls);
     const nextPage = parseXhsCommentPagePayload(json, { sourceUrl: requestUrls[0] });
     if (!nextPage.noteId) nextPage.noteId = normalizedNoteId;
@@ -547,7 +587,7 @@ export async function hydrateXhsCommentSnapshot(snapshot = {}, {
         break;
       }
 
-      const requestUrls = buildXhsSubCommentPageRequestUrls(normalizedNoteId, rootCommentId, requestCursor);
+      const requestUrls = buildXhsSubCommentPageRequestUrls(normalizedNoteId, rootCommentId, requestCursor, { xsecToken });
       const json = await fetchJson(requestUrls);
       const nextPage = parseXhsCommentPagePayload(json, { sourceUrl: requestUrls[0] });
       nextPage.noteId = nextPage.noteId || normalizedNoteId;
@@ -642,6 +682,32 @@ export async function requestXhsCommentSnapshot(noteId = '') {
     noteId: normalizedNoteId,
     pages: Array.isArray(payload?.pages) ? payload.pages : [],
     subPages: Array.isArray(payload?.subPages) ? payload.subPages : [],
+  };
+}
+
+export async function requestXhsProfileNotesSnapshot(userId = '') {
+  const normalizedUserId = normalizeText(userId);
+  const payload = await postBridgeRequest(
+    PROFILE_NOTES_REQUEST_TYPE,
+    { userId: normalizedUserId },
+    PROFILE_NOTES_RESPONSE_TYPE,
+  );
+  return {
+    userId: normalizedUserId,
+    pages: Array.isArray(payload?.pages) ? payload.pages : [],
+  };
+}
+
+export async function requestXhsSearchNotesSnapshot(keyword = '') {
+  const normalizedKeyword = normalizeText(keyword);
+  const payload = await postBridgeRequest(
+    SEARCH_NOTES_REQUEST_TYPE,
+    { keyword: normalizedKeyword },
+    SEARCH_NOTES_RESPONSE_TYPE,
+  );
+  return {
+    keyword: normalizedKeyword,
+    pages: Array.isArray(payload?.pages) ? payload.pages : [],
   };
 }
 

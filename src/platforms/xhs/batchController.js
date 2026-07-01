@@ -1,4 +1,10 @@
-import { collectNote, discoverWithScroll, resolveExpectedNoteFromMap } from './noteCollector.js';
+import {
+  collectNote,
+  discoverProfileSurfaceNotesFromApi,
+  discoverSearchSurfaceNotesFromApi,
+  discoverWithScroll,
+  resolveExpectedNoteFromMap,
+} from './noteCollector.js';
 import { collectComments } from './commentCollector.js';
 import { throttle, watchCaptcha, showCaptchaPauseOverlay } from './antiDetect.js';
 import { sendToBackground, reportProgress, reportDone, reportWorkbenchRecord } from '../../shared/messaging.js';
@@ -528,9 +534,31 @@ export class BatchNoteController extends BaseBatchController {
         current: 0,
         message: '正在扫描页面笔记...',
       });
-      this.noteList = await discoverWithScroll(this._containerSelector, 10, {
-        expectedCount: this.targetNoteId ? 1 : count,
-      });
+      if (this.surfaceOnly && mode === COLLECT_MODE.SEARCH) {
+        const searchApiNotes = await discoverSearchSurfaceNotesFromApi({
+          expectedCount: this.targetNoteId ? 1 : count,
+          currentUrl: window.location.href,
+        }).catch(() => []);
+        this.noteList = searchApiNotes.length > 0
+          ? searchApiNotes
+          : await discoverWithScroll(this._containerSelector, 10, {
+            expectedCount: this.targetNoteId ? 1 : count,
+          });
+      } else if (this.surfaceOnly && mode === COLLECT_MODE.PROFILE) {
+        const profileApiNotes = await discoverProfileSurfaceNotesFromApi({
+          expectedCount: this.targetNoteId ? 1 : count,
+          currentUrl: window.location.href,
+        }).catch(() => []);
+        this.noteList = profileApiNotes.length > 0
+          ? profileApiNotes
+          : await discoverWithScroll(this._containerSelector, 10, {
+            expectedCount: this.targetNoteId ? 1 : count,
+          });
+      } else {
+        this.noteList = await discoverWithScroll(this._containerSelector, 10, {
+          expectedCount: this.targetNoteId ? 1 : count,
+        });
+      }
       this.noteList = filterTargetedXhsNoteList(this.noteList, this.targetNoteId);
       if (this.targetNoteId && this.noteList.length === 0) {
         throw new Error(`目标作品未在当前作者页找到：${this.targetNoteId}`);

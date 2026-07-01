@@ -48,7 +48,7 @@ test('packaged install bootstrap authorizes the plugin and stores the returned s
     authorizationClient,
     stationClient,
     saveFlywheelConfig: async (config) => calls.push(['config', config]),
-    stationCapabilities: ['xhs.authorSurfaceScan'],
+    stationCapabilities: ['xhs.list_scan'],
     pluginVersion: '2.0.1',
     browserLabel: 'Chrome',
     now: () => 1_000,
@@ -63,7 +63,7 @@ test('packaged install bootstrap authorizes the plugin and stores the returned s
       stationKey: 'station-key-1',
       pluginVersion: '2.0.1',
       browserLabel: 'Chrome',
-      capabilities: ['xhs.authorSurfaceScan'],
+      capabilities: ['xhs.list_scan'],
     }],
     ['config', {
       enabled: true,
@@ -80,7 +80,7 @@ test('packaged install bootstrap authorizes the plugin and stores the returned s
       stationToken: 'station-token-1',
       displayName: '程烈的工位',
       role: 'execution',
-      capabilities: ['xhs.authorSurfaceScan'],
+      capabilities: ['xhs.list_scan'],
       pairedAt: 1_000,
     }],
   ]);
@@ -155,7 +155,7 @@ test('packaged install bootstrap preserves existing authorization when only stat
       },
     },
     saveFlywheelConfig: async (config) => calls.push(['config', config]),
-    stationCapabilities: ['xhs.noteDetailProbe'],
+    stationCapabilities: ['xhs.note_full'],
     pluginVersion: '2.0.2',
     browserLabel: 'Chrome',
     now: () => 2_000,
@@ -171,7 +171,7 @@ test('packaged install bootstrap preserves existing authorization when only stat
       stationKey: 'station-key-existing',
       pluginVersion: '2.0.2',
       browserLabel: 'Chrome',
-      capabilities: ['xhs.noteDetailProbe'],
+      capabilities: ['xhs.note_full'],
     }],
     ['config', {
       enabled: true,
@@ -188,7 +188,7 @@ test('packaged install bootstrap preserves existing authorization when only stat
       stationToken: 'station-token-2',
       displayName: 'Chrome 工位',
       role: 'execution',
-      capabilities: ['xhs.noteDetailProbe'],
+      capabilities: ['xhs.note_full'],
       pairedAt: 2_000,
     }],
   ]);

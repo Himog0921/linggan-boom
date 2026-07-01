@@ -49,34 +49,6 @@ test('task poller starts a fresh tick when the previous tick is stale', async ()
   assert.equal(poller.getState().ticking, false);
 });
 
-test('task poller forces a full station sync after the idle fallback interval', async () => {
-  let now = 1_000;
-  const claimOptions = [];
-  const poller = createTaskPoller({
-    now: () => now,
-    fullSyncFallbackIntervalMs: 10_000,
-    claimTaskLease: async (options = {}) => {
-      claimOptions.push(options);
-      return {
-        task: null,
-        nextPollAfterMs: 30_000,
-        reason: { code: 'NO_PENDING_TASK', message: '暂无可接任务' },
-      };
-    },
-  });
-
-  await poller.tick();
-  now += 9_999;
-  await poller.tick();
-  now += 1;
-  await poller.tick();
-
-  assert.equal(claimOptions.length, 3);
-  assert.equal(claimOptions[0].forceFullSync, false);
-  assert.equal(claimOptions[1].forceFullSync, false);
-  assert.equal(claimOptions[2].forceFullSync, true);
-});
-
 test('task poller claims a pending task and patches completion state', async () => {
   const patches = [];
   const recordBatches = [];
@@ -746,8 +718,8 @@ test('task poller ignores persisted context from a stale attempt', async () => {
     readActiveTaskContext: async () => ({
       taskId: 'task_stale_context',
       externalTaskId: 'task_stale_context',
-      pluginRunId: 'run_old_context',
-      attemptId: 'attempt-old-context',
+      pluginRunId: 'run_previous_context',
+      attemptId: 'attempt-previous-context',
       workbenchStatus: 'running',
     }),
     reconcileTaskLease: async () => ({
@@ -795,7 +767,7 @@ test('task poller keeps persisted execution page when the resumed server task ha
       taskId: 'task_resume_same_run',
       externalTaskId: 'task_resume_same_run',
       pluginRunId: 'run_same_context',
-      attemptId: 'attempt-old-context',
+      attemptId: 'attempt-previous-context',
       platform: 'douyin',
       accountId: 'douyin_account_1',
       tabId: 987,
@@ -1803,7 +1775,7 @@ test('task poller clears a stale workbench account lock before dispatching a fre
           acquired: false,
           reasonCode: 'account_busy',
           reasonMessage: '同一账号正在执行另一个采集任务',
-          existingTaskId: 'old_douyin_task',
+          existingTaskId: 'previous_douyin_task',
           retryAfterMs: 60000,
         };
       }
@@ -1834,7 +1806,7 @@ test('task poller clears a stale workbench account lock before dispatching a fre
     {
       platform: 'douyin',
       accountId: 'douyin_account_1',
-      taskId: 'old_douyin_task',
+      taskId: 'previous_douyin_task',
     },
   ]);
   assert.equal(poller.getState().activeTask?.taskId, 'new_douyin_task');

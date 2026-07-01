@@ -3,18 +3,16 @@
  *
  * V1.1 采集架构重构 — 内容工作台 /api/execution-stations/sync 协议升级。
  *
- * 目标：把插件 /sync 请求从旧字段（capabilities/platformAccounts/claimMode/
- * mailboxVersion/localLease 单对象）升级到内容工作台手册第 5.5 节 V1.1 协议：
+ * 目标：按内容工作台手册第 5.5 节构造 V1.1 /sync 协议：
  *   - stationSessionId / protocolVersion="3"
  *   - capacity（按 lane 上报 remainingWorkSeconds/targetWorkSeconds/maxReservedTasks）
- *   - activeLeases[]（数组，替代旧 activeLease 单对象）
+ *   - activeLeases[]（数组，承载当前本地 lease）
  *   - operations[]（6 类 operation；接到 reservation 后用 start_job 确认开始）
  *   - accountReports[]（基础账号健康上报，由 platformAccounts 转换）
  *   - mailboxCursors（station + 各 lane，对象）
  *
  * 设计原则：
- *   1. /sync body 只发送 V1.1 字段；插件授权身份走 Authorization 请求头，
- *      不再把旧 authorizationId / claimMode / mailboxVersion / localLease 等字段混入协议。
+ *   1. /sync body 只发送 V1.1 字段；插件授权身份走 Authorization 请求头。
  *   2. operations[] 本期只接入 start_job：插件先通过 capacity 领取 reservation，
  *      再回传 start_job 换取正式 lease。任务结果回传仍走 Delta Outbox，
  *      300017 风控仍走本地 markCooldown，后续再迁到完整 operations。
@@ -64,32 +62,23 @@ const CAPACITY_PLACEHOLDER = {
 };
 
 /**
- * V1.1 正式车道命名。服务端只接受 "platform.lane" 形式，不能再发送
- * 旧的 "xhs" / "douyin" 平台级 key。
- *
- * 当前本地验证优先打通正在排队的两类任务：
- *   - xhs.monitor_patrol：小红书监控巡检
- *   - douyin.governance：抖音治理任务
+ * V1.1 正式车道命名。插件只按明确能力声明正式车道。
  */
 const PLATFORM_DEFAULT_CAPACITY_LANES = {
-  xhs: ['xhs.monitor_patrol'],
-  douyin: ['douyin.governance'],
+  xhs: [],
+  douyin: [],
 };
 
 const CAPABILITY_CAPACITY_LANES = {
-  'xhs.authorsurfacescan': ['xhs.monitor_patrol'],
-  'xhs.batchnotes': ['xhs.monitor_patrol'],
-  'xhs.collectauthor': ['xhs.monitor_patrol'],
-  'xhs.authornotelinks': ['xhs.monitor_patrol'],
-  'xhs.batchcomments': ['xhs.comments'],
-  'douyin.authorsurfacescan': ['douyin.governance'],
-  'douyin.batchnotes': ['douyin.governance'],
-  'douyin.collectauthor': ['douyin.governance'],
-  'douyin.batchcomments': ['douyin.comments'],
-  'douyin.singlecomments': ['douyin.comments'],
+  'xhs.list_scan': ['xhs.monitor_patrol', 'xhs.monitor_checkpoint', 'xhs.manual_hot'],
+  'xhs.note_full': ['xhs.monitor_patrol', 'xhs.monitor_checkpoint', 'xhs.manual_hot', 'xhs.governance', 'xhs.data_sync', 'xhs.archive'],
+  'xhs.comment_scan': ['xhs.comments'],
+  'xhs.author_profile': ['xhs.monitor_patrol', 'xhs.manual_hot', 'xhs.archive'],
+  'douyin.list_scan': ['douyin.governance'],
+  'douyin.note_full': ['douyin.governance', 'douyin.manual_hot'],
+  'douyin.comment_scan': ['douyin.comments'],
+  'douyin.author_profile': ['douyin.governance'],
 };
-
-const KNOWN_PLATFORMS = Object.keys(PLATFORM_DEFAULT_CAPACITY_LANES);
 
 // ---------------------------------------------------------------------------
 // 工具函数
@@ -138,7 +127,7 @@ export async function resolveStationSessionId({
 } = {}) {
   const STORAGE_KEY = 'workbenchStationSessionId';
   if (!storageArea?.get) {
-    // 兜底：storage 不可用时退化为进程内 uuid（每次 SW 重启变化，弱语义但保证有值）
+    // storage 不可用时生成临时 session id；Chrome 插件正常环境会走 storage.local。
     return normalizeString(randomUUID());
   }
   const data = await storageArea.get(STORAGE_KEY);
@@ -168,14 +157,14 @@ export async function clearStationSessionId({
 // ---------------------------------------------------------------------------
 
 /**
- * 把旧 mailboxVersion（单数字）+ lane 集合转换为 V1.1 mailboxCursors 对象。
+ * 把本地保存的 station cursor + lane cursor 转换为 V1.1 mailboxCursors 对象。
  *
  * 服务端期望：{ station: number, [lane]: number, ... }
  * 客户端把上次 sync 响应里的 mailboxVersions 整体回传，作为「我已经看到的版本号」
  * cursor。服务端对比自己的当前 mailboxVersions，如果一致则短路 idle 返回。
  *
  * @param {object} options
- * @param {number|undefined} options.stationVersion - 上次响应的 mailboxVersions.station（或旧 mailbox.version）
+ * @param {number|undefined} options.stationVersion - 上次响应的 mailboxVersions.station
  * @param {Record<string, number>} options.laneVersions - 上次响应的各 lane 版本号
  * @returns {object} mailboxCursors 对象，至少含 station 字段（如果 stationVersion 有值）
  */
@@ -209,7 +198,7 @@ export function buildMailboxCursors({ stationVersion, laneVersions = {} } = {}) 
  * 但插件没有工时度量基础，这里用占位策略（见 CAPACITY_PLACEHOLDER 注释）。
  *
  * @param {object} options
- * @param {string[]} options.capabilities - 插件能力列表（旧 capabilities 字段，含 'xhs' / 'douyin' 等）
+ * @param {string[]} options.capabilities - 插件能力列表，格式如 'xhs.list_scan' / 'xhs.note_full'
  * @param {string} options.activeLane - 当前活跃平台（'xhs' / 'douyin' / ''），可选
  * @returns {Record<string, {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}>}
  *          按 platform.lane 的 capacity 对象；无 lane 时返回空对象（服务端走 no_capacity 分支）
@@ -217,7 +206,7 @@ export function buildMailboxCursors({ stationVersion, laneVersions = {} } = {}) 
 export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
   const caps = toStringArray(capabilities);
   const lanes = new Set();
-  // 从 capabilities 推导正式车道：capabilities 格式是 'xhs.batchNotes' / 'douyin.collectAuthor'
+  // 从 capabilities 推导正式车道：capabilities 格式是 'xhs.list_scan' / 'douyin.note_full'
   for (const cap of caps) {
     const normalizedCap = normalizeString(cap).toLowerCase();
     const mappedLanes = CAPABILITY_CAPACITY_LANES[normalizedCap];
@@ -225,13 +214,8 @@ export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
       mappedLanes.forEach((lane) => lanes.add(lane));
       continue;
     }
-    for (const platform of KNOWN_PLATFORMS) {
-      if (normalizedCap === platform || normalizedCap.startsWith(platform + '.') || normalizedCap.startsWith(platform + '_')) {
-        PLATFORM_DEFAULT_CAPACITY_LANES[platform].forEach((lane) => lanes.add(lane));
-      }
-    }
   }
-  // activeLane（当前页面平台）：没有具体 capability 时至少声明平台默认 V1.1 车道。
+  // activeLane 只作为显式默认车道补充；当前默认车道为空，避免按平台泛化接单。
   const normalizedActiveLane = normalizeString(activeLane).toLowerCase();
   if (normalizedActiveLane && PLATFORM_DEFAULT_CAPACITY_LANES[normalizedActiveLane]) {
     PLATFORM_DEFAULT_CAPACITY_LANES[normalizedActiveLane].forEach((lane) => lanes.add(lane));
@@ -249,16 +233,16 @@ export function buildLaneCapacity({ capabilities = [], activeLane = '' } = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * 把旧 activeLease/localLease（单对象）转换为 V1.1 activeLeases 数组。
+ * 把本地 lease 快照转换为 V1.1 activeLeases 数组。
  *
  * 服务端期望：[{ jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt? }]
- * - jobId 对应旧 taskId（手册统一为 jobId 概念，但当前服务端实现也用 jobId 字段名，
+ * - jobId 对应本地 taskId（手册统一为 jobId 概念，但当前服务端实现也用 jobId 字段名，
  *   值仍是 taskId 的值——任务 ID 在 V1.1 全局唯一，jobId === taskId）
  * - lane 推导自 task.platform 或 task.lane（如果存在）
  * - progress/stage/lastProgressAt 来自插件 taskPoller 的 streamedRecordCounts/stage
  *
  * @param {object} options
- * @param {object|null} options.localLease - 旧 lease 快照 { taskId, leaseToken, leaseEpoch, attemptId, ... }
+ * @param {object|null} options.localLease - 本地 lease 快照 { taskId, leaseToken, leaseEpoch, attemptId, ... }
  * @param {object|null} options.activeTask - 当前活动任务（含 platform/stage/streamedRecordCounts 等），可选
  * @returns {Array} activeLeases 数组；无 lease 时返回空数组
  */
@@ -299,13 +283,13 @@ export function buildActiveLeases({ localLease = null, activeTask = null } = {})
 // ---------------------------------------------------------------------------
 
 /**
- * 把旧 platformAccounts 数组转换为 V1.1 accountReports 数组。
+ * 把本地 platformAccounts 数组转换为 V1.1 accountReports 数组。
  *
  * 服务端期望：[{ platform, platformAccountId?, healthStatus, cooldownUntil? }]
- * 旧 platformAccounts 是插件本地账号快照，含 platform/platformAccountId/healthStatus/
+ * platformAccounts 是插件本地账号快照，含 platform/platformAccountId/healthStatus/
  * cooldownUntil 等字段。V1.1 只是协议化字段名 + 协议化结构。
  *
- * @param {Array} platformAccounts - 旧 platformAccounts 数组
+ * @param {Array} platformAccounts - 本地 platformAccounts 数组
  * @returns {Array} accountReports 数组；空输入返回空数组
  */
 export function buildAccountReports(platformAccounts = []) {
@@ -343,31 +327,24 @@ export function buildAccountReports(platformAccounts = []) {
  * @param {object} options
  * @param {string} options.stationId
  * @param {string} options.stationToken
- * @param {string} options.authorizationId
  * @param {string} options.pluginVersion
  * @param {string} options.stationSessionId - 已 resolve 的 session id
- * @param {string} [options.status='online'] - 旧 status 字段（保留）
- * @param {string[]} [options.capabilities=[]] - 旧 capabilities 字段（保留 + 用于推导 lane）
- * @param {Array} [options.platformAccounts=[]] - 旧 platformAccounts（保留 + 转换为 accountReports）
+ * @param {string[]} [options.capabilities=[]] - 新能力列表，用于推导 capacity lane
+ * @param {Array} [options.platformAccounts=[]] - 本地平台账号快照，转换为 accountReports
  * @param {string} [options.activeLane=''] - 当前活跃 lane
- * @param {object|null} [options.localLease=null] - 旧 lease 快照
+ * @param {object|null} [options.localLease=null] - 本地 lease 快照
  * @param {object|null} [options.activeTask=null] - 当前活动任务
  * @param {number|undefined} [options.mailboxStationVersion] - 上次响应的 station mailbox 版本
  * @param {Record<string, number>} [options.mailboxLaneVersions={}] - 上次响应的 lane 版本
  * @param {Array} [options.operations=[]] - V1.1 operation 列表
  * @param {boolean} [options.includeCapacity=true] - 是否上报 capacity；start_job 回执不再重复补货
- * @param {string} [options.mode=''] - 同步目的：heartbeat 只保活，claim 才允许领 reservation
- * @param {string} [options.claimMode='status_only'] - 旧 claimMode（保留）
- * @param {boolean} [options.forceFullSync=false] - 旧 forceFullSync（保留）
  * @returns {object} /sync 请求 body
  */
 export function buildSyncRequestV11({
   stationId,
   stationToken,
-  authorizationId,
   pluginVersion,
   stationSessionId,
-  status = 'online',
   capabilities = [],
   platformAccounts = [],
   activeLane = '',
@@ -377,9 +354,6 @@ export function buildSyncRequestV11({
   mailboxLaneVersions = {},
   operations = [],
   includeCapacity = true,
-  mode = '',
-  claimMode = 'status_only',
-  forceFullSync = false,
 } = {}) {
   // --- V1.1 字段 ---
   const v11Fields = {
@@ -389,11 +363,6 @@ export function buildSyncRequestV11({
     protocolVersion: SYNC_PROTOCOL_VERSION_V11,
     stationSessionId: normalizeString(stationSessionId),
   };
-  const normalizedMode = normalizeString(mode);
-  if (normalizedMode) {
-    v11Fields.mode = normalizedMode;
-  }
-
   // mailboxCursors
   const cursors = buildMailboxCursors({
     stationVersion: mailboxStationVersion,
@@ -428,7 +397,7 @@ export function buildSyncRequestV11({
 }
 
 // ---------------------------------------------------------------------------
-// 响应解析（V1.1 + 旧 envelope 双路径）
+// 响应解析（V1.1）
 // ---------------------------------------------------------------------------
 
 /**
@@ -437,16 +406,12 @@ export function buildSyncRequestV11({
  * V1.1 服务端响应（execution-sync-service.ts SyncResponse）：
  *   body.mailboxVersions = { station: number, [lane]: number, ... }
  *
- * 旧服务端响应（execution-station-sync-service.ts）：
- *   body.mailbox.version = number（station 级）
- *
  * @param {object} data - /sync 响应 body
  * @returns {{ station?: number, lanes: Record<string, number> }}
  */
 export function extractMailboxVersionsFromResponse(data = {}) {
   if (!isPlainObject(data)) return { lanes: {} };
 
-  // V1.1 路径
   const v11Mailbox = data.mailboxVersions;
   if (isPlainObject(v11Mailbox)) {
     const station = toOptionalInteger(v11Mailbox.station);
@@ -463,30 +428,19 @@ export function extractMailboxVersionsFromResponse(data = {}) {
     if (station !== undefined) result.station = station;
     return result;
   }
-
-  // 旧路径
-  const legacyVersion = toOptionalInteger(
-    data?.mailbox?.version
-    ?? data?.mailboxVersion
-    ?? data?.sync?.mailbox?.version,
-  );
-  if (legacyVersion !== undefined) {
-    return { station: legacyVersion, lanes: {} };
-  }
   return { lanes: {} };
 }
 
 /**
- * 从 /sync 响应里提取 nextSync（V1.1 对象）或 nextSyncAfterMs（旧数字）。
+ * 从 /sync 响应里提取 nextSync（V1.1 对象）。
  *
  * V1.1: body.nextSync = { afterMs: number, reason: string }
- * 旧:   body.nextSyncAfterMs = number
  *
  * @param {object} data
  * @returns {{ afterMs: number, reason: string }}
  */
 export function extractNextSyncFromResponse(data = {}) {
-  if (!isPlainObject(data)) return { afterMs: 60_000, reason: 'fallback' };
+  if (!isPlainObject(data)) return { afterMs: 60_000, reason: 'default_interval' };
 
   if (isPlainObject(data.nextSync)) {
     return {
@@ -494,21 +448,5 @@ export function extractNextSyncFromResponse(data = {}) {
       reason: normalizeString(data.nextSync.reason) || 'unknown',
     };
   }
-  const legacyMs = toOptionalInteger(data.nextSyncAfterMs);
-  if (legacyMs !== undefined) {
-    return { afterMs: legacyMs, reason: 'legacy_nextSyncAfterMs' };
-  }
-  return { afterMs: 60_000, reason: 'fallback' };
-}
-
-/**
- * 判断 /sync 响应是否是 V1.1 协议（含 mailboxVersions 对象 + operationResults）。
- * 用于调用方区分响应格式（影响后续解析路径）。
- */
-export function isV11SyncResponse(data = {}) {
-  return Boolean(
-    isPlainObject(data)
-    && isPlainObject(data.mailboxVersions)
-    && Object.prototype.hasOwnProperty.call(data, 'operationResults'),
-  );
+  return { afterMs: 60_000, reason: 'default_interval' };
 }

@@ -286,3 +286,89 @@ test('hydrateXhsCommentSnapshot fetches sub comment pages when root comment stil
   assert.equal(hydrated.subPages[0].rootCommentId, 'root_1');
   assert.equal(hydrated.subPages[0].comments.length, 2);
 });
+
+test('hydrateXhsCommentSnapshot keeps xsec token when fetching additional main comment pages', async () => {
+  const fetchCalls = [];
+  const snapshot = {
+    noteId: 'note_1',
+    pages: [
+      {
+        endpoint: 'page',
+        noteId: 'note_1',
+        cursor: 'cursor_1',
+        hasMore: true,
+        capturedAt: 1,
+        sourceUrl: 'https://edith.xiaohongshu.com/api/sns/web/v2/comment/page?note_id=note_1&cursor=cursor_1&xsec_token=token_123',
+        comments: [
+          { id: 'root_1', content: '主评论 1' },
+        ],
+      },
+    ],
+    subPages: [],
+  };
+
+  await hydrateXhsCommentSnapshot(snapshot, {
+    noteId: 'note_1',
+    fetchJson: async (urls) => {
+      fetchCalls.push(urls);
+      return {
+        data: {
+          comments: [{ id: 'root_2', content: '主评论 2' }],
+          cursor: 'cursor_2',
+          has_more: false,
+        },
+      };
+    },
+  });
+
+  assert.equal(fetchCalls.length, 1);
+  assert.match(fetchCalls[0][0], /xsec_token=token_123/);
+  assert.match(fetchCalls[0][0], /image_formats=jpg%2Cwebp%2Cavif/);
+  assert.match(fetchCalls[0][0], /top_comment_id=/);
+});
+
+test('hydrateXhsCommentSnapshot keeps xsec token when fetching sub comment pages', async () => {
+  const fetchCalls = [];
+  const snapshot = {
+    noteId: 'note_1',
+    pages: [
+      {
+        endpoint: 'page',
+        noteId: 'note_1',
+        cursor: '',
+        hasMore: false,
+        capturedAt: 1,
+        sourceUrl: 'https://edith.xiaohongshu.com/api/sns/web/v2/comment/page?note_id=note_1&xsec_token=token_abc',
+        comments: [
+          {
+            id: 'root_1',
+            content: '主评论 1',
+            sub_comment_count: 2,
+            sub_comments: [],
+          },
+        ],
+      },
+    ],
+    subPages: [],
+  };
+
+  await hydrateXhsCommentSnapshot(snapshot, {
+    noteId: 'note_1',
+    fetchJson: async (urls) => {
+      fetchCalls.push(urls);
+      return {
+        data: {
+          comments: [{ id: 'reply_page_1', content: '分页回复 1' }],
+          cursor: '',
+          has_more: false,
+          root_comment_id: 'root_1',
+        },
+      };
+    },
+  });
+
+  assert.equal(fetchCalls.length, 1);
+  assert.match(fetchCalls[0][0], /xsec_token=token_abc/);
+  assert.match(fetchCalls[0][0], /image_formats=jpg%2Cwebp%2Cavif/);
+  assert.match(fetchCalls[0][0], /top_comment_id=/);
+});

@@ -38,9 +38,10 @@ test('execution station runtime reports generic execution accounts and surface c
       dailyOpenedCount: 3,
     },
   ]);
-  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.authorSurfaceScan'), true);
-  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.keywordSurfaceScan'), true);
-  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.authorNoteLinks'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.list_scan'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.note_full'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.author_profile'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.batchNotes'), false);
 });
 
 test('monitor station runtime reports cooling accounts with explicit cooldown metadata', () => {

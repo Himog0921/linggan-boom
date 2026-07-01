@@ -54,12 +54,12 @@ test('execution station client stores registration identity and keeps it after h
 
   const registration = await client.registerWithPairingCode({
     pairingCode: '123456',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
     pluginVersion: '1.0.0',
   });
   const heartbeat = await client.sendHeartbeat({
     status: 'online',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
     platformAccounts: [{ platform: 'xhs', healthStatus: 'healthy', purpose: 'author_monitor' }],
   });
   const stored = await client.getStoredStationIdentity();
@@ -77,10 +77,15 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   const heartbeatBody = JSON.parse(requests[1][1].body);
   assert.equal(heartbeatBody.protocolVersion, '3');
-  assert.equal(heartbeatBody.mode, 'heartbeat');
-  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'authorizationId'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'claimMode'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(heartbeatBody, 'capacity'), false);
+  assert.deepEqual(Object.keys(heartbeatBody).sort(), [
+    'accountReports',
+    'operations',
+    'pluginVersion',
+    'protocolVersion',
+    'stationId',
+    'stationSessionId',
+    'stationToken',
+  ]);
   assert.deepEqual(heartbeatBody.accountReports, [
     { platform: 'xhs', healthStatus: 'healthy' },
   ]);
@@ -127,7 +132,7 @@ test('execution station heartbeat respects server retry-after backpressure', asy
       stationKey: 'station-key-1',
       stationId: 'station-1',
       stationToken: 'token-1',
-      capabilities: ['xhs.authorSurfaceScan'],
+      capabilities: ['xhs.list_scan'],
     },
   });
   const client = createExecutionStationClient({
@@ -155,7 +160,7 @@ test('execution station heartbeat respects server retry-after backpressure', asy
 
   const heartbeat = await client.sendHeartbeat({
     status: 'online',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
   });
 
   assert.equal(heartbeat.success, false);
@@ -172,7 +177,7 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
       stationKey: 'station-key-1',
       stationId: 'station-1',
       stationToken: 'token-1',
-      capabilities: ['xhs.authorSurfaceScan'],
+      capabilities: ['xhs.list_scan'],
       mailboxVersion: 6,
     },
   });
@@ -192,7 +197,6 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
         status: 200,
         async json() {
           return {
-            mode: 'full_sync',
             heartbeat: {
               success: true,
               station: {
@@ -200,13 +204,11 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
                 role: 'execution',
               },
             },
-            mailbox: {
-              version: 7,
-              pendingCount: 1,
-              wakeReason: 'queue_changed',
-            },
-            reconcile: { action: 'idle', serverLease: null },
-            claim: null,
+            mailboxVersions: { station: 7, 'xhs.monitor_patrol': 3 },
+            operationResults: {},
+            reservations: [],
+            controlCommands: [],
+            nextSync: { afterMs: 30000, reason: 'mailbox_changed' },
           };
         },
       };
@@ -215,7 +217,7 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
 
   const heartbeat = await client.sendHeartbeat({
     status: 'online',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
     pluginVersion: '2.0.42',
   });
   const stored = await client.getStoredStationIdentity();
@@ -224,14 +226,20 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
   assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
   assert.deepEqual(body.mailboxCursors, { station: 6 });
   assert.equal(body.protocolVersion, '3');
-  assert.equal(body.mode, 'heartbeat');
-  assert.equal(Object.prototype.hasOwnProperty.call(body, 'mailboxVersion'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(body, 'claimMode'), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(body, 'capacity'), false);
+  assert.deepEqual(Object.keys(body).sort(), [
+    'mailboxCursors',
+    'operations',
+    'pluginVersion',
+    'protocolVersion',
+    'stationId',
+    'stationSessionId',
+    'stationToken',
+  ]);
   assert.equal(heartbeat.success, true);
   assert.equal(heartbeat.shouldPollNow, true);
   assert.equal(heartbeat.mailbox.version, 7);
   assert.equal(stored.mailboxVersion, 7);
+  assert.deepEqual(stored.mailboxLaneVersions, { 'xhs.monitor_patrol': 3 });
   assert.equal(stored.lastHeartbeatAt, 5_000);
 });
 

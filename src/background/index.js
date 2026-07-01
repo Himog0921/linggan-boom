@@ -926,7 +926,6 @@ async function syncStatusForActiveTask(activeTask = {}, patch = {}) {
     patch,
     stationId: identity.stationId,
     stationToken: identity.stationToken,
-    authorizationId: authorization.authorizationId,
     authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
     capabilities: runtimeSnapshot.capabilities,
     platformAccounts: runtimeSnapshot.platformAccounts,
@@ -2218,7 +2217,6 @@ const taskDeltaReporter = createTaskDeltaReporter({
       envelope,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
-      authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
@@ -2340,7 +2338,7 @@ const taskPoller = createTaskPoller({
   },
   acquireExecutionLock: async (lock) => executionAccountLockManager.acquire(lock),
   releaseExecutionLock: async (lock) => executionAccountLockManager.release(lock),
-  claimTaskLease: async ({ forceFullSync = false } = {}) => {
+  claimTaskLease: async () => {
     const config = await getAuthorizedFlywheelConfig();
     if (!shouldPollWorkbenchTasks(config)) return { task: null, nextPollAfterMs: 0 };
     const identity = await executionStationClient.getStoredStationIdentity();
@@ -2360,12 +2358,10 @@ const taskPoller = createTaskPoller({
       serverUrl: config.serverUrl,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
-      authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
       pluginVersion: getPluginVersion(),
-      forceFullSync,
       store: taskLeaseStore,
     });
   },
@@ -2385,7 +2381,6 @@ const taskPoller = createTaskPoller({
       attemptId: lease.attemptId,
       leaseEpoch: lease.leaseEpoch,
       attemptNumber: lease.attemptNumber,
-      authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       status: options?.status || 'running',
       pluginVersion: getPluginVersion(),
@@ -2404,7 +2399,6 @@ const taskPoller = createTaskPoller({
       serverUrl: config.serverUrl,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
-      authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       localLease,
       capabilities: runtimeSnapshot.capabilities,
@@ -2436,7 +2430,6 @@ const taskPoller = createTaskPoller({
       patch,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
-      authorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,

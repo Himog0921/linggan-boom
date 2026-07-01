@@ -43,6 +43,41 @@ test('readCurrentXhsSearchFilterSnapshot maps Xiaohongshu active search filters'
   });
 });
 
+test('readCurrentXhsSearchFilterSnapshot unwraps live Xiaohongshu ref filter state', () => {
+  const win = {
+    __INITIAL_STATE__: {
+      search: {
+        filterParams: {
+          __v_isRef: true,
+          _rawValue: [
+            { type: 'sort_type', tags: ['collect_descending'] },
+            { type: 'filter_note_type', tags: ['不限'] },
+            { type: 'filter_note_time', tags: ['半年内'] },
+            { type: 'filter_note_range', tags: ['不限'] },
+            { type: 'filter_pos_distance', tags: ['不限'] },
+          ],
+        },
+      },
+    },
+  };
+
+  assert.deepEqual(readCurrentXhsSearchFilterSnapshot(win), {
+    sortBasis: 'most_collected',
+    noteType: 'all',
+    publishTime: 'half_year',
+    labels: {
+      sortBasis: '最多收藏',
+      noteType: '不限',
+      publishTime: '半年内',
+    },
+    raw: {
+      sort_type: ['collect_descending'],
+      filter_note_type: ['不限'],
+      filter_note_time: ['半年内'],
+    },
+  });
+});
+
 test('normalizeXhsSearchFilters keeps only the three supported search filters', () => {
   assert.deepEqual(normalizeXhsSearchFilters({
     sortBasis: 'most_liked',

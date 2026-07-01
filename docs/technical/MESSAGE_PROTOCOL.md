@@ -77,19 +77,19 @@
 | `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台；Dashboard 会按大批量评论同步等待，评论成功数以工作台返回的评论登记数为准 |
 | `WORKBENCH_CAPABILITY_CHECK` | Background → Content | `{ tabId?, task }` | 对远程任务做页面能力检查 |
 | `WORKBENCH_DISPATCH_TASK` | Background → Content | `{ tabId?, task }` | 将工作台任务协议映射到内部动作并派单；成功回包必须保留本次执行页 `tabId` |
-| `WORKBENCH_TASK_CONTROL` | Background → Content | `{ tabId?, taskControl?, command? }` | 对已接单任务执行暂停 / 继续 / 停止；无 `taskControl` 的旧式控制消息也归口到 Content runtime 的工作台处理器 |
+| `WORKBENCH_TASK_CONTROL` | Background → Content | `{ tabId?, taskControl?, command? }` | 对已接单任务执行暂停 / 继续 / 停止；统一归口到 Content runtime 的工作台处理器 |
 | `WORKBENCH_GET_RESULT_PACKAGE` | Background → Content | `{ tabId?, externalTaskId?, collectionRunId? }` | 从本次执行页的 `collectionRuns` 打包结果并回传给工作台 |
 | `WORKBENCH_LOCAL_CONTROL_EVENT` | Content → Background | `{ externalTaskId?, collectionRunId?, taskType?, controlAction, status, message?, occurredAt? }` | 插件本地暂停 / 继续 / 停止同步回工作台事件流 |
 | `WORKBENCH_DELTA_FLUSH` | 内部 / 调试 → Background | `{}` | 触发工作台增量 outbox 立即 flush |
 | `AUTHORIZE_PLUGIN_ACCESS` | Popup → Background | `{ serverUrl, authorizationCode, browserLabel? }` | 使用内容工作台设置里生成的授权码连接当前浏览器；Background 会同时带上本浏览器稳定工位身份，工作台返回授权和工位 |
 | `CLEAR_PLUGIN_AUTHORIZATION` | Popup → Background | `{}` | 清除当前浏览器的插件授权，并解除当前工位绑定 |
 | `GET_EXECUTION_STATION_STATUS` | Popup → Background | `{}` | 查看当前浏览器是否已授权、当前工位是否已准备好，以及可上报的平台账号状态 |
-| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 旧版兼容入口：仅旧插件或自动连接失败修复时，用内容工作台生成的配对码绑定工位 |
+| `REGISTER_EXECUTION_STATION` | Popup → Background | `{ serverUrl, pairingCode, browserLabel? }` | 用内容工作台生成的配对码绑定当前浏览器工位 |
 | `SEND_EXECUTION_STATION_HEARTBEAT` | Popup / alarm → Background | `{}` | 主动发送一次执行工位心跳 |
 
-> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；Content 入口不再单独截获 `WORKBENCH_TASK_CONTROL`，所有暂停 / 继续 / 停止都进入 runtime 的工作台处理器，再按是否带 `taskControl` 分别控制远程任务登记或旧式页面批量控制器。Background 在授权连接时自动拿到工位身份，再通过执行工位协议和内容工作台对账，按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
+> 当前实现中，`WORKBENCH_*` 是插件内部桥接动作；所有暂停 / 继续 / 停止都进入 runtime 的工作台处理器，再按任务登记控制执行页。Background 在授权连接时自动拿到工位身份，再通过执行工位协议和内容工作台对账，按服务端 `nextPollAfterMs` 安排下一次接单检查。空闲时心跳只更新工位在线状态，不会绕过已安排的接单等待；已有活跃任务时仍会继续短周期续约、取控制指令和回写进度。Web Push 只负责把下一次接单检查提前，不负责直接派发任务。
 >
-> 工作台远程任务的最终结果包必须从执行页读取，不能从 Background 本地库兜底伪装。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
+> 工作台远程任务的最终结果包必须从执行页读取，不能用 Background 本地库伪造。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
 > 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation，按终态结果包写入内容工作台 `RawSnapshot / RawRecord`。任务完成、失败、停止、超时、结果包丢失或结构化记录被过滤为空时，都必须提交终态 raw snapshot；`records: []` 是合法终态包。
 > 笔记记录进入 outbox 前会补齐数据地基出站字段，包括 `standardContentCode`、`standardAuthorCode`、`keywords`、`authorFans`、`authorFansCollectedAt`、`mediaUnderstanding`、`sourceRun` 和 `dataFoundation` 摘要，供内容工作台做低粉爆文、爆款聚类和 Claude Agent 打标。
@@ -120,24 +120,26 @@ POST /api/execution-stations/sync
 
 ```json
 {
-  "mode": "mailbox_idle",
-  "heartbeat": { "success": true },
-  "mailbox": { "version": 108, "pendingCount": 0 },
-  "reconcile": { "action": "idle", "serverLease": null },
-  "claim": null,
-  "nextSyncAfterMs": 60000
+  "mailboxVersions": {
+    "station": 108,
+    "xhs.monitor_patrol": 5
+  },
+  "operationResults": {},
+  "reservations": [],
+  "controlCommands": [],
+  "nextSync": { "afterMs": 60000, "reason": "idle" }
 }
 ```
 
 说明：
-- `mode=mailbox_idle` / `mode=full_sync` 是旧响应兼容解析口径；当前 V1.1 服务端优先返回 `mailboxVersions`、`reservations[]`、`operationResults` 与 `nextSync`。
-- 插件从 v2.0.55 起不再发送 `claimMode`、`mailboxVersion`、`localLease` 等旧 body 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
-- 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成，不再调用旧 `/api/collection-tasks/:taskId/lease`。
+- 插件只处理 V1.1 响应字段：`mailboxVersions`、`reservations[]`、`operationResults`、`controlCommands[]` 与 `nextSync`。
+- 插件从 v2.0.55 起 body 只发送 V1.1 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
+- 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成。
 - 任务终态结果通过 `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation 完成；终态空结果也必须提交，失败/停止分支先提交 raw snapshot，再释放任务。
 
 ### V1.1 /sync 协议（v2.0.55+）
 
-v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议，对应内容工作台手册第 5.5 节。插件授权身份走 `Authorization: Bearer <authorizationToken>` 请求头，body 只发送 V1.1 字段，不再混入旧 `authorizationId / pluginAuthorizationId / capabilities / platformAccounts / localLease / mailboxVersion / claimMode / forceFullSync`。
+v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议，对应内容工作台手册第 5.5 节。插件授权身份走 `Authorization: Bearer <authorizationToken>` 请求头，body 只发送 V1.1 字段。
 
 | 字段 | 类型 | 说明 |
 |------|------|------|
@@ -146,7 +148,7 @@ v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议�
 | `stationSessionId` | string | 单次插件安装周期内的会话标识，持久化在 chrome.storage.local，换授权/换工位时清理 |
 | `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
 | `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
-| `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组，替代旧 `localLease` 单对象 |
+| `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组 |
 | `operations[]` | array | 当前已接入 `start_job`、`progress_update`、`commit_raw_snapshot` 与 `release_job`；`account_risk_control / control_ack` 待后续迁移 |
 | `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
@@ -192,10 +194,10 @@ V1.1 响应 body 结构：
 ```
 
 说明：
-- 插件兼容解析：V1.1 字段优先（mailboxVersions 对象 / nextSync 对象），缺失时回退旧字段（mailbox.version / nextSyncAfterMs 数字），保证过渡期插件继续工作。
+- 插件只解析 V1.1 字段：`mailboxVersions` 对象和 `nextSync` 对象。
 - 插件收到 `reservations[]` 后不会直接执行，而是立刻再发一次 `/sync`，用 `start_job` operation 携带 `jobId / reserveToken / reservationEpoch` 确认开始；服务端接受后返回正式 `leaseToken`。
-- 插件运行中续租不再走旧 lease 口，而是发 `progress_update` operation，携带 `jobId / leaseToken / leaseEpoch / stage / progress`。
-- `nextSync.reason` 前缀为 `mailbox` 或 `claim` 时，插件立即触发任务轮询（替代旧 `mode=full_sync` 判定）。
+- 插件运行中续租发 `progress_update` operation，携带 `jobId / leaseToken / leaseEpoch / stage / progress`。
+- `nextSync.reason` 前缀为 `mailbox` 或 `claim` 时，插件立即触发任务轮询。
 - 426 错误：pluginVersion 低于服务端最低要求时返回，reasonCode=`VERSION_REJECTED`，用户需升级插件。
 - 401 错误：protocolVersion 缺失/低于 "3" 时返回，reasonCode=`PROTOCOL_VERSION_REJECTED`。
 
@@ -222,7 +224,7 @@ collection_task_control
 
 - `authorizationCode` 由内容工作台“设置 → 插件授权”生成，决定谁可以使用插件
 - `stationKey` 是插件本地为当前浏览器生成的稳定身份，授权连接时会一并发给工作台，用来自动创建或复用工位
-- `pairingCode` 只保留给旧版插件或自动连接失败后的修复入口，不是日常连接流程
+- `pairingCode` 用于配对码人工绑定场景，不是日常连接流程
 - 插件完成授权后，后续工作台请求统一携带 `Authorization: Bearer <authorizationToken>`
 
 控制动作：
@@ -389,25 +391,28 @@ record: {taskId}:{pluginRunId}:record:{recordType}:{externalRecordId || sequence
 }
 ```
 
-插件支持的监控策略：
+插件上报的 V1.1 接单能力：
 
 ```text
-author_baseline
-author_patrol
-keyword_patrol
-detail_probe
-deep_collect
+xhs.list_scan
+xhs.note_full
+xhs.comment_scan
+xhs.author_profile
+douyin.list_scan
+douyin.note_full
+douyin.comment_scan
+douyin.author_profile
 ```
 
 插件内部映射：
 
-| 策略 | 插件执行方式 | 记录模式 |
+| 能力 | 插件执行方式 | 记录模式 |
 |---|---|---|
-| `author_baseline` | 作者快照 + 主页当前顺位前 50 篇作品采集；顺位优先，不按点赞 Top N | `author_profile` + `author_surface` |
-| `author_patrol` | 作者快照 + 少量主页表层作品卡片 | `author_profile` + `author_surface` |
-| `keyword_patrol` | 搜索页表层结果卡片 | `keyword_surface` |
-| `detail_probe` | 打开指定候选内容补全正文、评论数、发布时间等详情 | `detail_probe` |
-| `deep_collect` | 保留为人工深采入口，不作为默认高频监控 | `detail_probe` |
+| `xhs.list_scan` | 博主页 / 搜索页表层巡查，不进入每篇详情 | `author_surface` / `keyword_surface` |
+| `xhs.note_full` | 打开小红书笔记详情页，一次带回正文、媒体、指标和 20 条以内评论 | `note_full` |
+| `xhs.comment_scan` | 纯评论采集；`xhs.note_full` 可覆盖 | `comment` |
+| `xhs.author_profile` | 读取作者主页资料 | `author_profile` |
+| `douyin.*` | 抖音侧同类能力 | 对应平台记录模式 |
 
 监控记录必须在 payload 中保留：
 

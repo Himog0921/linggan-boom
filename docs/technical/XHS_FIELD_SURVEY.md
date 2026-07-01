@@ -1,6 +1,6 @@
 # 小红书字段与页面结构调研
 
-更新时间：2026-06-01
+更新时间：2026-07-01
 调研方式：Chrome DevTools Console + 实际页面验证
 
 ## 1. 目标
@@ -205,6 +205,136 @@ window.__INITIAL_STATE__
 - 插件现在会优先点击实际选中样式会变化的内层选项，并在每组筛选后确认目标选项已 active。
 - 如果页面未切换成功，批量任务会停在筛选阶段并提示“小红书筛选失败”，不再继续打开笔记造成采集卡住。
 - 筛选成功不等于结果列表已经刷新。插件会读取 `.feeds-container` 前若干真实笔记卡片的 noteId、标题、点赞等摘要，等摘要变化且连续稳定后才进入扫描；如果页面迟迟不稳定，会停在筛选阶段并提示刷新后重试。
+
+## 5.3 2026-07-01 搜索页接口与筛选状态复验
+
+验证页面：`/search_result/?keyword=多动&source=web_search_result_notes&type=51`
+
+本次复验结论：
+
+| 项目 | 当前结构 | 结论 |
+|------|----------|------|
+| 搜索结果接口 | `https://so.xiaohongshu.com/api/sns/web/v2/search/notes` | 本轮捕获 7 次请求，均返回 200；每页约 22 条结果 |
+| 结果条目 | `data.items[]` | 条目包含 `id / model_type / note_card / xsec_token` |
+| 卡片主体 | `data.items[].note_card` | 包含 `type / display_title / user / interact_info / cover / image_list / corner_tag_info` |
+| 表层指标 | `note_card.interact_info` | 包含 `liked_count / collected_count / comment_count / shared_count` |
+| 作者信息 | `note_card.user` | 包含 `user_id / nickname / nick_name / avatar / xsec_token` |
+| 封面/图片 | `note_card.image_list[].info_list[]` | 包含不同场景图片 URL，可支撑列表页封面兜底 |
+| 发布时间 | `note_card.corner_tag_info[]` | `type=publish_time`，文本可能是 `1天前`、`06-14`、`2025-11-14` |
+| 当前筛选状态 | `window.__INITIAL_STATE__.search.filterParams` | 当前为 Vue ref 包装对象，真实值在 `._rawValue` |
+
+真实筛选状态样本：
+
+```json
+[
+  { "type": "sort_type", "tags": ["collect_descending"] },
+  { "type": "filter_note_type", "tags": ["不限"] },
+  { "type": "filter_note_time", "tags": ["半年内"] },
+  { "type": "filter_note_range", "tags": ["不限"] },
+  { "type": "filter_pos_distance", "tags": ["不限"] }
+]
+```
+
+维护结论：
+
+1. `collect_descending` 是小红书当前“最多收藏”的真实状态值，插件需要把它映射回“最多收藏”。
+2. `search.filterParams` 和博主页字段一样可能是 Vue ref 包装对象，读取前必须拆 `._rawValue`。
+3. 搜索页列表扫描具备更强的接口数据源：它已经有标题、作者、点赞、收藏、评论数、发布时间、封面图和作品 ID。插件已接入“关键词表层巡查接口优先、页面卡片兜底”：`surfaceOnly + search` 任务优先使用 `search/notes`，完整批量采集仍保留原来的页面扫描，以保证后续能点击进入详情页。
+4. 页面 DOM 卡片仍可作为兜底，但文本会混合标题、作者、发布时间和单个指标，不适合作为优先数据源。
+
+## 5.4 2026-07-01 博主页列表接口复验
+
+验证页面：`/user/profile/5ebe6d210000000001000afe?...`，页面标题：`孩悦 - 小红书`
+
+本次复验结论：
+
+| 项目 | 当前结构 | 结论 |
+|------|----------|------|
+| 博主页作品接口 | `https://edith.xiaohongshu.com/api/sns/web/v1/user_posted` | 本轮捕获 12 次请求，均返回 200；每页 30 条作品 |
+| 请求参数 | `num / cursor / user_id / image_formats / xsec_token / xsec_source` | 可以按博主 ID 和游标翻页；请求依赖页面携带的 `xsec_token` |
+| 结果数组 | `data.notes[]` | 条目包含 `display_title / user / interact_info / cover / note_id / xsec_token / type` |
+| 表层指标 | `interact_info` | 本轮稳定看到 `liked_count / liked / sticky`；未在该接口样本中看到评论数、收藏数、转发数 |
+| 作者信息 | `user` | 包含 `user_id / nickname / nick_name / avatar` |
+| 封面 | `cover.info_list[]` | 每条通常有 2 个不同场景的封面 URL |
+| 页面卡片 | `#userPostedFeeds section` | 仍可作为兜底，但虚拟列表会卸载不可见卡片，滚动扫描成本更高 |
+
+真实样本形态：
+
+```json
+{
+  "note_id": "684bc095000000002002a91c",
+  "display_title": "汪汪队发声书，宝宝自主阅读的启蒙神器",
+  "user": {
+    "user_id": "5ebe6d210000000001000afe",
+    "nickname": "孩悦"
+  },
+  "interact_info": {
+    "liked_count": "36",
+    "sticky": false
+  },
+  "cover": {
+    "info_list": [{ "url": "..." }]
+  },
+  "xsec_token": "...",
+  "type": "video"
+}
+```
+
+维护结论：
+
+1. 博主日常巡查的低成本主路径应优先使用 `user_posted`：打开博主页后直接读取页面已请求到的 30 条作品，不必为了前 10 条表层巡查持续滚动。
+2. 博主页 `user_posted` 和搜索页 `search/notes` 的字段能力不同：博主页当前只稳定提供点赞数，搜索页能提供赞藏评转。后续任务能力描述应避免把“列表页表层指标”泛化成同一套字段。
+3. 插件已接入“博主页表层巡查接口优先、页面卡片兜底”：`surfaceOnly + profile` 任务优先使用 `user_posted`，完整批量采集仍保留原来的页面扫描，以保证后续能点击进入详情页。
+
+## 5.5 2026-07-01 笔记详情页与评论接口复验
+
+验证页面：`/explore/6a3bc045000000001702a7ff?...`，页面标题：`我用三年的奖励贴纸，亲手喂死了孩子的内 - 小红书`
+
+本次复验结论：
+
+| 项目 | 当前结构 | 结论 |
+|------|----------|------|
+| 详情页容器 | `.note-container` / `#noteContainer` | 页面详情主体稳定可见；弹层 `.note-detail-mask` 在直开详情页不出现 |
+| 详情结构数据 | `window.__INITIAL_STATE__.note.noteDetailMap[noteId]` | 包含正文、标题、作者、标签、发布时间、图片、赞藏评转 |
+| 正文与标题 | `title / desc` | 样本标题存在，正文长度 97 |
+| 作者信息 | `user.userId / nickname / avatar / xsecToken` | 可直接支撑笔记作者归档 |
+| 互动指标 | `interactInfo.likedCount / collectedCount / commentCount / shareCount` | 样本为赞 1059、藏 1315、评 287、转 1304 |
+| 图片媒体 | `imageList[]` | 样本 9 张图，字段含 `urlDefault / url / infoList / stream / livePhoto` |
+| 主评论接口 | `https://edith.xiaohongshu.com/api/sns/web/v2/comment/page` | 样本请求返回 10 条主评论，并带内联子评论 |
+| 子评论接口 | `https://edith.xiaohongshu.com/api/sns/web/v2/comment/sub/page` | 样本捕获 8 次请求，均返回 200；每次约 5 条子评论 |
+| 评论容器 | `.comments-el` / `.comments-container` | 页面显示共 287 条评论；本次已渲染 20 条主评论、74 条评论项、11 个展开入口 |
+
+详情页页面状态样本：
+
+```json
+{
+  "noteId": "6a3bc045000000001702a7ff",
+  "title": "我用三年的奖励贴纸，亲手喂死了孩子的内",
+  "descLength": 97,
+  "type": "normal",
+  "interactInfo": {
+    "likedCount": "1059",
+    "collectedCount": "1315",
+    "commentCount": "287",
+    "shareCount": "1304"
+  },
+  "imageCount": 9
+}
+```
+
+评论接口真实请求形态：
+
+```text
+/api/sns/web/v2/comment/page?note_id=...&cursor=...&top_comment_id=&image_formats=jpg%2Cwebp%2Cavif&xsec_token=...
+/api/sns/web/v2/comment/sub/page?note_id=...&root_comment_id=...&num=10&cursor=...&image_formats=jpg%2Cwebp%2Cavif&top_comment_id=&xsec_token=...
+```
+
+维护结论：
+
+1. 详情页证实“进入一次详情页后，一次拿正文、媒体、赞藏评转和评论”是合理路径。正文/媒体/指标已经在 `noteDetailMap`，评论通过页面已捕获的评论接口和补页接口继续拿。
+2. 插件现有 `xhs.batchNotes + includeComments` 已具备 `note_full` 的执行基础：先采集 `noteDetailMap`，再通过 `comment/page` 与 `comment/sub/page` 采集评论。
+3. 评论补页请求应保留真实页面里的 `xsec_token`，否则在需要继续翻主评论或子评论时存在不稳定风险。本轮已让补页候选 URL 优先携带 `xsec_token / image_formats / top_comment_id`，再保留旧的简化请求作为兜底。
+4. 后续工作台任务设计可以把 `detail_probe + comment_probe` 收敛为 `note_full`：默认评论上限建议保持 20 或 50；全量评论作为治理/回填参数单独放开。
 
 ## 6. 已知问题与修复记录
 

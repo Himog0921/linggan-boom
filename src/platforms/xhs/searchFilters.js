@@ -15,10 +15,10 @@ const FILTER_GROUPS = {
     options: [
       { value: 'current', label: '沿用当前' },
       { value: 'general', label: '综合', aliases: ['general'] },
-      { value: 'latest', label: '最新', aliases: ['latest'] },
-      { value: 'most_liked', label: '最多点赞', aliases: ['likes', 'liked', 'like'] },
-      { value: 'most_commented', label: '最多评论', aliases: ['comments', 'commented', 'comment'] },
-      { value: 'most_collected', label: '最多收藏', aliases: ['collects', 'collected', 'collect'] },
+      { value: 'latest', label: '最新', aliases: ['latest', 'time_descending', 'latest_descending', 'create_time_descending'] },
+      { value: 'most_liked', label: '最多点赞', aliases: ['likes', 'liked', 'like', 'like_descending', 'likes_descending', 'liked_descending'] },
+      { value: 'most_commented', label: '最多评论', aliases: ['comments', 'commented', 'comment', 'comment_descending', 'comments_descending'] },
+      { value: 'most_collected', label: '最多收藏', aliases: ['collects', 'collected', 'collect', 'collect_descending', 'collection_descending', 'collected_descending'] },
     ],
   },
   noteType: {
@@ -71,6 +71,7 @@ function toTextList(value) {
 
 function unwrapState(value) {
   if (!value || typeof value !== 'object') return value;
+  if (value.__v_isRef === true) return unwrapState(value._rawValue ?? value._value ?? value.value);
   if ('value' in value && Object.keys(value).length <= 2) return unwrapState(value.value);
   return value;
 }

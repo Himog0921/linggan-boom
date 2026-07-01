@@ -1,7 +1,222 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { buildDiscoveryPlan, discoverNotesFromDOM, discoverWithScroll, shouldStopDiscovery } from '../src/platforms/xhs/noteCollector.js';
+import {
+  buildDiscoveryPlan,
+  discoverNotesFromDOM,
+  discoverProfileSurfaceNotesFromApi,
+  discoverSearchSurfaceNotesFromApi,
+  discoverWithScroll,
+  normalizeProfilePostedNote,
+  normalizeSearchSurfaceNote,
+  shouldStopDiscovery,
+} from '../src/platforms/xhs/noteCollector.js';
+
+test('profile api note normalization maps Xiaohongshu user_posted cards into surface notes', () => {
+  const note = normalizeProfilePostedNote({
+    note_id: '684bc095000000002002a91c',
+    display_title: '汪汪队发声书，宝宝自主阅读的启蒙神器',
+    xsec_token: 'token-1',
+    type: 'video',
+    user: {
+      user_id: '5ebe6d210000000001000afe',
+      nickname: '孩悦',
+      avatar: 'https://example.com/avatar.jpg',
+    },
+    interact_info: {
+      liked_count: '36',
+      sticky: false,
+    },
+    cover: {
+      info_list: [
+        { image_scene: 'WB_PRV', url: 'https://example.com/cover-small.jpg' },
+        { image_scene: 'WB_DFT', url: 'https://example.com/cover.jpg' },
+      ],
+    },
+  }, {
+    index: 0,
+    sourceUrl: 'https://edith.xiaohongshu.com/api/sns/web/v1/user_posted',
+    userId: '5ebe6d210000000001000afe',
+  });
+
+  assert.equal(note.noteId, '684bc095000000002002a91c');
+  assert.equal(note.title, '汪汪队发声书，宝宝自主阅读的启蒙神器');
+  assert.equal(note.likes, '36');
+  assert.equal(note.type, 'video');
+  assert.equal(note.authorId, '5ebe6d210000000001000afe');
+  assert.equal(note.authorName, '孩悦');
+  assert.equal(note.dataSource, 'xhs.user_posted');
+  assert.match(note.url, /xsec_token=token-1/);
+  assert.ok(note.cover.includes('cover-small.jpg'));
+});
+
+test('profile surface discovery prefers captured user_posted pages without scrolling', async () => {
+  const notes = await discoverProfileSurfaceNotesFromApi({
+    expectedCount: 2,
+    currentUrl: 'https://www.xiaohongshu.com/user/profile/5ebe6d210000000001000afe?xsec_token=profile-token&xsec_source=pc_search',
+    ensureBridge: () => {},
+    requestSnapshot: async () => ({
+      userId: '5ebe6d210000000001000afe',
+      pages: [
+        {
+          userId: '5ebe6d210000000001000afe',
+          sourceUrl: 'https://edith.xiaohongshu.com/api/sns/web/v1/user_posted?cursor=',
+          notes: [
+            {
+              note_id: '684bc095000000002002a91c',
+              display_title: '第一篇',
+              xsec_token: 'token-a',
+              interact_info: { liked_count: 36 },
+              user: { user_id: '5ebe6d210000000001000afe', nickname: '孩悦' },
+            },
+            {
+              note_id: '684b876d0000000021018cb1',
+              display_title: '第二篇',
+              xsec_token: 'token-b',
+              interact_info: { liked_count: '41' },
+              user: { user_id: '5ebe6d210000000001000afe', nickname: '孩悦' },
+            },
+            {
+              note_id: '684b876d0000000021018cb1',
+              display_title: '重复篇',
+              xsec_token: 'token-b',
+              interact_info: { liked_count: '41' },
+            },
+          ],
+        },
+      ],
+    }),
+    fetchJson: async () => {
+      throw new Error('fetch should not be needed when snapshot is available');
+    },
+  });
+
+  assert.equal(notes.length, 2);
+  assert.deepEqual(notes.map((item) => item.noteId), [
+    '684bc095000000002002a91c',
+    '684b876d0000000021018cb1',
+  ]);
+  assert.equal(notes[0].likes, '36');
+  assert.equal(notes[1].likes, '41');
+});
+
+test('search api note normalization maps Xiaohongshu search cards into surface notes', () => {
+  const note = normalizeSearchSurfaceNote({
+    id: '684bc095000000002002a91c',
+    xsec_token: 'search-token-1',
+    model_type: 'note',
+    note_card: {
+      type: 'normal',
+      display_title: '多动孩子的奖励系统怎么用',
+      user: {
+        user_id: '5ebe6d210000000001000afe',
+        nickname: '作者A',
+        avatar: 'https://example.com/avatar.jpg',
+      },
+      interact_info: {
+        liked_count: '105',
+        collected_count: '23',
+        comment_count: '7',
+        shared_count: '3',
+      },
+      image_list: [{
+        info_list: [
+          { image_scene: 'WB_PRV', url: 'https://example.com/cover-small.jpg' },
+          { image_scene: 'WB_DFT', url: 'https://example.com/cover.jpg' },
+        ],
+      }],
+      corner_tag_info: [{ type: 'publish_time', text: '1天前' }],
+    },
+  }, {
+    index: 0,
+    sourceUrl: 'https://so.xiaohongshu.com/api/sns/web/v2/search/notes',
+    keyword: '多动',
+  });
+
+  assert.equal(note.noteId, '684bc095000000002002a91c');
+  assert.equal(note.title, '多动孩子的奖励系统怎么用');
+  assert.equal(note.likes, '105');
+  assert.equal(note.collects, '23');
+  assert.equal(note.comments, '7');
+  assert.equal(note.shares, '3');
+  assert.equal(note.type, 'normal');
+  assert.equal(note.authorId, '5ebe6d210000000001000afe');
+  assert.equal(note.authorName, '作者A');
+  assert.equal(note.publishedAtText, '1天前');
+  assert.equal(note.searchKeyword, '多动');
+  assert.equal(note.dataSource, 'xhs.search_notes');
+  assert.match(note.url, /xsec_token=search-token-1/);
+  assert.ok(note.cover.includes('cover-small.jpg'));
+  assert.deepEqual(note.images, [
+    'https://example.com/cover-small.jpg',
+    'https://example.com/cover.jpg',
+  ]);
+});
+
+test('search surface discovery prefers captured search pages without scrolling', async () => {
+  const notes = await discoverSearchSurfaceNotesFromApi({
+    expectedCount: 2,
+    currentUrl: 'https://www.xiaohongshu.com/search_result?keyword=%E5%A4%9A%E5%8A%A8',
+    ensureBridge: () => {},
+    requestSnapshot: async (keyword) => ({
+      keyword,
+      pages: [
+        {
+          keyword: '多动',
+          sourceUrl: 'https://so.xiaohongshu.com/api/sns/web/v2/search/notes?page=1',
+          notes: [
+            {
+              id: '684bc095000000002002a91c',
+              xsec_token: 'token-a',
+              note_card: {
+                display_title: '第一篇',
+                interact_info: { liked_count: 36, collected_count: '12', comment_count: '4' },
+                user: { user_id: 'author-a', nickname: '作者A' },
+              },
+            },
+            {
+              id: '684b876d0000000021018cb1',
+              xsec_token: 'token-b',
+              note_card: {
+                display_title: '第二篇',
+                interact_info: { liked_count: '41', collected_count: '19', comment_count: '8' },
+                user: { user_id: 'author-b', nickname: '作者B' },
+              },
+            },
+            {
+              id: '684b876d0000000021018cb1',
+              xsec_token: 'token-b',
+              note_card: {
+                display_title: '重复篇',
+                interact_info: { liked_count: '41' },
+              },
+            },
+          ],
+        },
+        {
+          keyword: '别的词',
+          sourceUrl: 'https://so.xiaohongshu.com/api/sns/web/v2/search/notes?page=2',
+          notes: [{
+            id: '684000000000000000000000',
+            note_card: { display_title: '不应混入' },
+          }],
+        },
+      ],
+    }),
+  });
+
+  assert.equal(notes.length, 2);
+  assert.deepEqual(notes.map((item) => item.noteId), [
+    '684bc095000000002002a91c',
+    '684b876d0000000021018cb1',
+  ]);
+  assert.equal(notes[0].likes, '36');
+  assert.equal(notes[0].collects, '12');
+  assert.equal(notes[0].comments, '4');
+  assert.equal(notes[0].searchKeyword, '多动');
+  assert.equal(notes[1].likes, '41');
+  assert.equal(notes[1].authorName, '作者B');
+});
 
 test('profile discovery keeps scanning until enough content is found or the page is actually at the bottom', () => {
   const plan = buildDiscoveryPlan('#userPostedFeeds', {

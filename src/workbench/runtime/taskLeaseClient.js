@@ -330,7 +330,7 @@ function inferTaskTypeFromReservation(reservation = {}) {
   }
   if (platform === 'douyin') {
     if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'douyin.batchComments';
-    if (jobType.includes('author') || collectionProfile === 'note_detail') return 'douyin.collectAuthor';
+    if (collectionProfile === 'author_profile' || jobType.includes('author')) return 'douyin.collectAuthor';
     return 'douyin.batchNotes';
   }
   return '';
@@ -404,7 +404,6 @@ async function startReservationThroughSync({
   serverUrl = '',
   stationId = '',
   stationToken = '',
-  authorizationId = '',
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
@@ -420,15 +419,12 @@ async function startReservationThroughSync({
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
-    status: 'online',
     capabilities,
     platformAccounts,
     mailboxStationVersion: mailboxVersions.station,
     mailboxLaneVersions: mailboxVersions.lanes,
-    mode: 'claim',
     includeCapacity: false,
     operations: [{
       operationId,
@@ -620,12 +616,10 @@ export async function claimCollectionTaskLease({
   serverUrl = '',
   stationId = '',
   stationToken = '',
-  authorizationId = '',
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
   pluginVersion = '',
-  forceFullSync = false,
   fetchFn,
   store = null,
   storageArea = globalThis.chrome?.storage?.local,
@@ -643,10 +637,8 @@ export async function claimCollectionTaskLease({
   const requestBody = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
-    status: 'online',
     capabilities,
     platformAccounts,
     localLease: localLease && typeof localLease === 'object'
@@ -654,8 +646,6 @@ export async function claimCollectionTaskLease({
       : null,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
-    mode: 'claim',
-    forceFullSync,
   });
 
   const initialRawData = await postJson({
@@ -670,7 +660,6 @@ export async function claimCollectionTaskLease({
     serverUrl,
     stationId,
     stationToken,
-    authorizationId,
     authorizationToken,
     capabilities,
     platformAccounts,
@@ -710,7 +699,6 @@ export async function commitCollectionTaskDeltaThroughSync({
   envelope = {},
   stationId = '',
   stationToken = '',
-  authorizationId = '',
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
@@ -778,15 +766,12 @@ export async function commitCollectionTaskDeltaThroughSync({
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
-    status: 'online',
     capabilities,
     platformAccounts,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
-    mode: 'writeback',
     includeCapacity: false,
     localLease,
     operations,
@@ -839,7 +824,6 @@ export async function syncCollectionTaskStatusThroughSync({
   patch = {},
   stationId = '',
   stationToken = '',
-  authorizationId = '',
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
@@ -901,15 +885,12 @@ export async function syncCollectionTaskStatusThroughSync({
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
-    status: 'online',
     capabilities,
     platformAccounts,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
-    mode: 'status',
     includeCapacity: false,
     localLease: leaseAuth.taskId ? leaseAuth : null,
     operations,
@@ -951,7 +932,6 @@ export async function renewCollectionTaskLease({
   stationId = '',
   stationToken = '',
   leaseToken = '',
-  authorizationId = '',
   authorizationToken = '',
   status = 'running',
   attemptId = '',
@@ -983,7 +963,6 @@ export async function renewCollectionTaskLease({
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
     mailboxStationVersion: mailboxVersion,
@@ -1043,7 +1022,6 @@ export async function reconcileExecutionStationLease({
   serverUrl = '',
   stationId = '',
   stationToken = '',
-  authorizationId = '',
   authorizationToken = '',
   localLease = null,
   capabilities = [],
@@ -1070,16 +1048,13 @@ export async function reconcileExecutionStationLease({
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
-    authorizationId,
     pluginVersion,
     stationSessionId,
-    status: 'online',
     capabilities,
     platformAccounts,
     localLease: normalizedLocalLease,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
-    claimMode: 'status_only',
   });
 
   const rawData = await postJson({

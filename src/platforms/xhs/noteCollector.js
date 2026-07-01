@@ -11,6 +11,12 @@ import { isContextValid } from '../../shared/messaging.js';
 import { noteStore } from '../../db/noteStore.js';
 import { createCollectorEvidence, joinRawDomText } from '../../shared/collectorMetadata.js';
 import { withMonitorRecordMeta } from '../../workbench/runtime/monitorTask.js';
+import {
+  ensureXhsCommentApiBridge,
+  fetchXhsJsonViaBridge,
+  requestXhsProfileNotesSnapshot,
+  requestXhsSearchNotesSnapshot,
+} from './commentApi.js';
 
 const XHS_CONTEXT_REFRESH_MESSAGE = '插件刚更新，请刷新当前页面后再点一次，刷新后即可继续。';
 
@@ -585,6 +591,36 @@ function firstText(value) {
   return trimmed && trimmed !== '[object Object]' ? trimmed : '';
 }
 
+function readObject(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') return {};
+  for (const key of keys) {
+    const value = source[key];
+    if (value && typeof value === 'object' && !Array.isArray(value)) return value;
+  }
+  return {};
+}
+
+function readArray(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') return [];
+  for (const key of keys) {
+    const value = source[key];
+    if (Array.isArray(value)) return value;
+  }
+  return [];
+}
+
+function pickFirstText(source = {}, keys = []) {
+  if (!source || typeof source !== 'object') return '';
+  for (const key of keys) {
+    const raw = source[key];
+    const value = typeof raw === 'number' && Number.isFinite(raw)
+      ? String(raw)
+      : firstText(raw);
+    if (value) return value;
+  }
+  return '';
+}
+
 function readAttribute(element, name) {
   if (!element || typeof element.getAttribute !== 'function') return '';
   return firstText(element.getAttribute(name));
@@ -622,6 +658,354 @@ function pickImageUrlFromElement(element) {
   ];
   const raw = candidates.find(Boolean) || '';
   return raw ? toHighQualityImageUrl(raw) : '';
+}
+
+function pickProfilePostedCover(note = {}) {
+  const cover = readObject(note, ['cover', 'coverInfo', 'cover_info']);
+  const infoList = Array.isArray(cover.info_list)
+    ? cover.info_list
+    : (Array.isArray(cover.infoList) ? cover.infoList : []);
+  for (const item of infoList) {
+    const url = pickFirstText(item, ['url', 'urlDefault', 'url_default', 'src']);
+    if (url) return toHighQualityImageUrl(url);
+  }
+  return toHighQualityImageUrl(
+    pickFirstText(cover, ['url', 'urlDefault', 'url_default', 'src'])
+    || pickFirstText(note, ['coverUrl', 'cover_url', 'cover'])
+  );
+}
+
+function pickSearchNoteCover(noteCard = {}) {
+  const imageList = readArray(noteCard, ['image_list', 'imageList', 'images']);
+  for (const image of imageList) {
+    const infoList = readArray(image, ['info_list', 'infoList']);
+    for (const item of infoList) {
+      const url = pickFirstText(item, ['url', 'urlDefault', 'url_default', 'src']);
+      if (url) return toHighQualityImageUrl(url);
+    }
+    const direct = pickFirstText(image, ['urlDefault', 'url_default', 'url', 'src']);
+    if (direct) return toHighQualityImageUrl(direct);
+  }
+  return pickProfilePostedCover(noteCard);
+}
+
+function collectSearchImageCandidates(noteCard = {}) {
+  const imageList = readArray(noteCard, ['image_list', 'imageList', 'images']);
+  return imageList
+    .map((image) => {
+      const infoList = readArray(image, ['info_list', 'infoList']);
+      const urls = infoList
+        .map((item) => pickFirstText(item, ['url', 'urlDefault', 'url_default', 'src']))
+        .filter(Boolean)
+        .map((url) => toHighQualityImageUrl(url));
+      const direct = pickFirstText(image, ['urlDefault', 'url_default', 'url', 'src']);
+      if (direct) urls.push(toHighQualityImageUrl(direct));
+      return [...new Set(urls)];
+    })
+    .filter((urls) => urls.length > 0);
+}
+
+function extractXhsProfileUserIdFromUrl(url = '') {
+  const text = String(url || '').trim();
+  const match = text.match(/\/user\/profile\/([^/?#]+)/i);
+  return match ? decodeURIComponent(match[1]) : '';
+}
+
+function safeDecodeText(value = '') {
+  try {
+    return decodeURIComponent(String(value || ''));
+  } catch {
+    return String(value || '');
+  }
+}
+
+function extractXhsSearchKeywordFromUrl(url = '') {
+  try {
+    return safeDecodeText(new URL(String(url || ''), 'https://www.xiaohongshu.com').searchParams.get('keyword') || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+function readSearchPublishTimeText(noteCard = {}) {
+  const tags = readArray(noteCard, ['corner_tag_info', 'cornerTagInfo', 'cornerTags']);
+  for (const tag of tags) {
+    const type = pickFirstText(tag, ['type', 'tagType']);
+    const text = pickFirstText(tag, ['text', 'name', 'title']);
+    if (text && (!type || type === 'publish_time')) return text;
+  }
+  return '';
+}
+
+function readCurrentProfileToken(currentUrl = '') {
+  try {
+    return new URL(String(currentUrl || ''), 'https://www.xiaohongshu.com').searchParams.get('xsec_token') || '';
+  } catch {
+    return '';
+  }
+}
+
+function readCurrentXsecSource(currentUrl = '') {
+  try {
+    return new URL(String(currentUrl || ''), 'https://www.xiaohongshu.com').searchParams.get('xsec_source') || 'pc_user';
+  } catch {
+    return 'pc_user';
+  }
+}
+
+function buildProfilePostedUrl({ userId = '', currentUrl = '', cursor = '' } = {}) {
+  const token = readCurrentProfileToken(currentUrl);
+  if (!userId || !token) return '';
+  const params = new URLSearchParams({
+    num: '30',
+    cursor,
+    user_id: userId,
+    image_formats: 'jpg,webp,avif',
+    xsec_token: token,
+    xsec_source: readCurrentXsecSource(currentUrl),
+  });
+  return `https://edith.xiaohongshu.com/api/sns/web/v1/user_posted?${params.toString()}`;
+}
+
+function readProfilePostedNotes(json = {}) {
+  const payload = json?.data && typeof json.data === 'object' ? json.data : json;
+  const candidates = [
+    payload?.notes,
+    payload?.items,
+    payload?.list,
+    json?.notes,
+    json?.items,
+    json?.list,
+    Array.isArray(payload) ? payload : null,
+  ];
+  for (const candidate of candidates) {
+    if (Array.isArray(candidate)) return candidate;
+  }
+  return [];
+}
+
+export function normalizeProfilePostedNote(note = {}, {
+  index = 0,
+  sourceUrl = '',
+  userId = '',
+} = {}) {
+  const noteId = firstText(note.note_id) || firstText(note.noteId) || firstText(note.id);
+  if (!noteId) return null;
+
+  const author = readObject(note, ['user', 'user_info', 'userInfo', 'author']);
+  const authorId = pickFirstText(author, ['user_id', 'userId', 'id']) || userId;
+  const xsecToken = pickFirstText(note, ['xsec_token', 'xsecToken']);
+  const url = xsecToken
+    ? `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}?xsec_token=${encodeURIComponent(xsecToken)}&xsec_source=pc_user`
+    : `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}`;
+  const interact = readObject(note, ['interact_info', 'interactInfo', 'interact']);
+  const cover = pickProfilePostedCover(note);
+
+  return {
+    noteId,
+    url,
+    title: pickFirstText(note, ['display_title', 'displayTitle', 'title']),
+    likes: pickFirstText(interact, ['liked_count', 'likedCount', 'like_count', 'likeCount']) || '0',
+    collects: pickFirstText(interact, ['collected_count', 'collectedCount', 'collect_count', 'collectCount']) || '',
+    comments: pickFirstText(interact, ['comment_count', 'commentCount', 'comments']) || '',
+    shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
+    type: pickFirstText(note, ['type', 'note_type', 'noteType']) || 'normal',
+    cover,
+    coverImg: cover,
+    coverUrl: cover,
+    thumbnail: cover,
+    images: cover ? [cover] : [],
+    authorId,
+    authorPlatformId: authorId,
+    authorName: pickFirstText(author, ['nickname', 'nick_name', 'name']),
+    authorAvatar: pickFirstText(author, ['avatar', 'image', 'imageb']),
+    sourceUrl,
+    dataSource: 'xhs.user_posted',
+    _discoveryOrder: index,
+    _top: index * 160,
+    _left: 0,
+  };
+}
+
+function collectProfilePostedPages(snapshot = {}, userId = '') {
+  const pages = Array.isArray(snapshot?.pages) ? snapshot.pages : [];
+  const notes = [];
+  for (const page of pages) {
+    const pageUserId = firstText(page?.userId);
+    if (userId && pageUserId && pageUserId !== userId) continue;
+    const sourceUrl = firstText(page?.sourceUrl);
+    const pageNotes = Array.isArray(page?.notes) ? page.notes : [];
+    for (const item of pageNotes) {
+      notes.push({ note: item, sourceUrl });
+    }
+  }
+  return notes;
+}
+
+function dedupeProfilePostedNotes(items = [], userId = '', limit = 30) {
+  const seen = new Set();
+  const normalized = [];
+  for (const item of items) {
+    const mapped = normalizeProfilePostedNote(item.note || item, {
+      index: normalized.length,
+      sourceUrl: item.sourceUrl || '',
+      userId,
+    });
+    if (!mapped || seen.has(mapped.noteId)) continue;
+    seen.add(mapped.noteId);
+    normalized.push(mapped);
+    if (limit > 0 && normalized.length >= limit) break;
+  }
+  return normalized;
+}
+
+export async function discoverProfileSurfaceNotesFromApi({
+  expectedCount = 30,
+  currentUrl = '',
+  requestSnapshot = requestXhsProfileNotesSnapshot,
+  fetchJson = fetchXhsJsonViaBridge,
+  ensureBridge = ensureXhsCommentApiBridge,
+} = {}) {
+  const sourceUrl = currentUrl || (typeof window !== 'undefined' ? window.location.href : '');
+  const userId = extractXhsProfileUserIdFromUrl(sourceUrl);
+  if (!userId) return [];
+
+  try {
+    ensureBridge?.();
+  } catch {
+    // Bridge injection is best-effort; captured page requests may already be available.
+  }
+
+  const limit = normalizePositiveInteger(expectedCount, 30);
+  const fromSnapshot = await requestSnapshot(userId)
+    .then((snapshot) => dedupeProfilePostedNotes(collectProfilePostedPages(snapshot, userId), userId, limit))
+    .catch(() => []);
+  if (fromSnapshot.length > 0) return fromSnapshot;
+
+  const requestUrl = buildProfilePostedUrl({ userId, currentUrl: sourceUrl });
+  if (!requestUrl) return [];
+
+  const json = await fetchJson([requestUrl]).catch(() => null);
+  if (!json) return [];
+  return dedupeProfilePostedNotes(readProfilePostedNotes(json).map((note) => ({ note, sourceUrl: requestUrl })), userId, limit);
+}
+
+function readSearchNoteCard(item = {}) {
+  const candidates = [
+    item?.note_card,
+    item?.noteCard,
+    item?.note,
+    item?.card,
+    item,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+  }
+  return {};
+}
+
+export function normalizeSearchSurfaceNote(item = {}, {
+  index = 0,
+  sourceUrl = '',
+  keyword = '',
+} = {}) {
+  const noteCard = readSearchNoteCard(item);
+  const noteId = firstText(item.id)
+    || pickFirstText(noteCard, ['note_id', 'noteId', 'id']);
+  if (!noteId) return null;
+
+  const xsecToken = pickFirstText(item, ['xsec_token', 'xsecToken'])
+    || pickFirstText(noteCard, ['xsec_token', 'xsecToken']);
+  const url = xsecToken
+    ? `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}?xsec_token=${encodeURIComponent(xsecToken)}&xsec_source=pc_search`
+    : `https://www.xiaohongshu.com/explore/${encodeURIComponent(noteId)}`;
+  const user = readObject(noteCard, ['user', 'user_info', 'userInfo', 'author']);
+  const interact = readObject(noteCard, ['interact_info', 'interactInfo', 'interact']);
+  const cover = pickSearchNoteCover(noteCard);
+  const imageCandidates = collectSearchImageCandidates(noteCard);
+  const images = imageCandidates.flat().filter(Boolean);
+
+  return {
+    noteId,
+    url,
+    title: pickFirstText(noteCard, ['display_title', 'displayTitle', 'title']),
+    likes: pickFirstText(interact, ['liked_count', 'likedCount', 'like_count', 'likeCount']) || '0',
+    collects: pickFirstText(interact, ['collected_count', 'collectedCount', 'collect_count', 'collectCount']) || '',
+    comments: pickFirstText(interact, ['comment_count', 'commentCount', 'comments']) || '',
+    shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
+    type: pickFirstText(noteCard, ['type', 'note_type', 'noteType']) || 'normal',
+    cover,
+    coverImg: cover,
+    coverUrl: cover,
+    thumbnail: cover,
+    images: images.length > 0 ? [...new Set(images)] : (cover ? [cover] : []),
+    imageCandidates,
+    authorId: pickFirstText(user, ['user_id', 'userId', 'id']),
+    authorPlatformId: pickFirstText(user, ['user_id', 'userId', 'id']),
+    authorName: pickFirstText(user, ['nickname', 'nick_name', 'name']),
+    authorAvatar: pickFirstText(user, ['avatar', 'image', 'imageb']),
+    publishedAtText: readSearchPublishTimeText(noteCard),
+    searchKeyword: keyword,
+    sourceUrl,
+    dataSource: 'xhs.search_notes',
+    _discoveryOrder: index,
+    _top: index * 160,
+    _left: 0,
+  };
+}
+
+function collectSearchNotePages(snapshot = {}, keyword = '') {
+  const pages = Array.isArray(snapshot?.pages) ? snapshot.pages : [];
+  const notes = [];
+  for (const page of pages) {
+    const pageKeyword = firstText(page?.keyword);
+    if (keyword && pageKeyword && pageKeyword !== keyword) continue;
+    const sourceUrl = firstText(page?.sourceUrl);
+    const pageNotes = Array.isArray(page?.notes) ? page.notes : [];
+    for (const item of pageNotes) {
+      notes.push({ note: item, sourceUrl, keyword: pageKeyword || keyword });
+    }
+  }
+  return notes;
+}
+
+function dedupeSearchSurfaceNotes(items = [], keyword = '', limit = 30) {
+  const seen = new Set();
+  const normalized = [];
+  for (const item of items) {
+    const mapped = normalizeSearchSurfaceNote(item.note || item, {
+      index: normalized.length,
+      sourceUrl: item.sourceUrl || '',
+      keyword: item.keyword || keyword,
+    });
+    if (!mapped || seen.has(mapped.noteId)) continue;
+    seen.add(mapped.noteId);
+    normalized.push(mapped);
+    if (limit > 0 && normalized.length >= limit) break;
+  }
+  return normalized;
+}
+
+export async function discoverSearchSurfaceNotesFromApi({
+  expectedCount = 30,
+  currentUrl = '',
+  requestSnapshot = requestXhsSearchNotesSnapshot,
+  ensureBridge = ensureXhsCommentApiBridge,
+} = {}) {
+  const sourceUrl = currentUrl || (typeof window !== 'undefined' ? window.location.href : '');
+  const keyword = extractXhsSearchKeywordFromUrl(sourceUrl);
+  if (!keyword) return [];
+
+  try {
+    ensureBridge?.();
+  } catch {
+    // Bridge injection is best-effort; search results may already be captured.
+  }
+
+  const limit = normalizePositiveInteger(expectedCount, 30);
+  return requestSnapshot(keyword)
+    .then((snapshot) => dedupeSearchSurfaceNotes(collectSearchNotePages(snapshot, keyword), keyword, limit))
+    .catch(() => []);
 }
 
 function pickCardCoverImage(section, coverLink) {

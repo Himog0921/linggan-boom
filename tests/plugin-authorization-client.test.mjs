@@ -102,7 +102,7 @@ test('plugin authorization client sends station identity during authorization co
     stationKey: 'station-key-1',
     pluginVersion: '2.0.52',
     browserLabel: 'Chrome',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
   });
 
   assert.equal(authorization.authorizationToken, 'auth_token_1');
@@ -113,7 +113,7 @@ test('plugin authorization client sends station identity during authorization co
     stationKey: 'station-key-1',
     pluginVersion: '2.0.52',
     browserLabel: 'Chrome',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
   });
 });
 
@@ -227,7 +227,7 @@ test('plugin authorization client claims an approved request and stores active a
     stationKey: 'station-key-1',
     pluginVersion: '2.0.30',
     browserLabel: 'Chrome 外部安装',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
   });
 
   assert.equal(result.authorization.authorizationToken, 'auth-token-1');
@@ -239,7 +239,7 @@ test('plugin authorization client claims an approved request and stores active a
     stationKey: 'station-key-1',
     pluginVersion: '2.0.30',
     browserLabel: 'Chrome 外部安装',
-    capabilities: ['xhs.authorSurfaceScan'],
+    capabilities: ['xhs.list_scan'],
   });
 });
 

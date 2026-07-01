@@ -3,7 +3,6 @@ import {
   buildSyncRequestV11,
   extractMailboxVersionsFromResponse,
   extractNextSyncFromResponse,
-  isV11SyncResponse,
   resolveStationSessionId,
   clearStationSessionId,
 } from '../protocol/syncEnvelopeV11.js';
@@ -225,9 +224,7 @@ export function createExecutionStationClient({
     }
 
     try {
-      // 旧 mailboxVersion（单数字）：从 identity 读，作为 V1.1 station cursor
-      const legacyMailboxVersion = toOptionalInteger(identity.mailboxVersion);
-      // V1.1 lane 版本：插件暂未持久化，从 identity 读（如果有）
+      const storedMailboxStationVersion = toOptionalInteger(identity.mailboxVersion);
       const mailboxLaneVersions = isPlainObject(identity.mailboxLaneVersions)
         ? identity.mailboxLaneVersions
         : {};
@@ -236,18 +233,15 @@ export function createExecutionStationClient({
       const requestBody = buildSyncRequestV11({
         stationId,
         stationToken,
-        authorizationId: authorization?.authorizationId,
         pluginVersion,
         stationSessionId,
-        status,
         capabilities: capabilities.length ? capabilities : identity.capabilities,
         platformAccounts,
         activeLane,
         localLease,
         activeTask,
-        mailboxStationVersion: legacyMailboxVersion,
+        mailboxStationVersion: storedMailboxStationVersion,
         mailboxLaneVersions,
-        mode: 'heartbeat',
         includeCapacity: false,
       });
 
@@ -259,7 +253,7 @@ export function createExecutionStationClient({
       const nextMailboxVersions = extractMailboxVersionsFromResponse(data);
       const nextSync = extractNextSyncFromResponse(data);
 
-      // 持久化 mailbox 版本号（V1.1 station + lanes，或旧 mailbox.version）
+      // 持久化 V1.1 mailbox 版本号（station + lanes）
       const identityPatch = {
         stationId,
         stationToken,
@@ -275,21 +269,15 @@ export function createExecutionStationClient({
       }
       await saveStationIdentity(identityPatch);
 
-      // 旧字段兼容：保留 mailbox 对象结构，便于上层旧解析路径继续工作
       const mailbox = nextMailboxVersions.station !== undefined
         ? { version: nextMailboxVersions.station }
-        : (data?.mailbox || null);
-
-      // V1.1 shouldPollNow 判定：
-      // 1) V1.1 响应：mailbox 变化（lane 版本号变化）或 nextSync.reason 含 mailbox/claim → 触发 poll
-      // 2) 旧响应：mode === 'full_sync' → 触发 poll（保留兼容）
-      const mailboxChanged = isV11SyncResponse(data)
-        ? Boolean(
-            (nextMailboxVersions.station !== undefined && legacyMailboxVersion !== undefined
-              && nextMailboxVersions.station !== legacyMailboxVersion)
-            || Object.keys(nextMailboxVersions.lanes).length > 0,
-          )
-        : data?.mode === 'full_sync';
+        : null;
+      const stationMailboxChanged = nextMailboxVersions.station !== undefined
+        && nextMailboxVersions.station !== storedMailboxStationVersion;
+      const laneMailboxChanged = Object.entries(nextMailboxVersions.lanes).some(
+        ([lane, version]) => toOptionalInteger(mailboxLaneVersions[lane]) !== version,
+      );
+      const mailboxChanged = stationMailboxChanged || laneMailboxChanged;
 
       return {
         success: true,
