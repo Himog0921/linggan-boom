@@ -24,6 +24,37 @@ export async function selectAvailableAccount(platform = 'xhs') {
   return accountStore.getAvailable(platform);
 }
 
+export function resolveBoundTaskAccountId(task = {}) {
+  const payload = task && typeof task.payload === 'object' && !Array.isArray(task.payload)
+    ? task.payload
+    : {};
+  return String(
+    task.platformAccountId
+      || task.reservedPlatformAccountId
+      || task.accountId
+      || payload.platformAccountId
+      || payload.reservedPlatformAccountId
+      || payload.accountId
+      || ''
+  ).trim();
+}
+
+export async function selectAccountForWorkbenchTask(task = {}, platform = 'xhs') {
+  const boundAccountId = resolveBoundTaskAccountId(task);
+  if (boundAccountId) {
+    if (/^runtime:/i.test(boundAccountId)) {
+      return {
+        accountId: boundAccountId,
+        platform,
+        runtimeSession: true,
+      };
+    }
+    const account = await accountStore.getById(boundAccountId);
+    return account || null;
+  }
+  return selectAvailableAccount(platform);
+}
+
 export function resolveCookieDomain(platformOrDomain = 'xhs') {
   const value = String(platformOrDomain || '').trim();
   if (!value) return XHS_DOMAIN;

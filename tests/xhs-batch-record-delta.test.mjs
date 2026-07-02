@@ -132,3 +132,39 @@ test('BatchNoteController reports a workbench record delta after collecting one 
     sourceTier: '',
   });
 });
+
+test('BatchNoteController waits for the final package when detail collection includes comments', () => {
+  const messages = [];
+  globalThis.chrome = {
+    runtime: {
+      id: 'extension-id',
+      sendMessage: (message) => {
+        messages.push(message);
+      },
+    },
+  };
+
+  try {
+    const controller = new BatchNoteController();
+    controller.collectionRunId = 'run_xhs_note_full';
+    controller.externalTaskId = 'task_xhs_note_full';
+    controller._includeComments = true;
+    controller._commentLimit = 20;
+
+    controller._reportCollectedNote({
+      noteId: 'note_full_1',
+      platformContentId: 'note_full_1',
+      title: '完整详情采集',
+      content: '正文',
+    });
+    controller._reportCollectedComment({
+      commentId: 'comment_1',
+      noteId: 'note_full_1',
+      text: '评论',
+    }, { noteId: 'note_full_1' });
+  } finally {
+    delete globalThis.chrome;
+  }
+
+  assert.equal(messages.length, 0);
+});

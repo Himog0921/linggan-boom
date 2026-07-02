@@ -70,6 +70,31 @@ test('author baseline task defaults scan limit to 50 when workbench payload omit
   assert.equal(command.payload.monitorMeta.limit, 50);
 });
 
+test('author patrol task defaults scan limit to 10 when workbench payload omits it', () => {
+  const command = mapTaskEnvelopeToInternalCommand({
+    type: 'task.envelope',
+    protocolVersion: 'v1',
+    taskId: 'monitor_task_author_patrol_default_1',
+    taskType: 'xhs.collectAuthor',
+    platform: 'xhs',
+    taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_PATROL,
+    triggerSource: 'collection_task_poller',
+    target: {
+      pageType: 'profile',
+      url: 'https://www.xiaohongshu.com/user/profile/user_1',
+    },
+    payload: {
+      monitorId: 'monitor_author_patrol_default_1',
+      taskStrategy: MONITOR_TASK_STRATEGY.AUTHOR_PATROL,
+      detailProbeLimit: 3,
+    },
+  }, { tabId: 7 });
+
+  assert.equal(command.payload.count, 10);
+  assert.equal(command.payload.monitorMeta.scanLimit, 10);
+  assert.equal(command.payload.monitorMeta.limit, 10);
+});
+
 test('xhs author surface records stop at scanLimit and carry monitor-shaped metadata', () => {
   const monitorMeta = buildMonitorTaskMeta({
     platform: 'xhs',
@@ -110,10 +135,17 @@ test('xhs author surface records stop at scanLimit and carry monitor-shaped meta
   assert.equal(records[0].qualityReason, 'monitor_surface_seed');
   assert.equal(records[0].sourceTier, 'seed');
   assert.equal(records[0].platform, 'xhs');
+  assert.equal(records[0].targetKey, 'xhs:note:note_1');
   assert.equal(records[0].platformContentId, 'note_1');
   assert.equal(records[0].contentId, 'xhs_note_1');
   assert.equal(records[0].url, 'https://www.xiaohongshu.com/explore/note_1');
+  assert.equal(records[0].rawUrl, 'https://www.xiaohongshu.com/explore/note_1');
+  assert.equal(records[0].sourceUrl, 'https://www.xiaohongshu.com/user/profile/user_1');
+  assert.equal(records[0].runnableDetailUrl, 'https://www.xiaohongshu.com/discovery/item/note_1?source=webshare&xhsshare=pc_web&xsec_source=pc_share');
   assert.equal(records[0].likes, 5567);
+  assert.equal(records[0].likeCount, 5567);
+  assert.equal(records[0].rank, 1);
+  assert.equal(records[0].batchRank, 1);
   assert.equal(records[0].publicCommentCount, null);
   assert.equal(records[0].publicCommentCountKnown, false);
   assert.equal(records[0].monitorMeta.monitorId, 'monitor_author_1');

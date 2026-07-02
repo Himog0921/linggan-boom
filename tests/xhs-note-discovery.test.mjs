@@ -6,6 +6,7 @@ import {
   discoverNotesFromDOM,
   discoverProfileSurfaceNotesFromApi,
   discoverSearchSurfaceNotesFromApi,
+  discoverSurfaceNotesFromBestSource,
   discoverWithScroll,
   normalizeProfilePostedNote,
   normalizeSearchSurfaceNote,
@@ -25,7 +26,7 @@ test('profile api note normalization maps Xiaohongshu user_posted cards into sur
     },
     interact_info: {
       liked_count: '36',
-      sticky: false,
+      sticky: true,
     },
     cover: {
       info_list: [
@@ -45,6 +46,8 @@ test('profile api note normalization maps Xiaohongshu user_posted cards into sur
   assert.equal(note.type, 'video');
   assert.equal(note.authorId, '5ebe6d210000000001000afe');
   assert.equal(note.authorName, '孩悦');
+  assert.equal(note.isPinned, true);
+  assert.equal(note.sticky, true);
   assert.equal(note.dataSource, 'xhs.user_posted');
   assert.match(note.url, /xsec_token=token-1/);
   assert.ok(note.cover.includes('cover-small.jpg'));
@@ -98,6 +101,79 @@ test('profile surface discovery prefers captured user_posted pages without scrol
   ]);
   assert.equal(notes[0].likes, '36');
   assert.equal(notes[1].likes, '41');
+});
+
+test('best source discovery uses captured profile notes before scrolling', async () => {
+  const scrollCalls = [];
+  const notes = await discoverSurfaceNotesFromBestSource('#userPostedFeeds', 30, {
+    expectedCount: 1,
+    currentUrl: 'https://www.xiaohongshu.com/user/profile/author_1?xsec_token=token',
+    profileDiscover: async ({ expectedCount, currentUrl }) => [
+      {
+        noteId: 'note_1',
+        title: `cached ${expectedCount}`,
+        url: currentUrl,
+      },
+    ],
+    scrollDiscover: async (...args) => {
+      scrollCalls.push(args);
+      return [{ noteId: 'scroll_note' }];
+    },
+  });
+
+  assert.deepEqual(notes.map((item) => item.noteId), ['note_1']);
+  assert.equal(notes[0].title, 'cached 1');
+  assert.equal(scrollCalls.length, 0);
+});
+
+test('best source discovery keeps scrolling when cached profile notes are below target', async () => {
+  const scrollCalls = [];
+  const notes = await discoverSurfaceNotesFromBestSource('#userPostedFeeds', 30, {
+    expectedCount: 3,
+    currentUrl: 'https://www.xiaohongshu.com/user/profile/author_1?xsec_token=token',
+    profileDiscover: async () => [
+      { noteId: 'note_1', title: 'cached first' },
+    ],
+    scrollDiscover: async (...args) => {
+      scrollCalls.push(args);
+      return [
+        { noteId: 'note_1', title: 'duplicate visible card' },
+        { noteId: 'note_2', title: 'scrolled second' },
+        { noteId: 'note_3', title: 'scrolled third' },
+      ];
+    },
+  });
+
+  assert.deepEqual(notes.map((item) => item.noteId), ['note_1', 'note_2', 'note_3']);
+  assert.equal(notes[0].title, 'cached first');
+  assert.equal(scrollCalls.length, 1);
+  assert.equal(scrollCalls[0][0], '#userPostedFeeds');
+  assert.equal(scrollCalls[0][1], 30);
+  assert.equal(scrollCalls[0][2].expectedCount, 3);
+});
+
+test('best source discovery treats rejected profile api as normal and keeps scrolling', async () => {
+  const scrollCalls = [];
+  const notes = await discoverSurfaceNotesFromBestSource('#userPostedFeeds', 30, {
+    expectedCount: 200,
+    currentUrl: 'https://www.xiaohongshu.com/user/profile/author_1?xsec_token=token',
+    profileDiscover: async () => {
+      throw new Error('406 Not Acceptable');
+    },
+    scrollDiscover: async (...args) => {
+      scrollCalls.push(args);
+      return [
+        { noteId: 'scroll_note_1' },
+        { noteId: 'scroll_note_2' },
+      ];
+    },
+  });
+
+  assert.deepEqual(notes.map((item) => item.noteId), ['scroll_note_1', 'scroll_note_2']);
+  assert.equal(scrollCalls.length, 1);
+  assert.equal(scrollCalls[0][0], '#userPostedFeeds');
+  assert.equal(scrollCalls[0][1], 30);
+  assert.equal(scrollCalls[0][2].expectedCount, 200);
 });
 
 test('search api note normalization maps Xiaohongshu search cards into surface notes', () => {
@@ -225,13 +301,14 @@ test('profile discovery keeps scanning until enough content is found or the page
   });
 
   assert.equal(plan.isProfileMode, true);
-  assert.equal(plan.stableNoNewLimit, 4);
+  assert.equal(plan.stableNoNewLimit, 10);
   assert.equal(plan.requireBottomOrExpected, true);
-  assert.equal(plan.bottomConfirmationRounds, 6);
-  assert.ok(plan.maxRounds >= 50);
+  assert.equal(plan.bottomConfirmationRounds, 9);
+  assert.ok(plan.maxRounds >= 90);
+  assert.equal(plan.humanScroll, true);
 
   assert.equal(shouldStopDiscovery({
-    noNewCount: 4,
+    noNewCount: 10,
     stableNoNewLimit: plan.stableNoNewLimit,
     discoveredCount: 28,
     expectedCount: plan.expectedCount,
@@ -242,7 +319,7 @@ test('profile discovery keeps scanning until enough content is found or the page
   }), false);
 
   assert.equal(shouldStopDiscovery({
-    noNewCount: 4,
+    noNewCount: 10,
     stableNoNewLimit: plan.stableNoNewLimit,
     discoveredCount: 28,
     expectedCount: plan.expectedCount,
@@ -253,7 +330,7 @@ test('profile discovery keeps scanning until enough content is found or the page
   }), false);
 
   assert.equal(shouldStopDiscovery({
-    noNewCount: 4,
+    noNewCount: 10,
     stableNoNewLimit: plan.stableNoNewLimit,
     discoveredCount: 36,
     expectedCount: plan.expectedCount,
@@ -264,15 +341,28 @@ test('profile discovery keeps scanning until enough content is found or the page
   }), false);
 
   assert.equal(shouldStopDiscovery({
-    noNewCount: 4,
+    noNewCount: 10,
     stableNoNewLimit: plan.stableNoNewLimit,
     discoveredCount: 36,
     expectedCount: plan.expectedCount,
     atBottom: true,
-    bottomNoNewCount: 6,
+    bottomNoNewCount: 9,
     bottomConfirmationRounds: plan.bottomConfirmationRounds,
     requireBottomOrExpected: plan.requireBottomOrExpected,
   }), true);
+});
+
+test('deep profile discovery allows enough human-paced rounds for 200-link archive jobs', () => {
+  const plan = buildDiscoveryPlan('#userPostedFeeds', {
+    maxScrolls: 30,
+    expectedCount: 200,
+  });
+
+  assert.equal(plan.maxRounds, 180);
+  assert.equal(plan.stableNoNewLimit, 15);
+  assert.equal(plan.bottomConfirmationRounds, 12);
+  assert.equal(plan.stepRatio, 0.74);
+  assert.equal(plan.humanScroll, true);
 });
 
 test('search discovery keeps the old eager stop behavior', () => {
@@ -385,6 +475,9 @@ test('profile discovery accumulates virtualized cards beyond the visible 28 item
     assert.equal(records[0].noteId, ids[0]);
     assert.equal(records[49].noteId, ids[49]);
     assert.ok(maxScrollTop > 0);
+    assert.equal(records.discoveryMeta.stopReason, 'target_reached');
+    assert.equal(records.discoveryMeta.totalNotes, 50);
+    assert.equal(records.discoveryMeta.fieldQuality.withTitle, 50);
   } finally {
     globalThis.document = originalDocument;
     globalThis.window = originalWindow;

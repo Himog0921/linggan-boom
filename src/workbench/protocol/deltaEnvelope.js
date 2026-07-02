@@ -125,6 +125,7 @@ export function buildTaskRecord({
   idempotencyKey = '',
 } = {}) {
   const normalizedSequence = normalizeSequence(sequence, Date.now());
+  const normalizedPayload = normalizeObject(payload);
   return {
     idempotencyKey: normalizeText(idempotencyKey) || createRecordIdempotencyKey({
       taskId,
@@ -134,10 +135,13 @@ export function buildTaskRecord({
       sequence: normalizedSequence,
     }),
     recordType: normalizeText(recordType),
+    platform: normalizeText(normalizedPayload.platform),
+    targetKey: normalizeText(normalizedPayload.targetKey),
     externalRecordId: normalizeText(externalRecordId),
     sequence: normalizedSequence,
     collectedAt: normalizeText(collectedAt) || nowIso(),
-    payload: normalizeObject(payload),
+    observedAt: normalizeText(normalizedPayload.observedAt),
+    payload: normalizedPayload,
   };
 }
 

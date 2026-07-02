@@ -77,6 +77,14 @@ function createMemoryOutboxStore() {
         row.nextAttemptAt = Date.now() + 1000;
       }
     },
+    async markTerminal(keysOrIds, error) {
+      for (const key of keysOrIds) {
+        const row = rows.get(key);
+        if (!row) continue;
+        row.status = 'failed_terminal';
+        row.errorMessage = String(error?.message || error || '');
+      }
+    },
   };
 }
 
@@ -318,17 +326,77 @@ test('delta outbox prepares record payloads before storing them', async () => {
     externalRecordId: 'note_1',
     sequence: 4,
     payload: {
+      targetKey: 'xhs:note:note_1',
+      platform: 'xhs',
       noteId: 'note_1',
+      observedAt: '2026-07-01T00:00:00.000Z',
       coverUrl: 'https://sns-img.example.com/cover.webp',
     },
   });
 
   const queued = [...store.rows.values()][0];
+  assert.equal(queued.payload.targetKey, 'xhs:note:note_1');
+  assert.equal(queued.payload.platform, 'xhs');
+  assert.equal(queued.payload.observedAt, '2026-07-01T00:00:00.000Z');
   assert.equal(queued.payload.payload.coverUrl, 'https://blob.example.com/stable-cover.webp');
 
   await outbox.flush();
 
   assert.equal(envelopes[0][1].records[0].payload.coverUrl, 'https://blob.example.com/stable-cover.webp');
+});
+
+test('delta outbox keeps note full results in one commit envelope', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  const outbox = createDeltaOutbox({
+    store,
+    commitDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return {
+        success: true,
+        acceptedEventKeys: [],
+        acceptedRecordKeys: envelope.records.map((record) => record.idempotencyKey),
+        duplicateKeys: [],
+      };
+    },
+    executorInstanceId: 'plugin_1',
+    autoFlush: false,
+  });
+  const records = [
+    {
+      taskId: 'task_note_full',
+      pluginRunId: 'run_note_full',
+      recordType: WORKBENCH_RECORD_TYPE.NOTE,
+      externalRecordId: 'note_full_1',
+      sequence: 1,
+      payload: {
+        platform: 'xhs',
+        noteId: 'note_full_1',
+        title: '完整详情采集',
+        content: '正文',
+      },
+    },
+    ...Array.from({ length: 20 }, (_, index) => ({
+      taskId: 'task_note_full',
+      pluginRunId: 'run_note_full',
+      recordType: WORKBENCH_RECORD_TYPE.COMMENT,
+      externalRecordId: `comment_${index + 1}`,
+      sequence: index + 2,
+      payload: {
+        platform: 'xhs',
+        commentId: `comment_${index + 1}`,
+        noteId: 'note_full_1',
+        text: `评论 ${index + 1}`,
+      },
+    })),
+  ];
+
+  await outbox.enqueueRecords(records);
+  const result = await outbox.flush();
+
+  assert.equal(result.success, true);
+  assert.equal(envelopes.length, 1);
+  assert.equal(envelopes[0][1].records.length, 21);
 });
 
 test('delta outbox can attach data foundation payload before storing note records', async () => {
@@ -443,6 +511,42 @@ test('delta outbox schedules retry on network failure then accepts duplicate ack
   assert.equal(second.success, true);
   assert.equal(calls, 2);
   assert.equal(rowAfterFailure.status, 'acked');
+});
+
+test('delta outbox marks permanent sync rejection terminal instead of retrying', async () => {
+  const store = createMemoryOutboxStore();
+  let calls = 0;
+  const outbox = createDeltaOutbox({
+    store,
+    commitDelta: async () => {
+      calls += 1;
+      const error = new Error('lease_token_mismatch');
+      error.retryable = false;
+      throw error;
+    },
+    executorInstanceId: 'plugin_1',
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_1',
+    pluginRunId: 'run_1',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_HEARTBEAT,
+    source: WORKBENCH_EVENT_SOURCE.PLUGIN,
+    sequence: 2,
+    payload: { status: 'running' },
+  });
+
+  const first = await outbox.flush();
+  const rowAfterFailure = [...store.rows.values()][0];
+  const second = await outbox.flush();
+
+  assert.equal(first.success, false);
+  assert.equal(rowAfterFailure.status, 'failed_terminal');
+  assert.equal(rowAfterFailure.errorMessage, 'lease_token_mismatch');
+  assert.equal(second.success, true);
+  assert.equal(second.idle, true);
+  assert.equal(calls, 1);
 });
 
 test('delta outbox recovers stale in-flight rows before flushing', async () => {

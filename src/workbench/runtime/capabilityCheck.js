@@ -1,4 +1,4 @@
-import { REMOTE_ERROR_CODE } from '../protocol/schema.js';
+import { REMOTE_ERROR_CODE, REMOTE_TASK_TYPE } from '../protocol/schema.js';
 import {
   extractContentIdentityFromUrl,
   extractProfileIdentityFromUrl,
@@ -37,6 +37,18 @@ function shouldPrioritizeReadinessRejection(reasonCode = '') {
   ]).has(String(reasonCode || '').trim());
 }
 
+function equivalentTaskTypes(taskType = '') {
+  const normalized = String(taskType || '').trim();
+  const aliases = {
+    [REMOTE_TASK_TYPE.XHS_LIST_SCAN]: REMOTE_TASK_TYPE.XHS_BATCH_NOTES,
+    [REMOTE_TASK_TYPE.XHS_NOTE_FULL]: REMOTE_TASK_TYPE.XHS_BATCH_NOTES,
+    [REMOTE_TASK_TYPE.XHS_COMMENT_SCAN]: REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS,
+    [REMOTE_TASK_TYPE.XHS_AUTHOR_PROFILE]: REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR,
+    [REMOTE_TASK_TYPE.XHS_AUTHOR_LINKS]: REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS,
+  };
+  return [normalized, aliases[normalized]].filter(Boolean);
+}
+
 export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', target = {}) {
   const supportedTaskTypes = Array.isArray(report?.capabilities?.canRunTaskTypes)
     ? report.capabilities.canRunTaskTypes
@@ -58,7 +70,7 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
     return readinessRejection;
   }
 
-  if (!supportedTaskTypes.includes(String(taskType || '').trim())) {
+  if (!equivalentTaskTypes(taskType).some((type) => supportedTaskTypes.includes(type))) {
     return {
       accepted: false,
       reasonCode: REMOTE_ERROR_CODE.UNSUPPORTED_TASK_TYPE,

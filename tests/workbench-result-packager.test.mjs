@@ -29,6 +29,11 @@ test('buildResultSummary counts records and failed items', () => {
       requestedCount: 50,
       discoveredCount: 28,
       shortfallCount: 22,
+      discoverySummary: {
+        method: 'dom_scroll_persistent_map',
+        stopReason: 'bottom_confirmed',
+        rounds: 18,
+      },
     },
   });
 
@@ -47,6 +52,11 @@ test('buildResultSummary counts records and failed items', () => {
   assert.equal(summary.requestedCount, 50);
   assert.equal(summary.discoveredCount, 28);
   assert.equal(summary.shortfallCount, 22);
+  assert.deepEqual(summary.discoverySummary, {
+    method: 'dom_scroll_persistent_map',
+    stopReason: 'bottom_confirmed',
+    rounds: 18,
+  });
   assert.deepEqual(summary.dataQualityBreakdown, {
     full: 3,
     degraded: 2,

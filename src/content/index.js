@@ -1,6 +1,6 @@
 import '../extensionPublicPath.js';
 import { MSG } from '../shared/constants.js';
-import { collectNote, discoverWithScroll } from '../platforms/xhs/noteCollector.js';
+import { collectNote, discoverSurfaceNotesFromBestSource } from '../platforms/xhs/noteCollector.js';
 import { collectComments, collectCommentImages } from '../platforms/xhs/commentCollector.js';
 import { collectAuthor } from '../platforms/xhs/authorCollector.js';
 import { BatchNoteController, BatchCommentController } from '../platforms/xhs/batchController.js';
@@ -87,7 +87,7 @@ async function loadContentDataRuntime() {
         downloadFile,
         sendToBackground,
         loadDouyinRuntime,
-        discoverXhsSurfaceNotes: discoverWithScroll,
+        discoverXhsSurfaceNotes: discoverSurfaceNotesFromBestSource,
         discoverDouyinSurfaceTargets: (...args) => callDouyinRuntime('discoverDouyinBatchTargets', ...args),
         assertPluginAuthorized,
       }))

@@ -63,7 +63,7 @@ export function createDeltaOutbox({
   getExecutorInstanceId = null,
   getTaskExecutionContext = null,
   prepareRecordPayload = null,
-  batchLimit = 10,
+  batchLimit = 250,
   autoFlush = true,
 } = {}) {
   const state = {
@@ -163,12 +163,12 @@ export function createDeltaOutbox({
     }
   }
 
-  async function enqueueRow(row) {
+  async function enqueueRow(row, { deferFlush = false } = {}) {
     if (!store || typeof store.enqueue !== 'function') {
       return null;
     }
     const stored = await store.enqueue(row);
-    if (autoFlush) {
+    if (autoFlush && !deferFlush) {
       queueMicrotask(() => {
         void flush();
       });
@@ -228,7 +228,7 @@ export function createDeltaOutbox({
     payload = {},
     collectedAt = '',
     snapshot = null,
-  } = {}) {
+  } = {}, { deferFlush = false } = {}) {
     const normalizedSequence = normalizeSequence(sequence);
     const preparedPayload = typeof prepareRecordPayload === 'function'
       ? await prepareRecordPayload({
@@ -260,14 +260,19 @@ export function createDeltaOutbox({
       sequence: normalizedSequence,
       payload: record,
       snapshot,
-    });
+    }, { deferFlush });
   }
 
   async function enqueueRecords(records = []) {
     const list = Array.isArray(records) ? records : [records];
     const results = [];
     for (const record of list) {
-      results.push(await enqueueRecord(record));
+      results.push(await enqueueRecord(record, { deferFlush: true }));
+    }
+    if (autoFlush && results.length > 0) {
+      queueMicrotask(() => {
+        void flush();
+      });
     }
     return results;
   }

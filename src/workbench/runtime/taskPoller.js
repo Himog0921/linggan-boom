@@ -464,29 +464,6 @@ function normalizeStreamedRecordCounts(value = {}) {
   };
 }
 
-function countStreamedRecords(value = {}) {
-  const counts = normalizeStreamedRecordCounts(value);
-  return counts.note + counts.comment + counts.author + counts.media;
-}
-
-function buildStreamedRecordResultSummary(activeTask = {}) {
-  const counts = normalizeStreamedRecordCounts(activeTask.streamedRecordCounts);
-  return {
-    notes: counts.note,
-    comments: counts.comment,
-    authors: counts.author,
-    mediaAssets: counts.media,
-    streamedRecords: countStreamedRecords(counts),
-    handoffRecovered: true,
-    records: {
-      notes: [],
-      comments: [],
-      authors: [],
-      mediaAssets: [],
-    },
-  };
-}
-
 function normalizePersistedActiveTaskContext(value = {}) {
   const source = normalizeObject(value);
   const taskId = String(source.taskId || source.id || '').trim();
@@ -634,8 +611,10 @@ function sanitizeNoteRecord(note = {}) {
   const url = String(note.url || note.noteUrl || '').trim();
   const canonicalUrl = String(note.canonicalUrl || url).trim();
   const rawUrl = String(note.rawUrl || canonicalUrl || url).trim();
+  const targetKey = String(note.targetKey || '').trim();
 
   return {
+    targetKey,
     platform: String(note.platform || '').trim(),
     noteId: String(note.noteId || note.platformContentId || note.contentId || '').trim(),
     platformContentId: String(note.platformContentId || note.noteId || note.contentId || '').trim(),
@@ -644,6 +623,8 @@ function sanitizeNoteRecord(note = {}) {
     url,
     canonicalUrl,
     rawUrl,
+    sourceUrl: String(note.sourceUrl || '').trim(),
+    runnableDetailUrl: String(note.runnableDetailUrl || '').trim(),
     rawShareText: firstText(note.rawShareText),
     cover,
     coverImg: firstText(note.coverImg) || cover,
@@ -652,9 +633,13 @@ function sanitizeNoteRecord(note = {}) {
     imageCandidates,
     videoUrl: firstText(note.videoUrl) || firstText(note.video) || firstText(note.videoDownloadUrl) || firstText(note.videoPlayUrl),
     likes: toFiniteNumber(note.likes, 0),
+    likeCount: toFiniteNumber(note.likeCount ?? note.likes, 0),
     collects: toFiniteNumber(note.collects, 0),
+    collectCount: toFiniteNumber(note.collectCount ?? note.collects, 0),
     comments: toFiniteNumber(note.comments, 0),
+    commentCount: toFiniteNumber(note.commentCount ?? note.comments, 0),
     shares: toFiniteNumber(note.shares, 0),
+    shareCount: toFiniteNumber(note.shareCount ?? note.shares, 0),
     authorId: String(note.authorId || note.authorPlatformId || note.userId || '').trim(),
     authorPlatformId: String(note.authorPlatformId || note.authorId || note.userId || '').trim(),
     authorEntityId: String(note.authorEntityId || '').trim(),
@@ -670,6 +655,10 @@ function sanitizeNoteRecord(note = {}) {
       || firstText(note.time),
     type: String(note.type || note.contentType || note.noteType || note.itemType || '').trim(),
     lastUpdateTime: note.lastUpdateTime ?? null,
+    rank: toFiniteNumber(note.rank ?? note.batchRank, 0),
+    batchRank: toFiniteNumber(note.batchRank ?? note.rank, 0),
+    isPinned: Boolean(note.isPinned),
+    observedAt: String(note.observedAt || '').trim(),
     collectionRunId: String(note.collectionRunId || '').trim(),
     monitorMode: String(note.monitorMode || '').trim(),
     monitorId: String(note.monitorId || note.monitorMeta?.monitorId || '').trim(),
@@ -2070,48 +2059,6 @@ export function createTaskPoller(deps = {}) {
           activeTask.workbenchStatus === 'running' &&
           now - Number(activeTask.attemptStartedAtMs || 0) >= RUNNING_RESULT_LOOKUP_TIMEOUT_MS
         ) {
-          if (countStreamedRecords(activeTask.streamedRecordCounts) > 0) {
-            const streamedSummary = buildStreamedRecordResultSummary(activeTask);
-            const recoveredMessage = '采集结果已边采边写回工作台，最后结果包丢失；已按已写回内容完成这条任务。';
-            await patchTask(activeTask.taskId, {
-              status: 'completed',
-              progress: 100,
-              pluginRunId: activeTask.pluginRunId || null,
-              resultSummary: streamedSummary,
-              errorMessage: null,
-            });
-            await enqueueTerminalTaskEvent(activeTask, WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED, {
-              status: 'completed',
-              progress: 100,
-              reason: 'result_package_handoff_lost_streamed_records',
-              reasonCode: 'result_package_handoff_lost_streamed_records',
-              message: recoveredMessage,
-              userMessage: recoveredMessage,
-              latestSummary: streamedSummary,
-            }, { status: 'completed', progress: 100, latestSummary: streamedSummary });
-            const flushResult = await flushTerminalDeltasBeforeCleanup('terminal_streamed_result_snapshot_flush');
-            if (!flushResult.success) {
-              return {
-                success: true,
-                final: false,
-                flushPending: true,
-                status: 'completed',
-                reason: 'result_package_handoff_lost_streamed_records_snapshot_pending',
-                cleanupTask: cleanupTaskSnapshot(activeTask),
-              };
-            }
-            await notifyContentScriptToStop(activeTask);
-            state.activeTask = null;
-            state.seenControlIds.clear();
-            await clearActiveLease(activeTask);
-            return {
-              success: true,
-              final: true,
-              status: 'completed',
-              reason: 'result_package_handoff_lost_streamed_records',
-              cleanupTask: cleanupTaskSnapshot(activeTask),
-            };
-          }
           const handoffErrorMessage = '采集页结果包没有交回工作台：插件没有找到本轮执行页，已停止这条卡住的任务。';
           await patchTask(activeTask.taskId, {
             status: 'failed',
@@ -2327,7 +2274,7 @@ export function createTaskPoller(deps = {}) {
       activeTask.workbenchStatus = mapped.status;
       activeTask.resultFingerprint = fingerprint;
       activeTask.errorMessage = errorMessage;
-      if (recordDeltas.length && typeof deps.enqueueRecords === 'function') {
+      if (mapped.final && recordDeltas.length && typeof deps.enqueueRecords === 'function') {
         try {
           await deps.enqueueRecords(recordDeltas);
 	        } catch (error) {

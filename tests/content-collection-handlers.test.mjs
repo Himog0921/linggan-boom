@@ -433,7 +433,7 @@ test('collection handlers discover xhs author note links and report each link re
       },
       discoverXhsSurfaceNotes: async (...args) => {
         discoverCalls.push(args);
-        return [
+        const cards = [
           {
             noteId: 'note_1',
             url: 'https://www.xiaohongshu.com/explore/note_1?xsec_token=token_1&xsec_source=pc_user',
@@ -448,6 +448,27 @@ test('collection handlers discover xhs author note links and report each link re
             likes: '99',
           },
         ];
+        Object.defineProperty(cards, 'discoveryMeta', {
+          value: {
+            method: 'dom_scroll_persistent_map',
+            stopReason: 'max_rounds_reached',
+            totalNotes: 2,
+            rounds: 12,
+            maxRounds: 12,
+            canLoadMore: true,
+            isFinished: false,
+            fieldQuality: {
+              totalNotes: 2,
+              withTitle: 2,
+              withLikeText: 2,
+              withLikeCount: 2,
+              withCover: 1,
+              withXsecToken: 1,
+              pinnedCount: 0,
+            },
+          },
+        });
+        return cards;
       },
     });
 
@@ -496,7 +517,10 @@ test('collection handlers discover xhs author note links and report each link re
     assert.equal(doneCalls[0][1].requestedCount, 3);
     assert.equal(doneCalls[0][1].discoveredCount, 2);
     assert.equal(doneCalls[0][1].shortfallCount, 1);
-    assert.match(doneCalls[0][1].completionNote, /只发现 2 条/);
+    assert.equal(doneCalls[0][1].discoverySummary.stopReason, 'max_rounds_reached');
+    assert.equal(doneCalls[0][1].discoverySummary.rounds, 12);
+    assert.equal(doneCalls[0][1].discoverySummary.fieldQuality.withXsecToken, 1);
+    assert.match(doneCalls[0][1].completionNote, /安全滚动上限/);
   } finally {
     globalThis.window = previousWindow;
   }

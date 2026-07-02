@@ -77,8 +77,10 @@ test('execution station client stores registration identity and keeps it after h
   assert.equal(requests[1][1].headers.Authorization, 'Bearer auth_token_1');
   const heartbeatBody = JSON.parse(requests[1][1].body);
   assert.equal(heartbeatBody.protocolVersion, '3');
+  assert.deepEqual(heartbeatBody.capabilities, ['xhs.list_scan']);
   assert.deepEqual(Object.keys(heartbeatBody).sort(), [
     'accountReports',
+    'capabilities',
     'operations',
     'pluginVersion',
     'protocolVersion',
@@ -226,7 +228,9 @@ test('execution station heartbeat sync stores mailbox version and wakes task pol
   assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
   assert.deepEqual(body.mailboxCursors, { station: 6 });
   assert.equal(body.protocolVersion, '3');
+  assert.deepEqual(body.capabilities, ['xhs.list_scan']);
   assert.deepEqual(Object.keys(body).sort(), [
+    'capabilities',
     'mailboxCursors',
     'operations',
     'pluginVersion',

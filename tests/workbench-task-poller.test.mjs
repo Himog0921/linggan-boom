@@ -138,6 +138,7 @@ test('task poller claims a pending task and patches completion state', async () 
           notes: [
             {
               platform: '',
+              targetKey: '',
               noteId: 'note_1',
               platformContentId: 'note_1',
               title: '标题 1',
@@ -145,6 +146,8 @@ test('task poller claims a pending task and patches completion state', async () 
               url: 'https://example.com/1',
               canonicalUrl: 'https://example.com/1?xsec_token=abc123',
               rawUrl: 'https://example.com/1?xsec_token=abc123',
+              sourceUrl: '',
+              runnableDetailUrl: '',
               rawShareText: '分享文案',
               cover: 'https://images.example.com/cover.jpg',
               coverImg: 'https://images.example.com/cover.jpg',
@@ -153,9 +156,13 @@ test('task poller claims a pending task and patches completion state', async () 
               imageCandidates: [],
               videoUrl: '',
               likes: 12,
+              likeCount: 12,
               collects: 0,
+              collectCount: 0,
               comments: 0,
+              commentCount: 0,
               shares: 0,
+              shareCount: 0,
               authorId: '',
               authorPlatformId: '',
               authorEntityId: '',
@@ -165,6 +172,10 @@ test('task poller claims a pending task and patches completion state', async () 
               publishedAtText: '',
               type: '',
               lastUpdateTime: null,
+              rank: 0,
+              batchRank: 0,
+              isPinned: false,
+              observedAt: '',
               collectionRunId: '',
               monitorMode: '',
               monitorId: '',
@@ -2041,6 +2052,93 @@ test('task poller flushes final result deltas before clearing the active lease',
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller waits for terminal result package before enqueueing records', async () => {
+  const recordBatches = [];
+  let resultPackageCalls = 0;
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_terminal_records_only',
+        taskType: 'xhs.authorNoteLinks',
+        platform: 'xhs',
+        payload: { collectionProfile: 'author_links' },
+      },
+      lease: {
+        leaseToken: 'lease-terminal-records-only',
+        attemptId: 'attempt-terminal-records-only',
+        leaseEpoch: 2,
+      },
+    }),
+    patchTask: async () => ({ success: true }),
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'task_terminal_records_only',
+      collectionRunId: 'run_terminal_records_only',
+      resultLookup: {
+        externalTaskId: 'task_terminal_records_only',
+        collectionRunId: 'run_terminal_records_only',
+      },
+    }),
+    getResultPackage: async () => {
+      resultPackageCalls += 1;
+      if (resultPackageCalls === 1) {
+        return {
+          success: true,
+          result: {
+            collectionRunId: 'run_terminal_records_only',
+            status: 'running',
+            resultSummary: { notes: 1, itemsPlanned: 3, itemsSucceeded: 1, failedItems: 0 },
+            records: {
+              notes: [{ noteId: 'author_link_1', title: '先发现的链接' }],
+              comments: [],
+              authors: [],
+              mediaAssets: [],
+            },
+          },
+        };
+      }
+      return {
+        success: true,
+        result: {
+          collectionRunId: 'run_terminal_records_only',
+          status: 'done',
+          resultSummary: { notes: 2, itemsPlanned: 3, itemsSucceeded: 2, failedItems: 0 },
+          records: {
+            notes: [
+              { noteId: 'author_link_1', title: '先发现的链接' },
+              { noteId: 'author_link_2', title: '最终一起交付的链接' },
+            ],
+            comments: [],
+            authors: [],
+            mediaAssets: [],
+          },
+        },
+      };
+    },
+    enqueueRecords: async (records) => {
+      recordBatches.push(records);
+      return records;
+    },
+    enqueueEvent: async (event) => event,
+    flushDeltas: async () => ({ success: true }),
+    clearTaskLease: async () => {},
+  });
+
+  await poller.tick();
+  const runningResult = await poller.tick();
+
+  assert.equal(runningResult.final, false);
+  assert.equal(recordBatches.length, 0);
+
+  const finalResult = await poller.tick();
+
+  assert.equal(finalResult.final, true);
+  assert.equal(recordBatches.length, 1);
+  assert.equal(recordBatches[0].length, 2);
+});
+
 test('task poller refreshes the account execution lock while a task is running', async () => {
   const acquiredLocks = [];
   const poller = createTaskPoller({
@@ -2756,7 +2854,7 @@ test('task poller does NOT fail handoff-lost when attempt started recently even 
   assert.equal(poller.getState().activeTask?.taskId, 'task_handoff_congested', '任务应仍存活');
 });
 
-test('task poller completes running task from streamed records when final result package handoff is lost', async () => {
+test('task poller does not complete from streamed records when final result package handoff is lost', async () => {
   const patches = [];
   const events = [];
   const lookups = [];
@@ -2815,25 +2913,20 @@ test('task poller completes running task from streamed records when final result
   nowMs += 13 * 60 * 1000;
   const result = await poller.tick();
 
-  assert.equal(result.final, true);
-  assert.equal(result.status, 'completed');
-  assert.equal(result.reason, 'result_package_handoff_lost_streamed_records');
+  assert.equal(result.failed, true);
+  assert.equal(result.reason, 'result_package_handoff_lost');
   assert.deepEqual(lookups[0], {
     collectionRunId: 'run_handoff_streamed',
     externalTaskId: 'task_handoff_streamed',
     tabId: 790,
   });
   assert.equal(patches.at(-1)[0], 'task_handoff_streamed');
-  assert.equal(patches.at(-1)[1].status, 'completed');
+  assert.equal(patches.at(-1)[1].status, 'failed');
   assert.equal(patches.at(-1)[1].progress, 100);
   assert.equal(patches.at(-1)[1].pluginRunId, 'run_handoff_streamed');
-  assert.equal(patches.at(-1)[1].errorMessage, null);
-  assert.equal(patches.at(-1)[1].resultSummary.notes, 2);
-  assert.equal(patches.at(-1)[1].resultSummary.authors, 1);
-  assert.equal(patches.at(-1)[1].resultSummary.streamedRecords, 3);
-  assert.equal(patches.at(-1)[1].resultSummary.handoffRecovered, true);
-  assert.equal(events.at(-1).eventType, 'task.completed');
-  assert.equal(events.at(-1).payload.reason, 'result_package_handoff_lost_streamed_records');
+  assert.match(patches.at(-1)[1].errorMessage, /结果包没有交回工作台/);
+  assert.equal(events.at(-1).eventType, 'task.failed');
+  assert.equal(events.at(-1).payload.reason, 'result_package_handoff_lost');
   assert.equal(poller.getState().activeTask, null);
 });
 

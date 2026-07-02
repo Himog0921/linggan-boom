@@ -284,7 +284,47 @@ window.__INITIAL_STATE__
 
 1. 博主日常巡查的低成本主路径应优先使用 `user_posted`：打开博主页后直接读取页面已请求到的 30 条作品，不必为了前 10 条表层巡查持续滚动。
 2. 博主页 `user_posted` 和搜索页 `search/notes` 的字段能力不同：博主页当前只稳定提供点赞数，搜索页能提供赞藏评转。后续任务能力描述应避免把“列表页表层指标”泛化成同一套字段。
-3. 插件已接入“博主页表层巡查接口优先、页面卡片兜底”：`surfaceOnly + profile` 任务优先使用 `user_posted`，完整批量采集仍保留原来的页面扫描，以保证后续能点击进入详情页。
+3. 插件已接入“博主页表层巡查接口优先、页面卡片补齐”：`surfaceOnly + profile` 任务在已捕获作品数达到目标时直接使用 `user_posted`；未达到目标或接口被拒绝时继续滚动页面收集卡片，避免深度建档只拿首屏 / 首批作品就提前结束。
+
+### 5.4.1 2026-07-02 博主页 author_links 直连接口拒绝样本
+
+验证页面：`/user/profile/68736c50000000001b02302d?...xsec_source=pc_search`
+
+用户控制台探查返回：
+
+```json
+{
+  "userId": "68736c50000000001b02302d",
+  "tokenPresent": true,
+  "apiTries": [
+    { "xsec_source": "pc_search", "status": 406, "count": 0 },
+    { "xsec_source": "pc_user", "status": 406, "count": 0 },
+    { "xsec_source": "pc_note", "status": 406, "count": 0 },
+    { "xsec_source": "app_share", "status": 406, "count": 0 }
+  ],
+  "capturedCachePages": 0,
+  "capturedCacheNoteCount": 0,
+  "pageCardCount": 12
+}
+```
+
+结论：
+
+1. `user_posted` 不能被当成深度建档的唯一主路；同一个页面和账号下，直连请求可能全部返回 406。
+2. 页面已经可见 12 个作品卡，说明“接口拒绝”不等于“无法发现作品链接”。
+3. `author_links` 的完成条件必须是达到目标数量、页面确认到底、连续滚动无新增或触发平台风险；不能因为拿到首屏 / 首批非空结果就结束。
+4. v2.0.70 起，插件会先使用已捕获清单；清单数量不够目标或接口被拒绝时继续滚动页面，并合并去重后再提交最终结果包。
+
+### 5.4.2 2026-07-02 博主页 DOM 持续滚动探查补充
+
+Mog 提供的 `xhs_profile_note_discovery_probe_report.md` 进一步证明：PC 博主页可以通过页面卡片持续滚动拿到大量历史作品链接。样本从首轮约 62 条增长到 179 条；另一组持续 Map 探查从 480 条持续增长到 690 条，且仍未到底。
+
+本轮落实为 v2.0.71：
+
+1. 深度建档 `author_links` 目标为 200 条时，滚动上限提高到 180 轮，并把连续无新增确认提高到 15 轮；中等目标也提高到 90 轮和 10 轮确认。
+2. 博主页滚动改为长短步交替、分段停顿、到底回弹再确认，不再用固定步长机械下滑。
+3. `discoverWithScroll()` 继续用持续 Map 记住滚动期间见过的全部作品，避免虚拟列表回顶后丢失底部卡片。
+4. 结果包新增 `discoverySummary`，包含 `stopReason / rounds / maxRounds / canLoadMore / fieldQuality`，工作台可解释“达到目标、确认到底、连续无新增、达到安全滚动上限”四种结果。
 
 ## 5.5 2026-07-01 笔记详情页与评论接口复验
 

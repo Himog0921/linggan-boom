@@ -109,13 +109,14 @@ test('buildMailboxCursors 缺失 station 时返回空对象（不输出 station 
 
 test('buildLaneCapacity 从 capabilities + activeLane 推导 lane', () => {
   const capacity = buildLaneCapacity({
-    capabilities: ['xhs.list_scan', 'douyin.list_scan', 'other'],
+    capabilities: ['xhs.list_scan', 'xhs.author_links', 'douyin.list_scan', 'other'],
     activeLane: 'xhs',
   });
   assert.deepEqual(capacity, {
     'xhs.monitor_patrol': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
     'xhs.monitor_checkpoint': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
     'xhs.manual_hot': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
+    'xhs.archive': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
     'douyin.governance': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
   });
 });
@@ -188,6 +189,7 @@ test('buildSyncRequestV11 输出纯 V1.1 字段且不混入非协议字段', () 
   assert.equal(body.pluginVersion, '2.0.55');
   assert.equal(body.protocolVersion, '3');
   assert.equal(body.stationSessionId, 'sess-1');
+  assert.deepEqual(body.capabilities, ['xhs.list_scan']);
   assert.deepEqual(body.mailboxCursors, { station: 12, 'xhs.monitor_patrol': 5 });
   assert.deepEqual(body.capacity, {
     'xhs.monitor_patrol': { remainingWorkSeconds: 0, targetWorkSeconds: 600, maxReservedTasks: 1 },
@@ -203,6 +205,7 @@ test('buildSyncRequestV11 输出纯 V1.1 字段且不混入非协议字段', () 
   assert.deepEqual(Object.keys(body).sort(), [
     'accountReports',
     'activeLeases',
+    'capabilities',
     'capacity',
     'mailboxCursors',
     'operations',

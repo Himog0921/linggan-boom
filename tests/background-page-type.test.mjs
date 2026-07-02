@@ -149,6 +149,30 @@ test('xhs author note link tasks map to profile page type', () => {
   );
 });
 
+test('profile-native xhs task names map to expected page types', () => {
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.author_links',
+      target: 'https://www.xiaohongshu.com/user/profile/author_1',
+    }),
+    'profile',
+  );
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.note_full',
+      target: 'https://www.xiaohongshu.com/discovery/item/note_123',
+    }),
+    'detail',
+  );
+  assert.equal(
+    inferPageTypeFromTask({
+      taskType: 'xhs.list_scan',
+      target: 'ADHD',
+    }),
+    'search',
+  );
+});
+
 test('xhs detail probe keeps detail dispatch page type when target is an unsigned profile relay url', () => {
   assert.deepEqual(
     normalizeWorkbenchTaskTarget({

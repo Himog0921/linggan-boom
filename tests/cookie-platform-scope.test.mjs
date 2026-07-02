@@ -31,8 +31,10 @@ test('popup account creation is scoped to the active platform', () => {
   assert.match(modalSource, /currentPlatform/);
   assert.match(modalSource, /platform:\s*currentPlatformKey/);
   assert.match(modalSource, /currentPlatformKey === 'douyin'/);
-  assert.match(backgroundSource, /selectAvailableAccount\(platform\)/);
+  assert.match(backgroundSource, /selectAccountForWorkbenchTask\(task,\s*platform\)/);
+  assert.match(backgroundSource, /if \(account\.runtimeSession\)/);
   assert.match(backgroundSource, /injectCookiesForAccount\(account\.cookieJson,\s*platform\)/);
+  assert.match(cookieManagerSource, /export async function selectAccountForWorkbenchTask/);
   assert.match(cookieManagerSource, /douyin:\s*'\.douyin\.com'/);
 });
 

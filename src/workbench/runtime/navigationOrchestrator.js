@@ -36,6 +36,37 @@ function isXhsDetailUrl(url = '') {
   return /^https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/[^/?#]+/i.test(String(url || '').trim());
 }
 
+function extractXhsNoteId(value = '') {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^[a-z0-9]{20,32}$/i.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    const match = url.pathname.match(/\/(?:explore|discovery\/item|item)\/([a-z0-9]+)/i);
+    return match?.[1] || '';
+  } catch {
+    return '';
+  }
+}
+
+function buildXhsDetailUrl(target) {
+  const value = String(target || '').trim();
+  const noteId = extractXhsNoteId(value);
+  if (!noteId) return isHttpUrl(value) ? value : null;
+  const url = new URL(`https://www.xiaohongshu.com/discovery/item/${encodeURIComponent(noteId)}`);
+  url.searchParams.set('source', 'webshare');
+  url.searchParams.set('xhsshare', 'pc_web');
+  try {
+    const original = new URL(value);
+    const token = original.searchParams.get('xsec_token');
+    if (token) url.searchParams.set('xsec_token', token);
+  } catch {
+    // note id inputs do not carry xsec_token; the page can still open as a canonical detail URL.
+  }
+  url.searchParams.set('xsec_source', 'pc_share');
+  return url.toString();
+}
+
 function isDouyinDetailUrl(url = '') {
   return /^https?:\/\/(?:www\.)?douyin\.com\/(?:video|note)\/[^/?#]+/i.test(String(url || '').trim());
 }
@@ -59,15 +90,30 @@ const TASK_URL_BUILDERS = {
       ? String(target || '').trim()
       : buildXhsSearchUrl(target, options);
   },
+  'xhs.list_scan': (target, options = {}) => {
+    if (String(options.targetPageType || '').trim() === 'profile') {
+      return buildXhsProfileUrl(target);
+    }
+    if (isHttpUrl(target) && /\/user\/profile\//i.test(String(target || ''))) {
+      return String(target || '').trim();
+    }
+    return buildXhsSearchUrl(target, options);
+  },
+  'xhs.note_full': (target) => buildXhsDetailUrl(target),
   'xhs.batchComments': (target, options = {}) =>
     /^https?:\/\//i.test(target)
       ? target
       : String(options.targetPageType || '').trim() === 'profile'
         ? buildXhsProfileUrl(target)
         : buildXhsSearchUrl(target, options),
+  'xhs.comment_scan': (target) => buildXhsDetailUrl(target),
   'xhs.collectAuthor': (target) =>
     /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
   'xhs.authorNoteLinks': (target) =>
+    /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
+  'xhs.author_profile': (target) =>
+    /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
+  'xhs.author_links': (target) =>
     /^https?:\/\//i.test(target) ? target : buildXhsProfileUrl(target),
   'douyin.batchNotes': (target, options = {}) =>
     shouldPreserveDetailTarget('douyin.batchNotes', target, options)

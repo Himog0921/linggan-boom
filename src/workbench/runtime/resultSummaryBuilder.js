@@ -30,6 +30,10 @@ function normalizeObjectArray(value = []) {
     .map((item) => ({ ...item }));
 }
 
+function normalizePlainObject(value = {}) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? { ...value } : {};
+}
+
 export function buildResultSummary({
   notes = [],
   comments = [],
@@ -55,6 +59,7 @@ export function buildResultSummary({
     requestedCount: normalizeCount(runRecord.requestedCount, 0),
     discoveredCount: normalizeCount(runRecord.discoveredCount, 0),
     shortfallCount: normalizeCount(runRecord.shortfallCount, 0),
+    discoverySummary: normalizePlainObject(runRecord.discoverySummary),
     totalComments: normalizeCount(runRecord.totalComments, 0),
     targetIds: normalizeTextArray(runRecord.targetIds),
     contentIds: normalizeTextArray(runRecord.contentIds),

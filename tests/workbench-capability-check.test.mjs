@@ -52,6 +52,26 @@ test('canDispatchTaskFromCapabilityReport rejects unsupported task types', () =>
   assert.equal(result.reasonCode, 'unsupported_task_type');
 });
 
+test('canDispatchTaskFromCapabilityReport accepts profile-native xhs task names through capability aliases', () => {
+  const noteFull = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.batchNotes'],
+    },
+  }, 'xhs.note_full', { pageType: 'detail' });
+  const authorLinks = canDispatchTaskFromCapabilityReport({
+    mode: 'profile',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: {
+      canRunTaskTypes: ['xhs.authorNoteLinks'],
+    },
+  }, 'xhs.author_links', { pageType: 'profile' });
+
+  assert.equal(noteFull.accepted, true);
+  assert.equal(authorLinks.accepted, true);
+});
+
 test('canDispatchTaskFromCapabilityReport forwards readiness failures', () => {
   const result = canDispatchTaskFromCapabilityReport({
     readiness: {

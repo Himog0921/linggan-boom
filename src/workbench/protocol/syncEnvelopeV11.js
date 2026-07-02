@@ -71,6 +71,7 @@ const PLATFORM_DEFAULT_CAPACITY_LANES = {
 
 const CAPABILITY_CAPACITY_LANES = {
   'xhs.list_scan': ['xhs.monitor_patrol', 'xhs.monitor_checkpoint', 'xhs.manual_hot'],
+  'xhs.author_links': ['xhs.archive', 'xhs.manual_hot'],
   'xhs.note_full': ['xhs.monitor_patrol', 'xhs.monitor_checkpoint', 'xhs.manual_hot', 'xhs.governance', 'xhs.data_sync', 'xhs.archive'],
   'xhs.comment_scan': ['xhs.comments'],
   'xhs.author_profile': ['xhs.monitor_patrol', 'xhs.manual_hot', 'xhs.archive'],
@@ -362,6 +363,7 @@ export function buildSyncRequestV11({
     pluginVersion: normalizeString(pluginVersion),
     protocolVersion: SYNC_PROTOCOL_VERSION_V11,
     stationSessionId: normalizeString(stationSessionId),
+    capabilities: toStringArray(capabilities),
   };
   // mailboxCursors
   const cursors = buildMailboxCursors({

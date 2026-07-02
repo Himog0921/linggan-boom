@@ -218,12 +218,53 @@ function buildAuthorNoteLinkRecords(cards = [], {
 const buildAuthorNoteLinksShortfallNote = ({
   requestedCount = 0,
   discoveredCount = 0,
+  discoverySummary = null,
 } = {}) => {
   const requested = Math.max(0, Number(requestedCount || 0) || 0);
   const discovered = Math.max(0, Number(discoveredCount || 0) || 0);
   if (requested <= 0 || discovered >= requested) return '';
+  const stopReason = String(discoverySummary?.stopReason || '').trim();
+  if (stopReason === 'max_rounds_reached') {
+    return `这轮原计划发现 ${requested} 条博主历史笔记链接，已到安全滚动上限，当前先发现 ${discovered} 条可采作品；页面后面可能还有内容，建议后续继续补跑。`;
+  }
+  if (stopReason === 'bottom_confirmed') {
+    return `这轮原计划发现 ${requested} 条博主历史笔记链接，当前主页多轮确认到底后只发现 ${discovered} 条可采作品，所以先按现有链接进入后续补采。`;
+  }
+  if (stopReason === 'stable_no_new') {
+    return `这轮原计划发现 ${requested} 条博主历史笔记链接，连续滚动没有新增后只发现 ${discovered} 条可采作品，所以先按现有链接进入后续补采。`;
+  }
   return `这轮原计划发现 ${requested} 条博主历史笔记链接，但当前主页最终只发现 ${discovered} 条可采作品，所以先按现有链接进入后续补采。`;
 };
+
+function readDiscoveryMeta(cards = []) {
+  return cards && typeof cards === 'object' && cards.discoveryMeta && typeof cards.discoveryMeta === 'object'
+    ? cards.discoveryMeta
+    : null;
+}
+
+function normalizeDiscoverySummary(meta = null, {
+  requestedCount = 0,
+  discoveredCount = 0,
+} = {}) {
+  const source = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  const fieldQuality = source.fieldQuality && typeof source.fieldQuality === 'object' && !Array.isArray(source.fieldQuality)
+    ? source.fieldQuality
+    : {};
+  return {
+    method: String(source.method || '').trim(),
+    stopReason: String(source.stopReason || '').trim(),
+    requestedCount: Math.max(0, Number(requestedCount || 0) || 0),
+    discoveredCount: Math.max(0, Number(discoveredCount || 0) || 0),
+    totalNotes: Math.max(0, Number(source.totalNotes || discoveredCount || 0) || 0),
+    preferredCount: Math.max(0, Number(source.preferredCount || 0) || 0),
+    scrollCount: Math.max(0, Number(source.scrollCount || 0) || 0),
+    rounds: Math.max(0, Number(source.rounds || 0) || 0),
+    maxRounds: Math.max(0, Number(source.maxRounds || 0) || 0),
+    canLoadMore: source.canLoadMore === undefined ? undefined : Boolean(source.canLoadMore),
+    isFinished: source.isFinished === undefined ? undefined : Boolean(source.isFinished),
+    fieldQuality,
+  };
+}
 
 function assertAuthorMonitorTarget({ isDouyinPage, monitorMeta = null } = {}) {
   if (!monitorMeta) return;
@@ -543,6 +584,10 @@ export function createCollectionHandlers({
           const cards = await discoverXhsSurfaceNotes(resolveXhsSurfaceContainerSelector(), maxScrolls, {
             expectedCount: limit,
           });
+          const discoverySummary = normalizeDiscoverySummary(readDiscoveryMeta(cards), {
+            requestedCount: limit,
+            discoveredCount: Array.isArray(cards) ? cards.length : 0,
+          });
           const records = buildAuthorNoteLinkRecords(cards, {
             collectionRunId: remoteRun?.collectionRunId || '',
             limit,
@@ -578,9 +623,11 @@ export function createCollectionHandlers({
             requestedCount: limit,
             discoveredCount: records.length,
             shortfallCount: Math.max(0, limit - records.length),
+            discoverySummary,
             completionNote: buildAuthorNoteLinksShortfallNote({
               requestedCount: limit,
               discoveredCount: records.length,
+              discoverySummary,
             }) || undefined,
           });
           if (!stopped) reportDone('note', records.length, { platform: 'xhs', taskType: 'authorNoteLinks' });

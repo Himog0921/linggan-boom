@@ -149,7 +149,7 @@ v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议�
 | `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
 | `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
 | `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组 |
-| `operations[]` | array | 当前已接入 `start_job`、`progress_update`、`commit_raw_snapshot` 与 `release_job`；`account_risk_control / control_ack` 待后续迁移 |
+| `operations[]` | array | 当前已接入 `start_job`、`progress_update`、`commit_raw_snapshot` 与 `release_job`；`start_job` 在 reservation 携带账号时必须回传同一个 `platformAccountId`；`account_risk_control / control_ack` 待后续迁移 |
 | `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
 V1.1 响应 body 结构：
@@ -177,6 +177,7 @@ V1.1 响应 body 结构：
       "reserveToken": "reserve_123",
       "reservationEpoch": 3,
       "lane": "xhs.monitor_patrol",
+      "platformAccountId": "runtime:xhs",
       "taskSpec": {
         "id": "job_123",
         "platform": "xhs",
@@ -184,7 +185,8 @@ V1.1 响应 body 结构：
         "taskType": "xhs.batchNotes",
         "source": "monitor",
         "taskStrategy": "author_patrol",
-        "target": "https://www.xiaohongshu.com/user/profile/..."
+        "target": "https://www.xiaohongshu.com/user/profile/...",
+        "platformAccountId": "runtime:xhs"
       }
     }
   ],
@@ -196,6 +198,7 @@ V1.1 响应 body 结构：
 说明：
 - 插件只解析 V1.1 字段：`mailboxVersions` 对象和 `nextSync` 对象。
 - 插件收到 `reservations[]` 后不会直接执行，而是立刻再发一次 `/sync`，用 `start_job` operation 携带 `jobId / reserveToken / reservationEpoch` 确认开始；服务端接受后返回正式 `leaseToken`。
+- reservation 如果携带 `platformAccountId`，插件必须把该值写入本地任务对象，并在 `start_job` operation 中回传同一个值。插件执行时优先使用服务端绑定账号；`runtime:<platform>` 表示使用当前浏览器登录会话，不再做本地 Cookie 注入。
 - 插件运行中续租发 `progress_update` operation，携带 `jobId / leaseToken / leaseEpoch / stage / progress`。
 - `nextSync.reason` 前缀为 `mailbox` 或 `claim` 时，插件立即触发任务轮询。
 - 426 错误：pluginVersion 低于服务端最低要求时返回，reasonCode=`VERSION_REJECTED`，用户需升级插件。
@@ -238,10 +241,10 @@ pause | resume | stop | delete
 - 插件应用控制后通过 ingest 写入 `task.control_applied`，失败则写入 `task.control_failed`。
 - 插件本地控制按钮仍保留，通过 `WORKBENCH_LOCAL_CONTROL_EVENT` 写回同一条任务事件流。
 
-增量写入路径：
+终态写入路径：
 
 ```text
-Content/platform runtime → Background local/progress events
+Content/platform runtime → Background final result package
 Background outbox → Workbench /sync commit_raw_snapshot → RawSnapshot/RawRecord
 ```
 
@@ -278,6 +281,7 @@ delta envelope：
 - `snapshot.status` 为 `completed / failed / stopped / cancelled` 时，插件必须提交 `commit_raw_snapshot`。
 - `records: []` 代表“本轮采集已终态，但没有可写入的结构化记录”，不是失败协议。
 - 如果本地记录因为缺少幂等键等原因被过滤为空，`taskLeaseClient` 会返回 `clientRecordStats`，用于区分“提交了空终态包”和“没有提交”。
+- 运行中的采集记录不能作为 `commit_raw_snapshot` 提前提交；页面运行期只允许写进度/心跳事件。`list_scan`、`author_links`、`note_full`、`author_profile`、`comment_probe` 等新架构 profile 必须等最终结果包聚合完成后一次性提交记录，避免半包把服务端任务提前关闭。
 
 事件类型：
 
@@ -395,6 +399,7 @@ record: {taskId}:{pluginRunId}:record:{recordType}:{externalRecordId || sequence
 
 ```text
 xhs.list_scan
+xhs.author_links
 xhs.note_full
 xhs.comment_scan
 xhs.author_profile
@@ -409,6 +414,7 @@ douyin.author_profile
 | 能力 | 插件执行方式 | 记录模式 |
 |---|---|---|
 | `xhs.list_scan` | 博主页 / 搜索页表层巡查，不进入每篇详情 | `author_surface` / `keyword_surface` |
+| `xhs.author_links` | 深度建档第一阶段，在作者主页持续发现作品链接，不进入详情 | `author_links` |
 | `xhs.note_full` | 打开小红书笔记详情页，一次带回正文、媒体、指标和 20 条以内评论 | `note_full` |
 | `xhs.comment_scan` | 纯评论采集；`xhs.note_full` 可覆盖 | `comment` |
 | `xhs.author_profile` | 读取作者主页资料 | `author_profile` |

@@ -185,6 +185,28 @@ export function reportWorkbenchRecord({
   });
 }
 
+export function reportWorkbenchRecords(records = []) {
+  if (!isContextValid()) return;
+  const normalizedRecords = (Array.isArray(records) ? records : [])
+    .map((item) => ({
+      recordType: String(item?.recordType || '').trim(),
+      externalRecordId: String(item?.externalRecordId || '').trim(),
+      record: item?.record && typeof item.record === 'object' && !Array.isArray(item.record)
+        ? item.record
+        : {},
+      collectionRunId: String(item?.collectionRunId || '').trim(),
+      externalTaskId: String(item?.externalTaskId || '').trim(),
+      sequence: Number(item?.sequence || Date.now()),
+      collectedAt: String(item?.collectedAt || '').trim(),
+    }))
+    .filter((item) => item.recordType && Object.keys(item.record).length > 0);
+  if (normalizedRecords.length === 0) return;
+  chrome.runtime.sendMessage({
+    action: MSG.WORKBENCH_RECORD_DELTA,
+    records: normalizedRecords,
+  });
+}
+
 /**
  * 广播采集完成消息
  */

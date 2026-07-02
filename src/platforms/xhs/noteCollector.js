@@ -621,6 +621,13 @@ function pickFirstText(source = {}, keys = []) {
   return '';
 }
 
+function readBoolean(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  const text = String(value).trim().toLowerCase();
+  return text === 'true' || text === '1' || text === 'yes';
+}
+
 function readAttribute(element, name) {
   if (!element || typeof element.getAttribute !== 'function') return '';
   return firstText(element.getAttribute(name));
@@ -809,6 +816,8 @@ export function normalizeProfilePostedNote(note = {}, {
     collects: pickFirstText(interact, ['collected_count', 'collectedCount', 'collect_count', 'collectCount']) || '',
     comments: pickFirstText(interact, ['comment_count', 'commentCount', 'comments']) || '',
     shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
+    isPinned: readBoolean(interact.sticky ?? interact.isSticky ?? note.sticky ?? note.isSticky),
+    sticky: readBoolean(interact.sticky ?? interact.isSticky ?? note.sticky ?? note.isSticky),
     type: pickFirstText(note, ['type', 'note_type', 'noteType']) || 'normal',
     cover,
     coverImg: cover,
@@ -880,14 +889,29 @@ export async function discoverProfileSurfaceNotesFromApi({
   const fromSnapshot = await requestSnapshot(userId)
     .then((snapshot) => dedupeProfilePostedNotes(collectProfilePostedPages(snapshot, userId), userId, limit))
     .catch(() => []);
-  if (fromSnapshot.length > 0) return fromSnapshot;
+  if (fromSnapshot.length > 0) {
+    return attachSurfaceDiscoveryMeta(fromSnapshot, {
+      method: 'captured_user_posted',
+      expectedCount: limit,
+      totalNotes: fromSnapshot.length,
+      stopReason: fromSnapshot.length >= limit ? 'target_reached' : 'captured_partial',
+      isFinished: fromSnapshot.length >= limit,
+    });
+  }
 
   const requestUrl = buildProfilePostedUrl({ userId, currentUrl: sourceUrl });
   if (!requestUrl) return [];
 
   const json = await fetchJson([requestUrl]).catch(() => null);
   if (!json) return [];
-  return dedupeProfilePostedNotes(readProfilePostedNotes(json).map((note) => ({ note, sourceUrl: requestUrl })), userId, limit);
+  const notes = dedupeProfilePostedNotes(readProfilePostedNotes(json).map((note) => ({ note, sourceUrl: requestUrl })), userId, limit);
+  return attachSurfaceDiscoveryMeta(notes, {
+    method: 'user_posted_direct',
+    expectedCount: limit,
+    totalNotes: notes.length,
+    stopReason: notes.length >= limit ? 'target_reached' : 'api_partial',
+    isFinished: notes.length >= limit,
+  });
 }
 
 function readSearchNoteCard(item = {}) {
@@ -933,6 +957,8 @@ export function normalizeSearchSurfaceNote(item = {}, {
     collects: pickFirstText(interact, ['collected_count', 'collectedCount', 'collect_count', 'collectCount']) || '',
     comments: pickFirstText(interact, ['comment_count', 'commentCount', 'comments']) || '',
     shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
+    isPinned: false,
+    sticky: false,
     type: pickFirstText(noteCard, ['type', 'note_type', 'noteType']) || 'normal',
     cover,
     coverImg: cover,
@@ -1005,7 +1031,161 @@ export async function discoverSearchSurfaceNotesFromApi({
   const limit = normalizePositiveInteger(expectedCount, 30);
   return requestSnapshot(keyword)
     .then((snapshot) => dedupeSearchSurfaceNotes(collectSearchNotePages(snapshot, keyword), keyword, limit))
+    .then((notes) => attachSurfaceDiscoveryMeta(notes, {
+      method: 'captured_search_notes',
+      expectedCount: limit,
+      totalNotes: notes.length,
+      stopReason: notes.length >= limit ? 'target_reached' : 'captured_partial',
+      isFinished: notes.length >= limit,
+    }))
     .catch(() => []);
+}
+
+function getSurfaceNoteMergeKey(note = {}) {
+  const id = firstText(
+    note.noteId
+    || note.platformContentId
+    || note.id
+    || note.contentId
+    || note.note_id
+    || '',
+  );
+  if (id) return `id:${id}`;
+  const url = firstText(note.url || note.link || note.href || '');
+  if (url) return `url:${url.split('?')[0]}`;
+  return '';
+}
+
+function mergeSurfaceNotes(...groups) {
+  const notes = [];
+  const seen = new Set();
+  for (const group of groups) {
+    for (const note of Array.isArray(group) ? group : []) {
+      if (!note) continue;
+      const key = getSurfaceNoteMergeKey(note);
+      if (key && seen.has(key)) continue;
+      if (key) seen.add(key);
+      notes.push(note);
+    }
+  }
+  return notes;
+}
+
+function buildSurfaceDiscoveryFieldQuality(notes = []) {
+  const totalNotes = Array.isArray(notes) ? notes.length : 0;
+  const countWith = (predicate) => (Array.isArray(notes) ? notes.filter(predicate).length : 0);
+  const withTitle = countWith((note) => firstText(note?.title || note?.content || note?.bodyText));
+  const withLikeText = countWith((note) => firstText(note?.likes || note?.likeText));
+  const withLikeCount = countWith((note) => firstText(note?.likes || note?.likeText) !== '');
+  const withCover = countWith((note) => firstText(note?.cover || note?.coverUrl || note?.coverImg || note?.thumbnail));
+  const withXsecToken = countWith((note) => /[?&]xsec_token=/i.test(firstText(note?.url || note?.sourceUrl || note?.rawUrl)));
+  const pinnedCount = countWith((note) => Boolean(note?.isPinned || note?.sticky));
+  const rate = (value) => (totalNotes > 0 ? Math.round((value / totalNotes) * 1000) / 1000 : 0);
+  return {
+    totalNotes,
+    withTitle,
+    withLikeText,
+    withLikeCount,
+    withCover,
+    withXsecToken,
+    pinnedCount,
+    titleRate: rate(withTitle),
+    likeTextRate: rate(withLikeText),
+    likeCountRate: rate(withLikeCount),
+    coverRate: rate(withCover),
+    xsecTokenRate: rate(withXsecToken),
+  };
+}
+
+function attachSurfaceDiscoveryMeta(notes = [], meta = {}) {
+  if (!Array.isArray(notes)) return notes;
+  const safeMeta = meta && typeof meta === 'object' && !Array.isArray(meta) ? meta : {};
+  Object.defineProperty(notes, 'discoveryMeta', {
+    value: {
+      ...safeMeta,
+      totalNotes: Number.isFinite(Number(safeMeta.totalNotes)) ? Number(safeMeta.totalNotes) : notes.length,
+      fieldQuality: safeMeta.fieldQuality || buildSurfaceDiscoveryFieldQuality(notes),
+    },
+    configurable: true,
+    enumerable: false,
+  });
+  return notes;
+}
+
+function readSurfaceDiscoveryMeta(notes = []) {
+  return notes && typeof notes === 'object' && !Array.isArray(notes.discoveryMeta)
+    && notes.discoveryMeta && typeof notes.discoveryMeta === 'object'
+    ? notes.discoveryMeta
+    : null;
+}
+
+function limitSurfaceNotes(notes = [], expectedCount = 0) {
+  if (expectedCount <= 0) return notes;
+  return attachSurfaceDiscoveryMeta(notes.slice(0, expectedCount), readSurfaceDiscoveryMeta(notes) || {});
+}
+
+function buildMergedDiscoveryMeta({
+  preferredNotes = [],
+  scrollNotes = [],
+  mergedNotes = [],
+  expectedCount = 0,
+} = {}) {
+  const preferredMeta = readSurfaceDiscoveryMeta(preferredNotes);
+  const scrollMeta = readSurfaceDiscoveryMeta(scrollNotes);
+  const sourceMethod = preferredNotes.length > 0 && scrollNotes.length > 0
+    ? 'captured_plus_dom_scroll'
+    : (scrollMeta?.method || preferredMeta?.method || 'dom_scroll_persistent_map');
+  return {
+    method: sourceMethod,
+    expectedCount,
+    preferredCount: preferredNotes.length,
+    scrollCount: scrollNotes.length,
+    totalNotes: mergedNotes.length,
+    stopReason: scrollMeta?.stopReason || preferredMeta?.stopReason || '',
+    rounds: scrollMeta?.rounds || 0,
+    maxRounds: scrollMeta?.maxRounds || 0,
+    canLoadMore: scrollMeta?.canLoadMore ?? undefined,
+    isFinished: scrollMeta?.isFinished ?? (expectedCount > 0 ? mergedNotes.length >= expectedCount : undefined),
+    fieldQuality: buildSurfaceDiscoveryFieldQuality(mergedNotes),
+  };
+}
+
+export async function discoverSurfaceNotesFromBestSource(containerSelector, maxScrolls = 10, options = {}) {
+  const currentUrl = String(
+    options.currentUrl
+    || (typeof window !== 'undefined' ? window.location.href : ''),
+  ).trim();
+  const expectedCount = normalizePositiveInteger(options.expectedCount, 0);
+  const profileDiscover = typeof options.profileDiscover === 'function'
+    ? options.profileDiscover
+    : discoverProfileSurfaceNotesFromApi;
+  const searchDiscover = typeof options.searchDiscover === 'function'
+    ? options.searchDiscover
+    : discoverSearchSurfaceNotesFromApi;
+  const scrollDiscover = typeof options.scrollDiscover === 'function'
+    ? options.scrollDiscover
+    : discoverWithScroll;
+
+  let preferredNotes = [];
+  if (containerSelector === '#userPostedFeeds') {
+    preferredNotes = await profileDiscover({ expectedCount, currentUrl }).catch(() => []);
+  } else if (extractXhsSearchKeywordFromUrl(currentUrl)) {
+    preferredNotes = await searchDiscover({ expectedCount, currentUrl }).catch(() => []);
+  }
+
+  if (preferredNotes.length > 0 && (expectedCount <= 0 || preferredNotes.length >= expectedCount)) {
+    return limitSurfaceNotes(preferredNotes, expectedCount);
+  }
+
+  const scrollNotes = await scrollDiscover(containerSelector, maxScrolls, options);
+  const mergedNotes = mergeSurfaceNotes(preferredNotes, scrollNotes);
+  attachSurfaceDiscoveryMeta(mergedNotes, buildMergedDiscoveryMeta({
+    preferredNotes,
+    scrollNotes,
+    mergedNotes,
+    expectedCount,
+  }));
+  return limitSurfaceNotes(mergedNotes, expectedCount);
 }
 
 function pickCardCoverImage(section, coverLink) {
@@ -1123,6 +1303,84 @@ function scrollDiscoveryTargetBy(scrollTarget, top) {
   window.scrollBy({ top: offset, behavior: 'auto' });
 }
 
+function sleep(ms = 0) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms || 0))));
+}
+
+function clampNumber(value, min, max) {
+  const num = Number(value);
+  if (!Number.isFinite(num)) return min;
+  return Math.min(max, Math.max(min, num));
+}
+
+function estimateProfileMaxRounds(expectedCount = 0) {
+  if (expectedCount >= 150) return 180;
+  if (expectedCount >= 80) return 140;
+  if (expectedCount >= 40) return 90;
+  if (expectedCount > 0) return 45;
+  return 30;
+}
+
+function estimateProfileStableLimit(expectedCount = 0) {
+  if (expectedCount >= 150) return 15;
+  if (expectedCount >= 80) return 12;
+  if (expectedCount >= 40) return 10;
+  return 6;
+}
+
+function estimateProfileBottomConfirmationRounds(expectedCount = 0) {
+  if (expectedCount >= 150) return 12;
+  if (expectedCount >= 80) return 10;
+  if (expectedCount >= 40) return 9;
+  return 6;
+}
+
+const PROFILE_SCROLL_RATIOS = [0.58, 0.74, 0.88, 0.66, 0.81, 0.62, 0.9, 0.7];
+const PROFILE_SETTLE_EXTRA_MS = [120, 360, 220, 520, 180, 420, 260, 600];
+const PROFILE_MICRO_PAUSE_MS = [90, 150, 120, 210, 110, 180];
+
+function getDiscoveryScrollRatio(plan = {}, roundIndex = 0) {
+  if (!plan.isProfileMode) return plan.stepRatio;
+  const value = PROFILE_SCROLL_RATIOS[roundIndex % PROFILE_SCROLL_RATIOS.length] || plan.stepRatio;
+  return clampNumber(value, 0.5, 0.92);
+}
+
+function getDiscoverySettleDelay(plan = {}, roundIndex = 0) {
+  if (!plan.isProfileMode) return plan.settleDelay;
+  const extra = PROFILE_SETTLE_EXTRA_MS[roundIndex % PROFILE_SETTLE_EXTRA_MS.length] || 0;
+  return Math.max(plan.settleDelay, plan.settleDelay + extra);
+}
+
+async function performDiscoveryScroll(scrollTarget, {
+  currentTop = 0,
+  nextTop = 0,
+  step = 0,
+  plan = {},
+  roundIndex = 0,
+} = {}) {
+  if (!plan.isProfileMode) {
+    if (nextTop > currentTop + 1) {
+      scrollDiscoveryTargetTo(scrollTarget, nextTop);
+    } else {
+      scrollDiscoveryTargetBy(scrollTarget, step);
+    }
+    return;
+  }
+
+  const targetTop = nextTop > currentTop + 1 ? nextTop : currentTop + Math.max(120, step);
+  const delta = Math.max(0, targetTop - currentTop);
+  if (delta <= 1) return;
+
+  const firstRatio = roundIndex % 3 === 0 ? 0.48 : (roundIndex % 3 === 1 ? 0.64 : 0.56);
+  const firstTop = Math.max(currentTop + 80, Math.min(targetTop, currentTop + Math.round(delta * firstRatio)));
+  scrollDiscoveryTargetTo(scrollTarget, firstTop);
+  dispatchDiscoveryWheel(scrollTarget, Math.max(80, firstTop - currentTop));
+  await sleep(PROFILE_MICRO_PAUSE_MS[roundIndex % PROFILE_MICRO_PAUSE_MS.length] || 120);
+
+  scrollDiscoveryTargetTo(scrollTarget, targetTop);
+  dispatchDiscoveryWheel(scrollTarget, Math.max(80, targetTop - firstTop));
+}
+
 export function buildDiscoveryPlan(containerSelector, {
   maxScrolls = 10,
   expectedCount = 0,
@@ -1130,9 +1388,7 @@ export function buildDiscoveryPlan(containerSelector, {
   const isProfileMode = containerSelector === '#userPostedFeeds';
   const normalizedMaxScrolls = normalizePositiveInteger(maxScrolls, 10);
   const normalizedExpectedCount = normalizePositiveInteger(expectedCount, 0);
-  const profileTargetRounds = normalizedExpectedCount > 0
-    ? Math.min(Math.max(normalizedExpectedCount, 28), 80)
-    : 28;
+  const profileTargetRounds = estimateProfileMaxRounds(normalizedExpectedCount);
   const maxRounds = isProfileMode
     ? Math.max(
       normalizedMaxScrolls,
@@ -1144,11 +1400,12 @@ export function buildDiscoveryPlan(containerSelector, {
     isProfileMode,
     expectedCount: normalizedExpectedCount,
     maxRounds,
-    settleDelay: isProfileMode ? 1300 : 900,
-    stableNoNewLimit: isProfileMode ? 4 : 2,
-    bottomConfirmationRounds: isProfileMode ? 6 : 0,
-    stepRatio: isProfileMode ? 0.55 : 0.68,
+    settleDelay: isProfileMode && normalizedExpectedCount >= 80 ? 1500 : (isProfileMode ? 1300 : 900),
+    stableNoNewLimit: isProfileMode ? estimateProfileStableLimit(normalizedExpectedCount) : 2,
+    bottomConfirmationRounds: isProfileMode ? estimateProfileBottomConfirmationRounds(normalizedExpectedCount) : 0,
+    stepRatio: isProfileMode ? 0.74 : 0.68,
     requireBottomOrExpected: isProfileMode,
+    humanScroll: isProfileMode,
   };
 }
 
@@ -1220,7 +1477,7 @@ async function probeProfileBottom(containerSelector, previousSnapshot, settleDel
   const retreatTop = Math.max(0, metrics.scrollTop - bounceStep);
   if (retreatTop < metrics.scrollTop - 1) {
     scrollDiscoveryTargetTo(scrollTarget, retreatTop);
-    await new Promise((resolve) => setTimeout(resolve, 220));
+    await sleep(220);
   }
 
   const refreshed = getScrollMetrics(scrollTarget);
@@ -1239,7 +1496,7 @@ async function probeProfileBottom(containerSelector, previousSnapshot, settleDel
     settleDelay + 900,
     true,
   );
-  await new Promise((resolve) => setTimeout(resolve, 320));
+  await sleep(320);
   return true;
 }
 
@@ -1251,6 +1508,9 @@ export async function discoverWithScroll(containerSelector, maxScrolls = 10, opt
   const allNotes = new Map(); // key=noteId，滚动期间持续累积，不依赖回顶后的 DOM
   let noNewCount = 0;
   let bottomNoNewCount = 0;
+  let roundsUsed = 0;
+  let stopReason = 'max_rounds_reached';
+  let lastMetrics = null;
   let scrollTarget = getDiscoveryScrollTarget(containerSelector);
   const plan = buildDiscoveryPlan(containerSelector, {
     maxScrolls,
@@ -1258,6 +1518,7 @@ export async function discoverWithScroll(containerSelector, maxScrolls = 10, opt
   });
 
   for (let i = 0; i < plan.maxRounds; i++) {
+    roundsUsed = i + 1;
     scrollTarget = getDiscoveryScrollTarget(containerSelector);
     const found = discoverNotesFromDOM(containerSelector);
     let hasNew = false;
@@ -1273,9 +1534,13 @@ export async function discoverWithScroll(containerSelector, maxScrolls = 10, opt
     }
 
     const discoveredEnough = plan.expectedCount > 0 && allNotes.size >= plan.expectedCount;
-    if (discoveredEnough) break;
+    if (discoveredEnough) {
+      stopReason = 'target_reached';
+      break;
+    }
 
     const metrics = getScrollMetrics(scrollTarget);
+    lastMetrics = metrics;
     const discoverySnapshot = {
       visibleCount: found.length,
       knownNoteIds: new Set(allNotes.keys()),
@@ -1300,36 +1565,43 @@ export async function discoverWithScroll(containerSelector, maxScrolls = 10, opt
         bottomNoNewCount,
         bottomConfirmationRounds: plan.bottomConfirmationRounds,
         requireBottomOrExpected: plan.requireBottomOrExpected,
-      })) break;
+      })) {
+        stopReason = metrics.atBottom ? 'bottom_confirmed' : 'stable_no_new';
+        break;
+      }
     } else {
       noNewCount = 0;
       bottomNoNewCount = 0;
     }
 
-    // 每次滚动约 68% 屏高；博主页使用更慢节奏防止空白卡片
-    const step = Math.round(metrics.viewportHeight * plan.stepRatio);
+    // 博主页使用长短步交替和分段停顿，模拟正常浏览，降低空白卡片和误判到底的概率。
+    const step = Math.round(metrics.viewportHeight * getDiscoveryScrollRatio(plan, i));
     const nextTop = Math.min(metrics.maxTop, metrics.scrollTop + step);
-    if (nextTop > metrics.scrollTop + 1) {
-      scrollDiscoveryTargetTo(scrollTarget, nextTop);
-    } else if (!metrics.atBottom) {
-      scrollDiscoveryTargetBy(scrollTarget, step);
+    if (nextTop > metrics.scrollTop + 1 || !metrics.atBottom) {
+      await performDiscoveryScroll(scrollTarget, {
+        currentTop: metrics.scrollTop,
+        nextTop,
+        step,
+        plan,
+        roundIndex: i,
+      });
     }
     await waitForDiscoverySettle(
       containerSelector,
       discoverySnapshot,
-      plan.settleDelay,
+      getDiscoverySettleDelay(plan, i),
       plan.isProfileMode,
     );
 
     // 某些博主页会出现短暂空白，额外等待一次再做下一轮
     if (plan.isProfileMode && found.length === 0) {
-      await new Promise(r => setTimeout(r, 450));
+      await sleep(450);
     }
   }
 
   // 滚回顶部
   scrollDiscoveryTargetTo(scrollTarget, 0);
-  await new Promise(r => setTimeout(r, 200));
+  await sleep(200);
 
   // 关键修复：返回滚动期间累积的所有笔记（按发现时的视觉位置排序）
   // 不能再次调用 discoverNotesFromDOM，因为虚拟列表在回顶后已卸载底部卡片
@@ -1342,5 +1614,23 @@ export async function discoverWithScroll(containerSelector, maxScrolls = 10, opt
     if (rowDiff < 50) return a._left - b._left;
     return a._top - b._top;
   });
-  return result;
+  if (result.length === 0 && stopReason === 'max_rounds_reached') stopReason = 'no_cards_found';
+  return attachSurfaceDiscoveryMeta(result, {
+    method: 'dom_scroll_persistent_map',
+    expectedCount: plan.expectedCount,
+    totalNotes: result.length,
+    rounds: roundsUsed,
+    maxRounds: plan.maxRounds,
+    stopReason,
+    noNewCount,
+    bottomNoNewCount,
+    lastRound: {
+      scrollTop: Math.round(lastMetrics?.scrollTop || 0),
+      viewportHeight: Math.round(lastMetrics?.viewportHeight || 0),
+      documentHeight: Math.round(lastMetrics?.scrollHeight || 0),
+      atBottom: Boolean(lastMetrics?.atBottom),
+    },
+    canLoadMore: stopReason === 'max_rounds_reached',
+    isFinished: stopReason === 'target_reached' || stopReason === 'bottom_confirmed',
+  });
 }

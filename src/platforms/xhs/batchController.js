@@ -898,6 +898,7 @@ export class BatchNoteController extends BaseBatchController {
           throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
         }
         this.collected.push(result);
+        await noteStore.upsert(result);
         this._reportCollectedNote(result);
         collectedNote = result;
         console.log(`[灵感爆爆爆] 当前详情页采集成功: ${noteInfo.noteId} (${result.title})`);
@@ -1050,6 +1051,7 @@ export class BatchNoteController extends BaseBatchController {
             throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
           }
           this.collected.push(result);
+          await noteStore.upsert(result);
           this._reportCollectedNote(result);
           collectedNote = result;
           collected = true;
@@ -1104,6 +1106,7 @@ export class BatchNoteController extends BaseBatchController {
         throw new Error(`采集到的笔记与目标不一致: expected=${noteInfo.noteId} actual=${result?.noteId || ''}`);
       }
       this.collected.push(result);
+      await noteStore.upsert(result);
       this._reportCollectedNote(result);
       console.log(`[灵感爆爆爆] Fallback 采集成功: ${noteInfo.noteId} (${result.title})`);
 
@@ -1128,6 +1131,7 @@ export class BatchNoteController extends BaseBatchController {
 
   _reportCollectedNote(result = {}) {
     if (!this.collectionRunId) return;
+    if (this._shouldUseFinalResultPackageOnly()) return;
     const record = withMonitorRecordMeta(
       buildWorkbenchNoteRecord(result),
       this.monitorMeta || result.monitorMeta,
@@ -1144,6 +1148,10 @@ export class BatchNoteController extends BaseBatchController {
       sequence: Date.now(),
       collectedAt: new Date().toISOString(),
     });
+  }
+
+  _shouldUseFinalResultPackageOnly() {
+    return Boolean(this._includeComments && this._commentLimit > 0 && !this.surfaceOnly);
   }
 
   async _collectAttachedComments(noteInfo = {}, noteUrl = '', collectedNote = {}) {
@@ -1273,6 +1281,7 @@ export class BatchNoteController extends BaseBatchController {
 
   _reportCollectedComment(comment = {}, noteInfo = {}, offset = 0) {
     if (!this.collectionRunId) return;
+    if (this._shouldUseFinalResultPackageOnly()) return;
     const noteId = String(comment.noteId || noteInfo.noteId || '').trim().replace(/^xhs_/, '');
     const record = withMonitorRecordMeta({
       ...comment,

@@ -21,6 +21,11 @@ export const REMOTE_TASK_TYPE = {
   XHS_BATCH_COMMENTS: 'xhs.batchComments',
   XHS_COLLECT_AUTHOR: 'xhs.collectAuthor',
   XHS_AUTHOR_NOTE_LINKS: 'xhs.authorNoteLinks',
+  XHS_LIST_SCAN: 'xhs.list_scan',
+  XHS_NOTE_FULL: 'xhs.note_full',
+  XHS_COMMENT_SCAN: 'xhs.comment_scan',
+  XHS_AUTHOR_PROFILE: 'xhs.author_profile',
+  XHS_AUTHOR_LINKS: 'xhs.author_links',
   DOUYIN_BATCH_NOTES: 'douyin.batchNotes',
   DOUYIN_BATCH_COMMENTS: 'douyin.batchComments',
   DOUYIN_COLLECT_AUTHOR: 'douyin.collectAuthor',
@@ -211,6 +216,71 @@ export const SUPPORTED_REMOTE_TASKS = {
     },
     capabilityKey: 'canBatchNotes',
   },
+  [REMOTE_TASK_TYPE.XHS_LIST_SCAN]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_NOTES,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_NOTES,
+    },
+    capabilityKey: 'canBatchNotes',
+  },
+  [REMOTE_TASK_TYPE.XHS_NOTE_FULL]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_NOTES,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_NOTES,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_NOTES,
+    },
+    capabilityKey: 'canBatchNotes',
+  },
+  [REMOTE_TASK_TYPE.XHS_COMMENT_SCAN]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.DETAIL],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.BACKGROUND,
+    startAction: MSG.START_BATCH_COMMENTS,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.PAUSE_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.RESUME_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.STOP_BATCH_COMMENTS,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.STOP_BATCH_COMMENTS,
+    },
+    capabilityKey: 'canBatchComments',
+  },
+  [REMOTE_TASK_TYPE.XHS_AUTHOR_PROFILE]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.COLLECT_AUTHOR,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
+    },
+    capabilityKey: 'canCollectAuthor',
+  },
+  [REMOTE_TASK_TYPE.XHS_AUTHOR_LINKS]: {
+    platform: 'xhs',
+    targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.PROFILE],
+    dispatchTarget: WORKBENCH_DISPATCH_TARGET.CONTENT,
+    startAction: MSG.DISCOVER_AUTHOR_NOTE_LINKS,
+    controlActions: {
+      [REMOTE_TASK_CONTROL_ACTION.PAUSE]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.RESUME]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.STOP]: MSG.WORKBENCH_TASK_CONTROL,
+      [REMOTE_TASK_CONTROL_ACTION.DELETE]: MSG.WORKBENCH_TASK_CONTROL,
+    },
+    capabilityKey: 'canBatchNotes',
+  },
   [REMOTE_TASK_TYPE.DOUYIN_BATCH_NOTES]: {
     platform: 'douyin',
     targetPageTypes: [REMOTE_TARGET_PAGE_TYPE.SEARCH, REMOTE_TARGET_PAGE_TYPE.PROFILE, REMOTE_TARGET_PAGE_TYPE.DETAIL],
@@ -282,4 +352,3 @@ export function getSupportedRemoteTask(taskType = '') {
   const normalizedTaskType = String(taskType || '').trim();
   return SUPPORTED_REMOTE_TASKS[normalizedTaskType] || null;
 }
-

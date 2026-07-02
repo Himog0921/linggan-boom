@@ -13,6 +13,7 @@ import {
 import { validateCapabilityCheck, validateTaskControl, validateTaskEnvelope } from '../workbench/protocol/validator.js';
 import {
   REMOTE_ERROR_CODE,
+  REMOTE_TASK_TYPE,
   WORKBENCH_EVENT_SOURCE,
   WORKBENCH_MESSAGE_TYPE,
   WORKBENCH_PROTOCOL_VERSION,
@@ -75,7 +76,7 @@ import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFo
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
 import { accountStore } from '../db/accountStore.js';
-import { selectAvailableAccount, injectCookiesForAccount } from '../workbench/runtime/cookieManager.js';
+import { injectCookiesForAccount, selectAccountForWorkbenchTask, selectAvailableAccount } from '../workbench/runtime/cookieManager.js';
 import { noteStore } from '../db/noteStore.js';
 import { commentStore } from '../db/commentStore.js';
 import { authorStore } from '../db/authorStore.js';
@@ -327,9 +328,21 @@ function extractDetailContentIdFromUrl(url = '') {
   return extractXhsDetailIdFromUrl(url) || extractDouyinDetailIdFromUrl(url);
 }
 
-function buildCanonicalXhsDetailUrl(noteId = '') {
+function buildCanonicalXhsDetailUrl(noteId = '', sourceUrl = '') {
   const normalizedNoteId = normalizeString(noteId).replace(/^xhs_/, '');
-  return normalizedNoteId ? `https://www.xiaohongshu.com/explore/${normalizedNoteId}` : '';
+  if (!normalizedNoteId) return '';
+  let token = '';
+  try {
+    token = new URL(normalizeString(sourceUrl)).searchParams.get('xsec_token') || '';
+  } catch {
+    token = '';
+  }
+  const url = new URL(`https://www.xiaohongshu.com/discovery/item/${encodeURIComponent(normalizedNoteId)}`);
+  url.searchParams.set('source', 'webshare');
+  url.searchParams.set('xhsshare', 'pc_web');
+  if (token) url.searchParams.set('xsec_token', token);
+  url.searchParams.set('xsec_source', 'pc_share');
+  return url.toString();
 }
 
 function isRecoverableConnectionError(error) {
@@ -382,7 +395,18 @@ function buildContentScriptUnavailableCapabilityResponse({ task = {}, error = nu
 
 function isSignedXhsShareUrl(url = '') {
   const value = normalizeString(url);
-  return Boolean(value && (/xsec_token=/i.test(value) || /xhslink\.com/i.test(value)));
+  if (!value) return false;
+  if (/^https?:\/\/(?:[^/]+\.)?xhslink\.com\//i.test(value)) return true;
+  try {
+    const parsed = new URL(value);
+    const path = parsed.pathname.toLowerCase();
+    if (path.includes('/discovery/item/')) return true;
+    const source = String(parsed.searchParams.get('xsec_source') || '').toLowerCase();
+    const hasToken = Boolean(parsed.searchParams.get('xsec_token'));
+    return /^\/user\/profile\/[^/]+\/[^/]+/i.test(parsed.pathname) && hasToken && source === 'pc_user';
+  } catch {
+    return false;
+  }
 }
 
 function getTaskPlatformContentId(task = {}) {
@@ -412,27 +436,52 @@ async function resolvePreferredTaskTarget(task = {}) {
     existing?.noteUrl,
     target,
   ];
-  return candidates.find((candidate) => isSignedXhsShareUrl(candidate)) || buildCanonicalXhsDetailUrl(noteId) || target;
+  return candidates.find((candidate) => isSignedXhsShareUrl(candidate)) || buildCanonicalXhsDetailUrl(noteId, target) || target;
 }
 
 function inferPageTypeFromTask(task = {}) {
   const taskType = String(task.taskType || '').trim();
   const targetUrl = String(task.target || '').trim();
   const payload = task.payload && typeof task.payload === 'object' ? task.payload : {};
+  const collectionProfile = String(task.collectionProfile || payload.collectionProfile || '').trim();
   const declaredTargetPageType = String(payload.targetPageType || '').trim();
   if (declaredTargetPageType === 'detail' || declaredTargetPageType === 'profile' || declaredTargetPageType === 'search') {
     return declaredTargetPageType;
   }
+  if (collectionProfile === 'author_links' || collectionProfile === 'author_profile') {
+    return 'profile';
+  }
+  if (collectionProfile === 'note_full' || collectionProfile === 'note_detail' || collectionProfile === 'comment_probe') {
+    return 'detail';
+  }
+  if (collectionProfile === 'list_scan') {
+    if (/\/user\//i.test(targetUrl) || /\/user\/profile\//i.test(targetUrl)) return 'profile';
+    return 'search';
+  }
   if (taskType === 'douyin.singleComments' || taskType === 'douyin.commentImageDownload') {
     return 'detail';
   }
-  if (taskType === 'xhs.collectAuthor' || taskType === 'xhs.authorNoteLinks' || taskType === 'douyin.collectAuthor') {
+  if (
+    taskType === REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR ||
+    taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_PROFILE ||
+    taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS ||
+    taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_LINKS ||
+    taskType === 'douyin.collectAuthor'
+  ) {
     return 'profile';
   }
-  if (taskType === 'xhs.batchComments' && isXhsDetailUrl(targetUrl)) {
+  if (
+    taskType === REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS ||
+    taskType === REMOTE_TASK_TYPE.XHS_COMMENT_SCAN
+  ) {
     return 'detail';
   }
-  if (taskType === 'xhs.batchNotes' || taskType === 'douyin.batchNotes') {
+  if (
+    taskType === REMOTE_TASK_TYPE.XHS_BATCH_NOTES ||
+    taskType === REMOTE_TASK_TYPE.XHS_LIST_SCAN ||
+    taskType === REMOTE_TASK_TYPE.XHS_NOTE_FULL ||
+    taskType === 'douyin.batchNotes'
+  ) {
     if (isXhsDetailUrl(targetUrl) || isDouyinDetailUrl(targetUrl)) {
       return 'detail';
     }
@@ -480,7 +529,10 @@ function buildBatchNotesDispatchMessage(msg = {}) {
   const externalTaskType = normalizeString(msg?.externalTaskMeta?.externalTaskType);
   const monitorMeta = msg?.monitorMeta || msg?.externalTaskMeta?.monitorMeta || null;
   const targetNoteId = normalizeString(msg?.targetNoteId || monitorMeta?.targetNoteId).replace(/^xhs_/, '');
-  const isXhsRemoteDetail = externalTaskType === 'xhs.batchNotes' && String(msg?.mode || '').trim() === 'detail';
+  const isXhsRemoteDetail = (
+    externalTaskType === REMOTE_TASK_TYPE.XHS_BATCH_NOTES ||
+    externalTaskType === REMOTE_TASK_TYPE.XHS_NOTE_FULL
+  ) && String(msg?.mode || '').trim() === 'detail';
 
   if (isXhsRemoteDetail) {
     return {
@@ -824,6 +876,27 @@ function normalizeWorkbenchRecordType(value = '') {
 
 function normalizeObjectRecord(value = {}) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+const FINAL_RESULT_PACKAGE_ONLY_PROFILES = new Set([
+  'author_links',
+  'author_profile',
+  'comment_probe',
+  'list_scan',
+  'note_detail',
+  'note_full',
+]);
+
+function collectionProfileForActiveTask(activeTask = {}) {
+  return String(
+    activeTask.collectionProfile
+    || activeTask.payload?.collectionProfile
+    || '',
+  ).trim();
+}
+
+function shouldWaitForFinalResultPackage(activeTask = {}) {
+  return FINAL_RESULT_PACKAGE_ONLY_PROFILES.has(collectionProfileForActiveTask(activeTask));
 }
 
 function deriveExternalRecordId(recordType = WORKBENCH_RECORD_TYPE.NOTE, record = {}) {
@@ -1713,30 +1786,50 @@ const bgHandlers = {
     if (!activeTask) {
       return { success: false, skipped: true, error: 'no_active_workbench_task' };
     }
+    if (shouldWaitForFinalResultPackage(activeTask)) {
+      return {
+        success: true,
+        skipped: true,
+        reason: 'final_result_package_required',
+      };
+    }
 
-    const recordType = normalizeWorkbenchRecordType(msg.recordType);
-    const record = normalizeObjectRecord(msg.record || msg.payload);
-    if (Object.keys(record).length === 0) {
+    const incomingRecords = Array.isArray(msg.records) && msg.records.length > 0
+      ? msg.records
+      : [msg];
+    const records = incomingRecords
+      .map((item = {}) => {
+        const recordType = normalizeWorkbenchRecordType(item.recordType);
+        const record = normalizeObjectRecord(item.record || item.payload);
+        if (Object.keys(record).length === 0) return null;
+        return {
+          taskId: activeTask.taskId,
+          pluginRunId: getActivePluginRunId(activeTask, item),
+          recordType,
+          externalRecordId: String(item.externalRecordId || deriveExternalRecordId(recordType, record)).trim(),
+          sequence: Number(item.sequence || Date.now()),
+          payload: record,
+          collectedAt: String(item.collectedAt || ''),
+        };
+      })
+      .filter(Boolean);
+    if (records.length === 0) {
       return { success: false, skipped: true, error: 'empty_record_payload' };
     }
 
-    await taskDeltaReporter.enqueueRecord({
-      taskId: activeTask.taskId,
-      pluginRunId: getActivePluginRunId(activeTask, msg),
-      recordType,
-      externalRecordId: String(msg.externalRecordId || deriveExternalRecordId(recordType, record)).trim(),
-      sequence: Number(msg.sequence || Date.now()),
-      payload: record,
-      collectedAt: String(msg.collectedAt || ''),
-    });
+    await taskDeltaReporter.enqueueRecords(records);
     taskPoller?.updateActiveTask?.((current) => {
       if (!current || current.taskId !== activeTask.taskId) return null;
+      const streamedRecordCounts = records.reduce(
+        (counts, record) => incrementStreamedRecordCount(counts, record.recordType),
+        current.streamedRecordCounts,
+      );
       return {
         firstRecordSeen: true,
-        streamedRecordCounts: incrementStreamedRecordCount(current.streamedRecordCounts, recordType),
+        streamedRecordCounts,
       };
     });
-    return { success: true };
+    return { success: true, count: records.length };
   },
 
   [MSG.WORKBENCH_LOCAL_CONTROL_EVENT]: async (msg = {}, sender = {}) => {
@@ -2315,9 +2408,12 @@ const taskPoller = createTaskPoller({
   beforeDispatch: async (task) => {
     const platform = String(task.platform || '').trim();
     if (platform !== 'xhs' && platform !== 'douyin') return { shouldPause: false };
-    const account = await selectAvailableAccount(platform);
+    const account = await selectAccountForWorkbenchTask(task, platform);
     if (!account) {
       return { shouldPause: true, reason: 'no_available_account' };
+    }
+    if (account.runtimeSession) {
+      return { shouldPause: false, accountId: account.accountId };
     }
     const result = await injectCookiesForAccount(account.cookieJson, platform);
     if (!result.success) {

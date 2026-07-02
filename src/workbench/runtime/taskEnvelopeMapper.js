@@ -36,6 +36,31 @@ function inferModeFromTarget(target = {}) {
   return 'unknown';
 }
 
+function isBatchNotesTaskType(taskType) {
+  return new Set([
+    REMOTE_TASK_TYPE.XHS_BATCH_NOTES,
+    REMOTE_TASK_TYPE.XHS_LIST_SCAN,
+    REMOTE_TASK_TYPE.XHS_NOTE_FULL,
+    REMOTE_TASK_TYPE.DOUYIN_BATCH_NOTES,
+  ]).has(taskType);
+}
+
+function isBatchCommentsTaskType(taskType) {
+  return new Set([
+    REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS,
+    REMOTE_TASK_TYPE.XHS_COMMENT_SCAN,
+    REMOTE_TASK_TYPE.DOUYIN_BATCH_COMMENTS,
+  ]).has(taskType);
+}
+
+function isCollectAuthorTaskType(taskType) {
+  return new Set([
+    REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR,
+    REMOTE_TASK_TYPE.XHS_AUTHOR_PROFILE,
+    REMOTE_TASK_TYPE.DOUYIN_COLLECT_AUTHOR,
+  ]).has(taskType);
+}
+
 function buildBatchNotesPayload(task = {}) {
   const payload = task.payload || {};
   const monitorMeta = buildMonitorTaskMeta({
@@ -53,7 +78,10 @@ function buildBatchNotesPayload(task = {}) {
     || '',
   ).trim().replace(/^xhs_/, '');
   const isMonitorDetailProbe = String(monitorMeta?.monitorMode || '').trim() === 'detail_probe';
-  const includeComments = task.taskType === REMOTE_TASK_TYPE.XHS_BATCH_NOTES
+  const includeComments = (
+    task.taskType === REMOTE_TASK_TYPE.XHS_BATCH_NOTES ||
+    task.taskType === REMOTE_TASK_TYPE.XHS_NOTE_FULL
+  )
     && Boolean(payload.includeComments || payload.collectComments);
   return {
     mode: inferModeFromTarget(task.target),
@@ -177,15 +205,20 @@ function buildCommentImageDownloadPayload(task = {}) {
 function buildInternalPayload(task = {}) {
   switch (task.taskType) {
     case REMOTE_TASK_TYPE.XHS_BATCH_NOTES:
+    case REMOTE_TASK_TYPE.XHS_LIST_SCAN:
+    case REMOTE_TASK_TYPE.XHS_NOTE_FULL:
     case REMOTE_TASK_TYPE.DOUYIN_BATCH_NOTES:
       return buildBatchNotesPayload(task);
     case REMOTE_TASK_TYPE.XHS_BATCH_COMMENTS:
+    case REMOTE_TASK_TYPE.XHS_COMMENT_SCAN:
     case REMOTE_TASK_TYPE.DOUYIN_BATCH_COMMENTS:
       return buildBatchCommentsPayload(task);
     case REMOTE_TASK_TYPE.XHS_COLLECT_AUTHOR:
+    case REMOTE_TASK_TYPE.XHS_AUTHOR_PROFILE:
     case REMOTE_TASK_TYPE.DOUYIN_COLLECT_AUTHOR:
       return buildCollectAuthorPayload(task);
     case REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS:
+    case REMOTE_TASK_TYPE.XHS_AUTHOR_LINKS:
       return buildAuthorNoteLinksPayload(task);
     case REMOTE_TASK_TYPE.DOUYIN_SINGLE_COMMENTS:
       return buildSingleCommentsPayload(task);
@@ -207,7 +240,8 @@ export function mapTaskEnvelopeToInternalCommand(taskEnvelope = {}, { tabId = nu
   const taskConfig = validation.taskConfig || getSupportedRemoteTask(taskEnvelope.taskType);
   const internalPayload = buildInternalPayload(taskEnvelope);
   const monitorMeta = internalPayload.monitorMeta || (
-    taskEnvelope.taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS
+    taskEnvelope.taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_NOTE_LINKS ||
+    taskEnvelope.taskType === REMOTE_TASK_TYPE.XHS_AUTHOR_LINKS
       ? null
       : buildMonitorTaskMeta({
           platform: taskEnvelope.platform,
@@ -264,3 +298,9 @@ export function mapTaskEnvelopeToCapabilityCheck(taskEnvelope = {}) {
     },
   };
 }
+
+export const __taskEnvelopeMapperTesting = {
+  isBatchNotesTaskType,
+  isBatchCommentsTaskType,
+  isCollectAuthorTaskType,
+};

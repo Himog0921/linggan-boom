@@ -333,11 +333,11 @@ function inferTaskTypeFromReservation(reservation = {}) {
   );
 
   if (platform === 'xhs') {
-    if (collectionProfile === 'author_links') return 'xhs.authorNoteLinks';
-    if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'xhs.batchComments';
-    if (collectionProfile === 'author_profile' || jobType.includes('author_profile')) return 'xhs.collectAuthor';
-    if (isNoteDetailProfile(collectionProfile)) return 'xhs.batchNotes';
-    if (collectionProfile === 'list_scan') return 'xhs.batchNotes';
+    if (collectionProfile === 'author_links') return 'xhs.author_links';
+    if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'xhs.comment_scan';
+    if (collectionProfile === 'author_profile' || jobType.includes('author_profile')) return 'xhs.author_profile';
+    if (isNoteDetailProfile(collectionProfile)) return 'xhs.note_full';
+    if (collectionProfile === 'list_scan') return 'xhs.list_scan';
     if (explicitTaskType) return explicitTaskType;
     return 'xhs.batchNotes';
   }
@@ -790,6 +790,11 @@ export async function commitCollectionTaskDeltaThroughSync({
   const droppedRecordCount = Math.max(0, inputRecordCount - records.length);
   const shouldCommitRawSnapshot = records.length > 0 || isTerminalSnapshotStatus(envelope?.snapshot?.status);
   const operationId = `${shouldCommitRawSnapshot ? 'commit' : 'progress'}_${normalizedTaskId}_${Date.now()}`;
+  const resultSummary = isPlainObject(envelope?.resultSummary)
+    ? envelope.resultSummary
+    : isPlainObject(envelope?.snapshot?.latestSummary)
+      ? envelope.snapshot.latestSummary
+      : undefined;
 
   const existingLease = typeof store?.read === 'function' ? await store.read() : null;
   const mailboxVersion = extractMailboxVersion(existingLease || {});
@@ -819,6 +824,7 @@ export async function commitCollectionTaskDeltaThroughSync({
         expectedTargetKey: normalizeString(envelope?.executionContext?.expectedTargetKey || ''),
         observedTargetKey: normalizeString(envelope?.executionContext?.observedTargetKey || ''),
         observedAt,
+        ...(resultSummary ? { resultSummary } : {}),
         records,
       }]
     : [{

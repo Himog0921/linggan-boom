@@ -39,6 +39,7 @@ test('execution station runtime reports generic execution accounts and surface c
     },
   ]);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.list_scan'), true);
+  assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.author_links'), true);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.note_full'), true);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.author_profile'), true);
   assert.equal(MONITOR_STATION_CAPABILITIES.includes('xhs.batchNotes'), false);

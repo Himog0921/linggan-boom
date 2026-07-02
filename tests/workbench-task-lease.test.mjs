@@ -114,7 +114,7 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
   assert.equal(secondBody.operations[0].jobId, 'job-v11');
   assert.equal(secondBody.operations[0].platformAccountId, 'account-xhs-1');
   assert.equal(claim.task.id, 'job-v11');
-  assert.equal(claim.task.taskType, 'xhs.batchNotes');
+  assert.equal(claim.task.taskType, 'xhs.list_scan');
   assert.equal(claim.task.collectionProfile, 'list_scan');
   assert.equal(claim.task.accountId, 'account-xhs-1');
   assert.equal(claim.task.platformAccountId, 'account-xhs-1');
@@ -275,7 +275,7 @@ test('task lease client maps xhs note_full reservations to detail collection wit
     store: createTaskLeaseMemoryStore(),
   });
 
-  assert.equal(claim.task.taskType, 'xhs.batchNotes');
+  assert.equal(claim.task.taskType, 'xhs.note_full');
   assert.equal(claim.task.collectionProfile, 'note_full');
   assert.equal(claim.task.target, 'https://www.xiaohongshu.com/discovery/item/6986ceb7000000000c03587f?source=webshare&xhsshare=pc_web&xsec_token=ABC&xsec_source=pc_share');
   assert.equal(claim.task.payload.targetPageType, 'detail');
@@ -335,6 +335,17 @@ test('task lease client commits outbox records through V1.1 commit_raw_snapshot'
       leaseToken: 'lease-commit-1',
       leaseEpoch: 6,
       executionContext: { platform: 'xhs', expectedTargetKey: 'xhs:note:1' },
+      snapshot: {
+        latestSummary: {
+          requestedCount: 200,
+          discoveredCount: 37,
+          discoverySummary: {
+            stopReason: 'no_new_cards_after_scroll',
+            scrollRounds: 12,
+            canLoadMore: true,
+          },
+        },
+      },
       records: [{
         recordType: 'note',
         externalRecordId: 'note-1',
@@ -363,6 +374,11 @@ test('task lease client commits outbox records through V1.1 commit_raw_snapshot'
   assert.equal(op.jobId, 'job-commit-1');
   assert.equal(op.leaseToken, 'lease-commit-1');
   assert.equal(op.leaseEpoch, 6);
+  assert.deepEqual(op.resultSummary.discoverySummary, {
+    stopReason: 'no_new_cards_after_scroll',
+    scrollRounds: 12,
+    canLoadMore: true,
+  });
   assert.equal(op.records[0].recordType, 'note');
   assert.equal(op.records[0].idempotencyKey, 'record-key-1');
   assert.deepEqual(response.acceptedRecordKeys, ['record-key-1']);

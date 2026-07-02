@@ -42,6 +42,16 @@ function isSignedXhsShareUrl(url = '') {
   return /xsec_token=/i.test(normalized) || /xhslink\.com/i.test(normalized);
 }
 
+function extractXhsToken(url = '') {
+  const raw = normalizeString(url);
+  if (!raw) return '';
+  try {
+    return new URL(raw, 'https://www.xiaohongshu.com').searchParams.get('xsec_token') || '';
+  } catch {
+    return '';
+  }
+}
+
 function extractXhsTargetNoteId({ payload = {}, target = {} } = {}) {
   const directId = normalizeString(
     payload?.platformContentId
@@ -61,6 +71,24 @@ function extractXhsTargetNoteId({ payload = {}, target = {} } = {}) {
 function buildCanonicalXhsNoteUrl(noteId = '') {
   const normalizedNoteId = normalizeString(noteId).replace(/^xhs_/, '');
   return normalizedNoteId ? `https://www.xiaohongshu.com/explore/${normalizedNoteId}` : '';
+}
+
+function buildRunnableXhsNoteUrl(noteId = '', sourceUrl = '') {
+  const normalizedNoteId = normalizeString(noteId).replace(/^xhs_/, '');
+  if (!normalizedNoteId) return '';
+
+  const trustedSource = normalizeString(sourceUrl);
+  if (trustedSource && /xiaohongshu\.com\/discovery\/item\//i.test(trustedSource)) {
+    return trustedSource;
+  }
+
+  const token = extractXhsToken(trustedSource);
+  const url = new URL(`https://www.xiaohongshu.com/discovery/item/${encodeURIComponent(normalizedNoteId)}`);
+  url.searchParams.set('source', 'webshare');
+  url.searchParams.set('xhsshare', 'pc_web');
+  if (token) url.searchParams.set('xsec_token', token);
+  url.searchParams.set('xsec_source', 'pc_share');
+  return url.toString();
 }
 
 function ensurePositiveInteger(value, fallback = 0) {
@@ -94,6 +122,13 @@ function positiveTimestamp(value) {
   const num = Number(value);
   if (!Number.isFinite(num) || num <= 0) return 0;
   return Math.floor(num);
+}
+
+function readBoolean(value) {
+  if (value === true) return true;
+  if (value === false || value == null) return false;
+  const text = normalizeString(value).toLowerCase();
+  return text === 'true' || text === '1' || text === 'yes';
 }
 
 function pickStrategy({ taskStrategy = '', payload = {} } = {}) {
@@ -136,7 +171,11 @@ export function buildMonitorTaskMeta({
   const monitorMode = inferMonitorMode(strategy, pageType);
   const isDetail = monitorMode === MONITOR_RECORD_MODE.DETAIL_PROBE;
   const surfaceOnly = !isDetail;
-  const defaultSurfaceLimit = strategy === MONITOR_TASK_STRATEGY.AUTHOR_BASELINE ? 50 : 30;
+  const defaultSurfaceLimit = strategy === MONITOR_TASK_STRATEGY.AUTHOR_BASELINE
+    ? 50
+    : strategy === MONITOR_TASK_STRATEGY.AUTHOR_PATROL
+      ? 10
+      : 30;
   const scanLimit = ensurePositiveInteger(payload.scanLimit ?? payload.limit ?? payload.count, surfaceOnly ? defaultSurfaceLimit : 0);
   const detailProbeLimit = ensurePositiveInteger(payload.detailProbeLimit ?? payload.limit ?? payload.count, isDetail ? 10 : 0);
   const effectiveLimit = isDetail
@@ -241,20 +280,38 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
     .slice(0, max)
     .map((card, index) => {
       const noteId = normalizeString(card.noteId || card.platformContentId || card.contentId);
-      const url = normalizeXhsUrl(card.url || (noteId ? `/explore/${noteId}` : ''), noteId);
+      const rawUrl = normalizeXhsUrl(card.rawUrl || card.url || (noteId ? `/explore/${noteId}` : ''), noteId);
+      const url = rawUrl;
+      const runnableDetailUrl = buildRunnableXhsNoteUrl(noteId, rawUrl);
       const images = Array.isArray(card.images) ? card.images.filter(Boolean) : [];
       const imageCandidates = Array.isArray(card.imageCandidates) ? card.imageCandidates.filter(Boolean) : [];
       const commentCountKnown = hasExplicitCount(card.comments);
       const publicCommentCount = commentCountKnown ? parseCount(card.comments) : null;
+      const likeCount = parseCount(card.likes);
+      const collectCount = parseCount(card.collects);
+      const commentCount = publicCommentCount ?? 0;
+      const shareCount = parseCount(card.shares);
       const cover = firstText(card.cover)
         || firstText(card.coverImg)
         || firstText(card.coverUrl)
         || firstText(card.thumbnail)
         || pickMediaUrlFromArray(images)
         || pickMediaUrlFromArray(imageCandidates);
+      const rank = ensurePositiveInteger(card.rank || card.batchRank || Number(card._discoveryOrder) + 1, index + 1);
+      const observedAt = new Date().toISOString();
+      const authorId = normalizeString(
+        card.authorId
+        || card.authorPlatformId
+        || card.platformAuthorId
+        || card.userId
+        || monitorMeta?.authorPlatformId
+        || monitorMeta?.platformAuthorId
+        || monitorMeta?.authorId,
+      );
       return withMonitorRecordMeta({
         ...createMonitorSurfaceSeedMeta(),
         noteId,
+        targetKey: `xhs:note:${noteId}`,
         platformContentId: noteId,
         contentId: noteId.startsWith('xhs_') ? noteId : `xhs_${noteId}`,
         platform: 'xhs',
@@ -263,29 +320,45 @@ export function buildXhsSurfaceNoteRecords(cards = [], {
         bodyText: normalizeString(card.bodyText || card.content || card.desc || card.title || card.titleHint),
         url,
         canonicalUrl: url,
+        rawUrl,
+        sourceUrl: normalizeString(card.sourceUrl || sourcePageUrl),
+        runnableDetailUrl,
         cover,
         coverImg: firstText(card.coverImg) || cover,
         coverUrl: firstText(card.coverUrl) || cover,
         thumbnail: firstText(card.thumbnail) || cover,
         images: images.length > 0 ? images : (cover ? [cover] : []),
         imageCandidates,
-        likes: parseCount(card.likes),
-        comments: publicCommentCount ?? 0,
+        likes: likeCount,
+        likeCount,
+        comments: commentCount,
+        commentCount,
         publicCommentCount,
         publicCommentCountKnown: commentCountKnown,
-        collects: parseCount(card.collects),
-        shares: parseCount(card.shares),
+        collects: collectCount,
+        collectCount,
+        shares: shareCount,
+        shareCount,
         type: normalizeString(card.type || 'normal') || 'normal',
-        authorName: normalizeString(card.authorName || card.authorHint),
+        authorId,
+        authorPlatformId: authorId,
+        platformAuthorId: authorId,
+        authorName: normalizeString(card.authorName || card.authorHint || monitorMeta?.authorName),
+        authorAvatar: normalizeString(card.authorAvatar || card.avatar),
+        publishedAt: card.publishedAt ?? card.publishTime ?? card.createTime ?? null,
+        publishedAtText: normalizeString(card.publishedAtText || card.publishTimeText || card.timeText),
         sourcePageUrl: normalizeString(sourcePageUrl),
         searchKeyword: normalizeString(searchKeyword || monitorMeta?.keyword),
         searchPageUrl: normalizeString(searchPageUrl),
         searchFilters: searchFilters && typeof searchFilters === 'object' ? searchFilters : undefined,
         searchFilterSnapshot: searchFilterSnapshot && typeof searchFilterSnapshot === 'object' ? searchFilterSnapshot : undefined,
-        batchRank: index + 1,
+        batchRank: rank,
+        rank,
+        isPinned: readBoolean(card.isPinned ?? card.sticky ?? card.pinned),
         collectionRunId: normalizeString(collectionRunId),
         dataSource: 'monitor_surface_card',
-        collectedAt: Date.now(),
+        observedAt,
+        collectedAt: observedAt,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       }, monitorMeta, mode || monitorMeta?.surfaceMode);

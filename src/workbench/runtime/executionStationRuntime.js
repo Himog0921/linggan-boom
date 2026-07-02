@@ -1,5 +1,6 @@
 export const MONITOR_STATION_CAPABILITIES = [
   'xhs.list_scan',
+  'xhs.author_links',
   'xhs.note_full',
   'xhs.comment_scan',
   'xhs.author_profile',

@@ -129,6 +129,24 @@ test('resolvePreferredTaskTarget keeps signed xhs relay detail urls on the direc
   assert.equal(resolved, signedRelayUrl);
 });
 
+test('resolvePreferredTaskTarget rewrites xhs pc_search note urls to browser-openable share path', async () => {
+  const targetUrl = 'https://www.xiaohongshu.com/explore/6986ceb7000000000c03587f?xsec_token=ABC3YXYHdrdRBmAAQSARSQSZWIzIRA_cVI_JDJ3a_cqlo=&xsec_source=pc_search&source=web_search_result_notes';
+  const resolved = await resolvePreferredTaskTarget({
+    platform: 'xhs',
+    taskType: 'xhs.batchNotes',
+    target: targetUrl,
+    payload: {
+      targetPageType: 'detail',
+      platformContentId: '6986ceb7000000000c03587f',
+    },
+  });
+
+  assert.equal(
+    resolved,
+    'https://www.xiaohongshu.com/discovery/item/6986ceb7000000000c03587f?source=webshare&xhsshare=pc_web&xsec_token=ABC3YXYHdrdRBmAAQSARSQSZWIzIRA_cVI_JDJ3a_cqlo%3D&xsec_source=pc_share',
+  );
+});
+
 test('scoreTaskTabCandidate prefers an already-open signed tab for the same xhs note', () => {
   const targetUrl = 'https://www.xiaohongshu.com/explore/69d67b88000000002102cded';
   const signedTabScore = scoreTaskTabCandidate({
