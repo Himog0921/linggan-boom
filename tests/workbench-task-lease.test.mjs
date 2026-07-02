@@ -70,11 +70,14 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
             reserveToken: 'reserve-v11',
             reservationEpoch: 3,
             lane: 'xhs.monitor_patrol',
+            platformAccountId: 'account-xhs-1',
             startBefore: '2026-04-17T12:03:00.000Z',
             taskSpec: {
               platform: 'xhs',
+              platformAccountId: 'account-xhs-1',
               lane: 'monitor_patrol',
               taskType: 'xhs.collectAuthor',
+              collectionProfile: 'list_scan',
               taskStrategy: 'author_patrol',
               target: 'https://www.xiaohongshu.com/user/profile/abc',
               targetKey: 'xhs:author:abc',
@@ -109,7 +112,13 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
   assert.deepEqual(firstBody.operations, []);
   assert.equal(secondBody.operations[0].type, 'start_job');
   assert.equal(secondBody.operations[0].jobId, 'job-v11');
+  assert.equal(secondBody.operations[0].platformAccountId, 'account-xhs-1');
   assert.equal(claim.task.id, 'job-v11');
+  assert.equal(claim.task.taskType, 'xhs.batchNotes');
+  assert.equal(claim.task.collectionProfile, 'list_scan');
+  assert.equal(claim.task.accountId, 'account-xhs-1');
+  assert.equal(claim.task.platformAccountId, 'account-xhs-1');
+  assert.equal(claim.task.payload.platformAccountId, 'account-xhs-1');
   assert.equal(claim.lease.leaseToken, 'lease-v11');
   assert.equal(stored.taskId, 'job-v11');
   assert.equal(stored.leaseToken, 'lease-v11');
@@ -194,6 +203,90 @@ test('task lease client maps douyin note_detail reservations to batch note colle
   assert.equal(claim.task.target, 'https://www.douyin.com/video/7341234567890123456');
 });
 
+test('task lease client maps xhs note_full reservations to detail collection with comments', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push([url, options]);
+    const body = JSON.parse(options.body || '{}');
+    if (body.operations?.[0]?.type === 'start_job') {
+      return {
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            mailboxVersions: { station: 32, 'xhs.manual_hot': 8 },
+            operationResults: {
+              [body.operations[0].operationId]: {
+                status: 'accepted',
+                attemptId: 'attempt-xhs-full',
+                leaseToken: 'lease-xhs-full',
+                leaseEpoch: 3,
+                leaseExpiresAt: '2026-04-17T12:05:00.000Z',
+              },
+            },
+            reservations: [],
+            controlCommands: [],
+            nextSync: { afterMs: 30000, reason: 'running' },
+          };
+        },
+      };
+    }
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 31, 'xhs.manual_hot': 7 },
+          operationResults: {},
+          reservations: [{
+            jobId: 'job-xhs-note-full',
+            reserveToken: 'reserve-xhs-full',
+            reservationEpoch: 1,
+            lane: 'xhs.manual_hot',
+            platformAccountId: 'account-xhs-1',
+            startBefore: '2026-04-17T12:03:00.000Z',
+            taskSpec: {
+              platform: 'xhs',
+              platformAccountId: 'account-xhs-1',
+              lane: 'manual_hot',
+              jobType: 'collect_detail',
+              collectionProfile: 'note_full',
+              target: 'https://www.xiaohongshu.com/discovery/item/6986ceb7000000000c03587f?source=webshare&xhsshare=pc_web&xsec_token=ABC&xsec_source=pc_share',
+              targetKey: 'xhs:note:6986ceb7000000000c03587f',
+              payload: {},
+            },
+          }],
+          controlCommands: [],
+          nextSync: { afterMs: 1000, reason: 'reservations_granted' },
+        };
+      },
+    };
+  };
+
+  const claim = await claimCollectionTaskLease({
+    serverUrl: 'http://localhost:3000',
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    authorizationToken: 'auth_token_1',
+    capabilities: ['xhs.note_full'],
+    platformAccounts: [{ platform: 'xhs', purpose: 'execution', healthStatus: 'healthy' }],
+    pluginVersion: '2.0.66',
+    fetchFn,
+    store: createTaskLeaseMemoryStore(),
+  });
+
+  assert.equal(claim.task.taskType, 'xhs.batchNotes');
+  assert.equal(claim.task.collectionProfile, 'note_full');
+  assert.equal(claim.task.target, 'https://www.xiaohongshu.com/discovery/item/6986ceb7000000000c03587f?source=webshare&xhsshare=pc_web&xsec_token=ABC&xsec_source=pc_share');
+  assert.equal(claim.task.payload.targetPageType, 'detail');
+  assert.equal(claim.task.payload.includeComments, true);
+  assert.equal(claim.task.payload.commentLimit, 20);
+  assert.equal(claim.task.payload.commentsLimit, 20);
+  assert.equal(claim.task.payload.collectMode, 'detailsWithComments');
+  assert.equal(claim.task.payload.noteId, '6986ceb7000000000c03587f');
+  assert.equal(claim.task.payload.platformContentId, '6986ceb7000000000c03587f');
+});
+
 test('task lease client commits outbox records through V1.1 commit_raw_snapshot', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
@@ -274,6 +367,71 @@ test('task lease client commits outbox records through V1.1 commit_raw_snapshot'
   assert.equal(op.records[0].idempotencyKey, 'record-key-1');
   assert.deepEqual(response.acceptedRecordKeys, ['record-key-1']);
   assert.deepEqual(response.acceptedEventKeys, ['event-key-1']);
+});
+
+test('task lease client treats stale lease operation rejection as permanent', async () => {
+  const fetchFn = async (url, options = {}) => {
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          mailboxVersions: { station: 14 },
+          operationResults: {
+            [op.operationId]: {
+              status: 'rejected',
+              reason: 'lease_token_mismatch',
+            },
+          },
+          reservations: [],
+          controlCommands: [],
+          nextSync: { afterMs: 30000, reason: 'running' },
+        };
+      },
+    };
+  };
+  const store = createTaskLeaseMemoryStore({
+    taskId: 'job-stale-1',
+    leaseToken: 'lease-stale-1',
+    leaseEpoch: 2,
+    attemptId: 'attempt-stale-1',
+  });
+
+  await assert.rejects(
+    () => commitCollectionTaskDeltaThroughSync({
+      serverUrl: 'http://localhost:3000',
+      taskId: 'job-stale-1',
+      envelope: {
+        taskId: 'job-stale-1',
+        pluginRunId: 'run-stale-1',
+        attemptId: 'attempt-stale-1',
+        leaseToken: 'lease-stale-1',
+        leaseEpoch: 2,
+        records: [{
+          recordType: 'note',
+          externalRecordId: 'note-stale',
+          sequence: 1,
+          idempotencyKey: 'record-stale-1',
+          payload: { noteId: 'note-stale', title: 'stale' },
+        }],
+        events: [],
+      },
+      stationId: 'station-1',
+      stationToken: 'station-token',
+      authorizationToken: 'auth_token_1',
+      pluginVersion: '2.0.58',
+      fetchFn,
+      store,
+    }),
+    (error) => {
+      assert.equal(error.status, 410);
+      assert.equal(error.retryable, false);
+      assert.equal(error.reasonCode, 'lease_token_mismatch');
+      return true;
+    },
+  );
 });
 
 test('task lease client commits a terminal empty result as a raw snapshot', async () => {
@@ -893,10 +1051,12 @@ test('task lease client reconciles a server lease into local storage', async () 
   assert.equal(body.stationId, 'station-1');
   assert.equal(body.activeLeases[0].leaseToken, 'local-token');
   assert.equal(body.pluginVersion, '2.0.7');
+  assert.deepEqual(body.capabilities, ['xhs.list_scan']);
+  assert.equal(body.capacity, undefined);
   assert.deepEqual(Object.keys(body).sort(), [
     'accountReports',
     'activeLeases',
-    'capacity',
+    'capabilities',
     'operations',
     'pluginVersion',
     'protocolVersion',

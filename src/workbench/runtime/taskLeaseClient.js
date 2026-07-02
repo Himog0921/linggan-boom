@@ -308,6 +308,16 @@ function nextPollAfterMsFromSync(data = {}) {
     || toFiniteNumber(data?.nextSyncAfterMs, 0);
 }
 
+function isNoteDetailProfile(collectionProfile = '') {
+  return collectionProfile === 'note_full' || collectionProfile === 'note_detail';
+}
+
+function noteIdFromTargetKey(targetKey = '') {
+  const normalized = normalizeString(targetKey);
+  const match = normalized.match(/(?:^|:)note:([^:]+)$/);
+  return normalizeString(match?.[1]);
+}
+
 function inferTaskTypeFromReservation(reservation = {}) {
   const spec = normalizePayload(reservation.taskSpec);
   const payload = normalizePayload(spec.payload);
@@ -321,18 +331,25 @@ function inferTaskTypeFromReservation(reservation = {}) {
     || payload.originalTaskType
     || payload.externalTaskType,
   );
-  if (explicitTaskType) return explicitTaskType;
 
   if (platform === 'xhs') {
+    if (collectionProfile === 'author_links') return 'xhs.authorNoteLinks';
     if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'xhs.batchComments';
-    if (jobType.includes('author')) return 'xhs.collectAuthor';
+    if (collectionProfile === 'author_profile' || jobType.includes('author_profile')) return 'xhs.collectAuthor';
+    if (isNoteDetailProfile(collectionProfile)) return 'xhs.batchNotes';
+    if (collectionProfile === 'list_scan') return 'xhs.batchNotes';
+    if (explicitTaskType) return explicitTaskType;
     return 'xhs.batchNotes';
   }
   if (platform === 'douyin') {
     if (collectionProfile === 'comment_probe' || jobType.includes('comment')) return 'douyin.batchComments';
     if (collectionProfile === 'author_profile' || jobType.includes('author')) return 'douyin.collectAuthor';
+    if (isNoteDetailProfile(collectionProfile)) return 'douyin.batchNotes';
+    if (collectionProfile === 'list_scan') return 'douyin.batchNotes';
+    if (explicitTaskType) return explicitTaskType;
     return 'douyin.batchNotes';
   }
+  if (explicitTaskType) return explicitTaskType;
   return '';
 }
 
@@ -341,6 +358,18 @@ function buildTaskFromReservation(reservation = {}) {
   const payload = normalizePayload(spec.payload);
   const jobId = normalizeString(reservation.jobId || spec.id || payload.id || payload.taskId);
   const platform = normalizeString(spec.platform || reservation.platform || payload.platform);
+  const collectionProfile = normalizeString(spec.collectionProfile || payload.collectionProfile);
+  const jobType = normalizeString(spec.jobType || payload.jobType);
+  const targetKey = normalizeString(spec.targetKey || payload.targetKey);
+  const platformAccountId = normalizeString(
+    reservation.platformAccountId
+    || reservation.reservedPlatformAccountId
+    || spec.platformAccountId
+    || spec.reservedPlatformAccountId
+    || payload.platformAccountId
+    || payload.reservedPlatformAccountId
+    || payload.accountId,
+  );
   const taskType = inferTaskTypeFromReservation(reservation);
   const taskStrategy = normalizeString(spec.taskStrategy || payload.taskStrategy || payload.strategy);
   const source = normalizeString(spec.source || payload.source || payload.sourceSystem || 'workbench');
@@ -353,6 +382,33 @@ function buildTaskFromReservation(reservation = {}) {
     || payload.noteUrl
     || spec.targetKey,
   );
+  const normalizedPayload = { ...payload };
+  if (isNoteDetailProfile(collectionProfile)) {
+    normalizedPayload.targetPageType = normalizeString(normalizedPayload.targetPageType) || 'detail';
+
+    const targetNoteId = noteIdFromTargetKey(targetKey);
+    if (targetNoteId) {
+      normalizedPayload.noteId = normalizeString(normalizedPayload.noteId) || targetNoteId;
+      normalizedPayload.platformContentId = normalizeString(normalizedPayload.platformContentId) || targetNoteId;
+    }
+  }
+  if (platform === 'xhs' && collectionProfile === 'note_full') {
+    const includeCommentsAlreadySet =
+      Object.prototype.hasOwnProperty.call(normalizedPayload, 'includeComments')
+      || Object.prototype.hasOwnProperty.call(normalizedPayload, 'collectComments');
+    if (!includeCommentsAlreadySet) {
+      normalizedPayload.includeComments = true;
+    }
+    const commentLimitAlreadySet =
+      Object.prototype.hasOwnProperty.call(normalizedPayload, 'commentLimit')
+      || Object.prototype.hasOwnProperty.call(normalizedPayload, 'commentsLimit');
+    if (!commentLimitAlreadySet) {
+      normalizedPayload.commentLimit = 20;
+      normalizedPayload.commentsLimit = 20;
+    }
+    normalizedPayload.collectMode = normalizeString(normalizedPayload.collectMode)
+      || (normalizedPayload.includeComments === false ? 'detailsOnly' : 'detailsWithComments');
+  }
 
   return {
     id: jobId,
@@ -362,17 +418,23 @@ function buildTaskFromReservation(reservation = {}) {
     source,
     taskStrategy,
     target,
+    accountId: platformAccountId,
+    platformAccountId,
+    reservedPlatformAccountId: platformAccountId,
     lane: normalizeString(reservation.lane || spec.lane),
-    collectionProfile: normalizeString(spec.collectionProfile),
-    jobType: normalizeString(spec.jobType),
+    collectionProfile,
+    jobType,
     payload: {
-      ...payload,
+      ...normalizedPayload,
       platform,
       target,
-      targetKey: normalizeString(spec.targetKey || payload.targetKey),
+      targetKey,
       taskStrategy,
-      collectionProfile: normalizeString(spec.collectionProfile),
-      jobType: normalizeString(spec.jobType),
+      accountId: platformAccountId,
+      platformAccountId,
+      reservedPlatformAccountId: platformAccountId,
+      collectionProfile,
+      jobType,
     },
   };
 }
@@ -416,6 +478,12 @@ async function startReservationThroughSync({
 
   const mailboxVersions = extractMailboxVersionsFromResponse(rawData);
   const operationId = `start_${normalizeString(reservation.jobId)}_${Date.now()}`;
+  const platformAccountId = normalizeString(
+    reservation.platformAccountId
+    || reservation.reservedPlatformAccountId
+    || reservation.taskSpec?.platformAccountId
+    || reservation.taskSpec?.reservedPlatformAccountId,
+  );
   const body = buildSyncRequestV11({
     stationId,
     stationToken,
@@ -432,6 +500,7 @@ async function startReservationThroughSync({
       jobId: normalizeString(reservation.jobId),
       reserveToken: normalizeString(reservation.reserveToken),
       reservationEpoch: toOptionalInteger(reservation.reservationEpoch),
+      platformAccountId,
       startedAt: new Date().toISOString(),
     }],
   });
@@ -791,9 +860,16 @@ export async function commitCollectionTaskDeltaThroughSync({
     // 和临时性拒绝。永久拒绝不应无限重试。
     const permanentRejections = new Set([
       'lease_epoch_mismatch',
+      'lease_token_mismatch',
+      'status_not_in_progress',
       'identity_mismatch',
       'job_not_found',
+      'queue_entry_not_found',
       'station_workspace_mismatch',
+      'station_not_found',
+      'job_workspace_mismatch',
+      'workspace_required',
+      'invalid_records',
     ]);
     const isPermanent = permanentRejections.has(rejectionReason);
     throw createHttpError(rejectionReason, {
@@ -1055,6 +1131,7 @@ export async function reconcileExecutionStationLease({
     localLease: normalizedLocalLease,
     mailboxStationVersion: mailboxVersion,
     mailboxLaneVersions,
+    includeCapacity: false,
   });
 
   const rawData = await postJson({
