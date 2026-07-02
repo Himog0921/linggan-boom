@@ -2582,6 +2582,7 @@ export function createTaskPoller(deps = {}) {
     tick,
     getState,
     getExecutionContext,
+    persistActiveTaskContext,
     updateActiveTask,
   };
 }

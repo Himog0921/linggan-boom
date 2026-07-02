@@ -1,6 +1,6 @@
 {
   "name": "linggan-boom",
-  "version": "2.0.72",
+  "version": "2.0.73",
   "type": "module",
   "description": "灵感爆爆爆 - 小红书数据采集工具箱",
   "private": true,
@@ -33,6 +33,7 @@
     "css-loader": "^7.1.4",
     "css-minimizer-webpack-plugin": "^6.0.0",
     "mini-css-extract-plugin": "^2.8.0",
+    "terser-webpack-plugin": "^5.4.0",
     "typescript": "^6.0.3",
     "webpack": "^5.90.0",
     "webpack-cli": "^5.1.4"

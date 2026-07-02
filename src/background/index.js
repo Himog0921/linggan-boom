@@ -147,6 +147,16 @@ async function readNavigatedTaskTabsSnapshot() {
   }
 }
 
+async function persistNavigatedTaskTabsSnapshot() {
+  const area = navigatedTaskTabStorageArea();
+  if (!area?.set) return;
+  try {
+    await area.set({ [NAVIGATED_TASK_TABS_STORAGE_KEY]: navigatedTabsSnapshotFromMemory() });
+  } catch (error) {
+    console.warn('[灵感爆爆爆] persistNavigatedTaskTabsSnapshot failed', error);
+  }
+}
+
 function localStorageArea() {
   return globalThis.chrome?.storage?.local || null;
 }
@@ -2868,20 +2878,24 @@ globalThis.self?.addEventListener?.('push', (event) => {
 // V1.1（2026-06-29）：tabs.onRemoved — 用户手动关闭标签页时自动释放关联任务。
 // 此前无此监听器，关闭的标签页导致任务永久卡在"执行中"。
 chrome.tabs?.onRemoved?.addListener((tabId) => {
-  for (const [taskId, trackedTabId] of navigatedTabs.entries()) {
-    if (trackedTabId === tabId) {
-      navigatedTabs.delete(taskId);
-      void persistNavigatedTaskTabsSnapshot();
-      console.log(`[background] tab ${tabId} removed — cleaned up navigated task ${taskId}`);
-      break;
+  try {
+    for (const [taskId, trackedTabId] of navigatedTabs.entries()) {
+      if (trackedTabId === tabId) {
+        navigatedTabs.delete(taskId);
+        void persistNavigatedTaskTabsSnapshot();
+        console.log(`[background] tab ${tabId} removed — cleaned up navigated task ${taskId}`);
+        break;
+      }
     }
-  }
-  // 也通知 workbenchTaskRegistry 清理（让 taskPoller 感知 tab 已消失）
-  for (const [taskId, binding] of workbenchTaskRegistry.entries()) {
-    if (binding?.tabId === tabId) {
-      workbenchTaskRegistry.delete(taskId);
-      break;
+    // 也通知 workbenchTaskRegistry 清理（让 taskPoller 感知 tab 已消失）
+    for (const [taskId, binding] of workbenchTaskRegistry.entries()) {
+      if (binding?.tabId === tabId) {
+        workbenchTaskRegistry.delete(taskId);
+        break;
+      }
     }
+  } catch (error) {
+    console.warn('[灵感爆爆爆] tabs.onRemoved cleanup failed', error);
   }
 });
 
@@ -2889,8 +2903,12 @@ chrome.tabs?.onRemoved?.addListener((tabId) => {
 // 此前 SW 重启丢失内存状态导致任务成为孤儿。
 if (typeof chrome?.runtime?.onSuspend?.addListener === 'function') {
   chrome.runtime.onSuspend.addListener(() => {
-    void persistNavigatedTaskTabsSnapshot().catch(() => {});
-    void persistActiveTaskContext().catch(() => {});
+    try {
+      void persistNavigatedTaskTabsSnapshot().catch(() => {});
+      void taskPoller.persistActiveTaskContext().catch(() => {});
+    } catch (error) {
+      console.warn('[灵感爆爆爆] runtime.onSuspend persistence failed', error);
+    }
   });
 }
 
