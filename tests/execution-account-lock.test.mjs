@@ -145,3 +145,44 @@ test('execution account lock storage store persists and clears locks', async () 
   await store.clear();
   assert.deepEqual(await store.read(), { locks: {} });
 });
+
+test('execution account lock restores session-backed locks after service worker restart', async () => {
+  let now = 1000;
+  const storageArea = createMemoryStorage();
+  const storageKey = 'session-locks';
+  const firstManager = createExecutionAccountLockManager({
+    store: createExecutionAccountLockStorageStore({ storageArea, storageKey }),
+    now: () => now,
+    ttlMs: 10000,
+  });
+
+  await firstManager.acquire({
+    platform: 'xhs',
+    accountId: 'account_1',
+    taskId: 'task_1',
+  });
+
+  const restartedManager = createExecutionAccountLockManager({
+    store: createExecutionAccountLockStorageStore({ storageArea, storageKey }),
+    now: () => now,
+    ttlMs: 10000,
+  });
+  const blocked = await restartedManager.acquire({
+    platform: 'xhs',
+    accountId: 'account_1',
+    taskId: 'task_2',
+  });
+
+  assert.equal(blocked.acquired, false);
+  assert.equal(blocked.reasonCode, 'account_busy');
+  assert.equal(blocked.existingTaskId, 'task_1');
+
+  now = 12001;
+  const replaced = await restartedManager.acquire({
+    platform: 'xhs',
+    accountId: 'account_1',
+    taskId: 'task_2',
+  });
+  assert.equal(replaced.acquired, true);
+  assert.equal((await restartedManager.snapshot()).locks['xhs:account_1'].taskId, 'task_2');
+});

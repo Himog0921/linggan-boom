@@ -71,7 +71,7 @@ export function createExecutionAccountLockMemoryStore(initial = null) {
 }
 
 export function createExecutionAccountLockStorageStore({
-  storageArea = globalThis.chrome?.storage?.local,
+  storageArea = globalThis.chrome?.storage?.session || globalThis.chrome?.storage?.local,
   storageKey = DEFAULT_EXECUTION_ACCOUNT_LOCK_STORAGE_KEY,
 } = {}) {
   return {

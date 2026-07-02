@@ -1,12 +1,32 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
+import {
+  createExecutionAccountLockManager,
+  createExecutionAccountLockStorageStore,
+} from '../src/workbench/runtime/executionAccountLock.js';
 import { createManualExecutionLockCoordinator } from '../src/workbench/runtime/manualExecutionLock.js';
 
 function createAccountStore(accounts = []) {
   return {
     async getAll() {
       return accounts;
+    },
+  };
+}
+
+function createMemoryStorage(initial = {}) {
+  const values = { ...initial };
+  return {
+    values,
+    async get(key) {
+      return { [key]: values[key] };
+    },
+    async set(next) {
+      Object.assign(values, next);
+    },
+    async remove(key) {
+      delete values[key];
     },
   };
 }
@@ -194,4 +214,69 @@ test('manual execution lock releases the lock when cookie injection fails', asyn
     /账号登录状态不可用/,
   );
   assert.equal(released.length, 1);
+});
+
+test('manual execution lock sees session-backed locks after service worker restart', async () => {
+  let now = 1000;
+  const storageArea = createMemoryStorage();
+  const storageKey = 'manual-session-locks';
+  const accounts = createAccountStore([
+    {
+      accountId: 'account_1',
+      platform: 'xhs',
+      status: 'available',
+      cookieJson: '[]',
+      dailyQuotaUsed: 0,
+      dailyQuotaLimit: 100,
+    },
+  ]);
+  const firstCoordinator = createManualExecutionLockCoordinator({
+    accountStore: accounts,
+    lockManager: createExecutionAccountLockManager({
+      store: createExecutionAccountLockStorageStore({ storageArea, storageKey }),
+      now: () => now,
+      ttlMs: 10000,
+    }),
+    injectCookiesForAccount: async () => ({ success: true }),
+    now: () => now,
+    random: () => 0.1,
+  });
+
+  await firstCoordinator.prepare({
+    action: 'startBatchNotes',
+    msg: { count: 10 },
+    tabId: 3,
+    tabUrl: 'https://www.xiaohongshu.com/user/profile/demo',
+  });
+
+  const restartedCoordinator = createManualExecutionLockCoordinator({
+    accountStore: accounts,
+    lockManager: createExecutionAccountLockManager({
+      store: createExecutionAccountLockStorageStore({ storageArea, storageKey }),
+      now: () => now,
+      ttlMs: 10000,
+    }),
+    injectCookiesForAccount: async () => ({ success: true }),
+    now: () => now,
+    random: () => 0.2,
+  });
+
+  await assert.rejects(
+    () => restartedCoordinator.prepare({
+      action: 'startBatchNotes',
+      msg: { count: 10 },
+      tabId: 4,
+      tabUrl: 'https://www.xiaohongshu.com/user/profile/demo',
+    }),
+    /同一账号正在执行另一个采集任务/,
+  );
+
+  now = 12001;
+  const preparedAfterExpiry = await restartedCoordinator.prepare({
+    action: 'startBatchNotes',
+    msg: { count: 10 },
+    tabId: 4,
+    tabUrl: 'https://www.xiaohongshu.com/user/profile/demo',
+  });
+  assert.equal(preparedAfterExpiry.locked, true);
 });

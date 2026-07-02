@@ -2346,7 +2346,7 @@ const taskDeltaReporter = createTaskDeltaReporter({
 
 const executionAccountLockManager = createExecutionAccountLockManager({
   store: createExecutionAccountLockStorageStore({
-    storageArea: chrome.storage?.local,
+    storageArea: chrome.storage?.session || chrome.storage?.local,
     storageKey: EXECUTION_ACCOUNT_LOCK_STORAGE_KEY,
   }),
 });
