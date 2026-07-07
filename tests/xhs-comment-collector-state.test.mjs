@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   collectComments,
   initializeCollectedComments,
+  parseCommentTextTail,
   shouldContinueDomAfterApi,
 } from '../src/platforms/xhs/commentCollector.js';
 import { COMMENT_DEPTH_MODE } from '../src/shared/constants.js';
@@ -20,7 +21,7 @@ test('initializeCollectedComments seeds API comments for later DOM continuation 
   assert.deepEqual([...seeded.seenIds], ['root_1', 'reply_1']);
 });
 
-test('shouldContinueDomAfterApi only keeps all-replies flow alive when API hydration degraded and show-more remains', () => {
+test('shouldContinueDomAfterApi keeps reply continuation and visible top-up paths alive', () => {
   assert.equal(shouldContinueDomAfterApi({
     depthMode: COMMENT_DEPTH_MODE.ALL_REPLIES,
     hydrationDegraded: true,
@@ -38,6 +39,58 @@ test('shouldContinueDomAfterApi only keeps all-replies flow alive when API hydra
     hydrationDegraded: true,
     hasExpandableReplies: true,
   }), false);
+
+  assert.equal(shouldContinueDomAfterApi({
+    depthMode: COMMENT_DEPTH_MODE.TWO_LEVEL,
+    currentTotal: 16,
+    maxTotal: 20,
+    commentHint: 27,
+    hasDomComments: true,
+  }), true);
+
+  assert.equal(shouldContinueDomAfterApi({
+    depthMode: COMMENT_DEPTH_MODE.TWO_LEVEL,
+    currentTotal: 16,
+    maxTotal: 20,
+    commentHint: 27,
+    hasDomComments: false,
+  }), false);
+
+  assert.equal(shouldContinueDomAfterApi({
+    depthMode: COMMENT_DEPTH_MODE.TWO_LEVEL,
+    currentTotal: 0,
+    maxTotal: 20,
+    commentHint: 27,
+    hasDomComments: true,
+  }), true);
+});
+
+test('parseCommentTextTail splits visible XHS comment text without mixing metrics into content', () => {
+  assert.deepEqual(parseCommentTextTail(
+    '热死人了😭😭 在美国也算正常吧毕竟美国人的思想开放多了 4小时前 广东 309 回复',
+    '热死人了😭😭',
+  ), {
+    contentText: '在美国也算正常吧毕竟美国人的思想开放多了',
+    replyToNickname: '',
+    timeText: '4小时前',
+    ipLocation: '广东',
+    likeText: '309',
+    replyCount: 0,
+    replyCountText: '',
+  });
+
+  assert.deepEqual(parseCommentTextTail(
+    '西瓜葉 回复 热死人了😭😭 : 跟国家没关系，美国也分人 59分钟前 安徽 7 回复',
+    '西瓜葉',
+  ), {
+    contentText: '跟国家没关系，美国也分人',
+    replyToNickname: '热死人了😭😭',
+    timeText: '59分钟前',
+    ipLocation: '安徽',
+    likeText: '7',
+    replyCount: 0,
+    replyCountText: '',
+  });
 });
 
 test('collectComments can use API snapshot before comments container renders', async (t) => {

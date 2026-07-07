@@ -33,7 +33,11 @@ function isHttpUrl(value = '') {
 }
 
 function isXhsDetailUrl(url = '') {
-  return /^https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item)\/[^/?#]+/i.test(String(url || '').trim());
+  const value = String(url || '').trim();
+  return (
+    /^https?:\/\/(?:www\.)?xiaohongshu\.com\/(?:explore|discovery\/item|search_result)\/[^/?#]+/i.test(value) ||
+    /^https?:\/\/(?:www\.)?xiaohongshu\.com\/user\/profile\/[^/?#]+\/[^/?#]+/i.test(value)
+  );
 }
 
 function extractXhsNoteId(value = '') {
@@ -42,7 +46,9 @@ function extractXhsNoteId(value = '') {
   if (/^[a-z0-9]{20,32}$/i.test(raw)) return raw;
   try {
     const url = new URL(raw);
-    const match = url.pathname.match(/\/(?:explore|discovery\/item|item)\/([a-z0-9]+)/i);
+    const match =
+      url.pathname.match(/\/(?:explore|discovery\/item|search_result|item)\/([a-z0-9]+)/i) ||
+      url.pathname.match(/\/user\/profile\/[^/?#]+\/([a-z0-9]+)/i);
     return match?.[1] || '';
   } catch {
     return '';
@@ -75,7 +81,9 @@ function shouldPreserveDetailTarget(taskType, target, options = {}) {
   const normalizedTarget = String(target || '').trim();
   if (!isHttpUrl(normalizedTarget)) return false;
   if (String(options.targetPageType || '').trim() === 'detail') return true;
-  if (taskType === 'xhs.batchNotes') return isXhsDetailUrl(normalizedTarget);
+  if (taskType === 'xhs.batchNotes' || taskType === 'xhs.list_scan') {
+    return isXhsDetailUrl(normalizedTarget);
+  }
   if (taskType === 'douyin.batchNotes') return isDouyinDetailUrl(normalizedTarget);
   return false;
 }
@@ -93,6 +101,9 @@ const TASK_URL_BUILDERS = {
   'xhs.list_scan': (target, options = {}) => {
     if (String(options.targetPageType || '').trim() === 'profile') {
       return buildXhsProfileUrl(target);
+    }
+    if (shouldPreserveDetailTarget('xhs.list_scan', target, options)) {
+      return buildXhsDetailUrl(target) || String(target || '').trim();
     }
     if (isHttpUrl(target) && /\/user\/profile\//i.test(String(target || ''))) {
       return String(target || '').trim();

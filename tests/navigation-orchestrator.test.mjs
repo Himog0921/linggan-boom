@@ -61,6 +61,29 @@ test('xhs batch tasks build profile urls for author targets when requested', () 
   );
 });
 
+test('xhs.list_scan preserves note detail urls instead of searching the url text', () => {
+  const detailUrl = 'https://www.xiaohongshu.com/discovery/item/693d8c85000000000d00da4b?source=webshare&xhsshare=pc_web&xsec_source=pc_share';
+
+  assert.equal(
+    buildTaskNavigationUrl('xhs.list_scan', detailUrl),
+    detailUrl,
+  );
+  assert.equal(
+    buildTaskNavigationUrl('xhs.list_scan', detailUrl, { targetPageType: 'detail' }),
+    detailUrl,
+  );
+});
+
+test('xhs.list_scan rewrites profile-style note urls to canonical detail urls', () => {
+  assert.equal(
+    buildTaskNavigationUrl(
+      'xhs.list_scan',
+      'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666/69baad5e00000000230055ef',
+    ),
+    'https://www.xiaohongshu.com/discovery/item/69baad5e00000000230055ef?source=webshare&xhsshare=pc_web&xsec_source=pc_share',
+  );
+});
+
 test('xhs.authorNoteLinks always navigates to an author profile page', () => {
   assert.equal(
     buildTaskNavigationUrl('xhs.authorNoteLinks', '6926d8f4000000003702c666'),
