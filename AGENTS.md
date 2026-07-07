@@ -30,9 +30,10 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 |------|-----------|------|
 | 权威 | `docs/product/*.md` | 当前产品能力、用户路径、验收标准 |
 | 权威 | `docs/technical/*.md` | 当前技术栈、数据模型、消息协议、平台调研事实 |
-| 权威 | `docs/plans/active/*.md` | 当前执行中的审查、修订、编排与活跃计划 |
+| 权威 | `docs/plans/active/README.md` | active 目录真实状态标注；物理位置在 active 不等于仍在做 |
 | 权威 | `docs/decisions/index.md` | 关键架构决策与转向记录 |
 | 权威 | `progress.txt` | 真实时间线与阶段进展 |
+| 权威 | `docs/governance/*.md` | 文件落位、命名和文档维护规则 |
 | 导航/约束 | `AGENTS.md`、`CLAUDE.md` | 阅读入口、协作铁律、工作方式约束 |
 | 导航 | `docs/README.md` | 文档地图:按层分类 + 状态标注(✅权威/⚠️滞后/🗄️归档),进 docs 先看它 |
 | 历史资料 | 外层 `01_*.md`、`02_*.md`、`03_*.md` | 立项期研究与方案草稿，仅供背景参考 |
@@ -41,7 +42,7 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 
 1. 产品问题优先看 `docs/product/*.md`
 2. 技术事实优先看 `docs/technical/*.md` 和真实代码
-3. 当前执行顺序优先看 `docs/plans/active/2026-03-project-remediation-execution-plan.md`
+3. 当前执行顺序优先看 `progress.txt`；旧计划是否仍活跃先看 `docs/plans/active/README.md`
 4. 关键历史转向优先看 `docs/decisions/index.md`
 5. 若外层 `01/02/03` 与内层 `docs/**` 冲突，一律以内层 `docs/**` 为准
 
@@ -72,10 +73,10 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 | 查消息协议 | [docs/technical/MESSAGE_PROTOCOL.md](docs/technical/MESSAGE_PROTOCOL.md) |
 | 查 AI-ready 数据契约 | [docs/technical/AI_READY_DATA_CONTRACT_V1.md](docs/technical/AI_READY_DATA_CONTRACT_V1.md) |
 | 看技术决策历史 | [docs/decisions/index.md](docs/decisions/index.md) |
-| 看当前治理编排 | [docs/plans/active/2026-03-project-remediation-execution-plan.md](docs/plans/active/2026-03-project-remediation-execution-plan.md) |
-| 看当前 UI/UX 升级计划 | [docs/plans/active/2026-03-ui-ux-upgrade-plan.md](docs/plans/active/2026-03-ui-ux-upgrade-plan.md) |
-| 看当前审查报告 | [docs/plans/active/2026-03-project-retrospective-audit.md](docs/plans/active/2026-03-project-retrospective-audit.md) |
-| 看当前修订清单 | [docs/plans/active/2026-03-project-remediation-checklist.md](docs/plans/active/2026-03-project-remediation-checklist.md) |
+| 看当前时间线 | [progress.txt](progress.txt) |
+| 看 active 计划真实状态 | [docs/plans/active/README.md](docs/plans/active/README.md) |
+| 看文件落位规则 | [docs/governance/file-placement-standard.md](docs/governance/file-placement-standard.md) |
+| 看文档维护规则 | [docs/governance/document-maintenance-protocol.md](docs/governance/document-maintenance-protocol.md) |
 | 看技术债务 | [docs/plans/tech-debt.md](docs/plans/tech-debt.md) |
 
 ## 源码地图
@@ -99,6 +100,14 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 3. **先修事实源，再修结构，再修体验**：执行顺序服从活跃计划。
 4. **文档与代码一起维护**：改选择器、协议、数据结构时必须同步更新对应权威文档。
 5. **历史资料不能倒灌实现**：外层 `01/02/03` 只作背景参考，不能直接拿来当现行需求或架构。
+
+## 文件治理
+
+1. 新建文件前先看 `docs/governance/file-placement-standard.md`，确认应该进入 `docs/`、`src/`、`tests/`、`scripts/` 还是 `releases/`。
+2. 文档维护规则见 `docs/governance/document-maintenance-protocol.md`。代码、协议、字段、页面事实、发布版本变化后，不要只改代码。
+3. 根目录只保留 `AGENTS.md`、`CLAUDE.md` 这类入口 Markdown；评审、计划、调研、交接和发布说明进入 `docs/` 对应目录。
+4. 禁止用 `*_v2`、`*_final`、`*_old`、`*_new`、`*_copy`、`*_backup`、`*_draft2` 等文件名表达版本。
+5. 收尾时运行 `node scripts/check-project-governance.mjs`，确认入口、文档地图和版本口径没有漂移。
 
 ## 浏览器执行规则
 

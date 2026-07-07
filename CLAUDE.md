@@ -88,6 +88,8 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 - 反检测 → `docs/technical/ANTI_DETECT.md`
 - 决策日志 → `docs/decisions/index.md`
 - 当前计划 → `docs/plans/active/`
+- 文件落位规则 → `docs/governance/file-placement-standard.md`
+- 文档维护协议 → `docs/governance/document-maintenance-protocol.md`
 - 技术债务 → `docs/plans/tech-debt.md`
 
 ## 4. 代码约定
@@ -98,6 +100,7 @@ Mog 当前一周内主要在本机打磨内容工作台和插件。默认联调�
 - 每次功能完成必须更新 `docs/plans/active/` 中的对应计划。
 - 技术决策要记录到 `docs/decisions/index.md`。
 - 每次“实现 + 测试 + 用户反馈”闭环后，都必须按变更类型主动更新对应权威文档，最低不少于 `progress.txt`。
+- 新增文件前必须按 `docs/governance/file-placement-standard.md` 判断位置；文档同步范围按 `docs/governance/document-maintenance-protocol.md` 执行。
 
 ## 5. 不允许行为
 

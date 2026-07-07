@@ -3,11 +3,11 @@
 > 本文件是 `docs/` 的总索引(渐进式披露第 2 层)。
 > **第 1 层入口**:根目录 `AGENTS.md`(协作铁律 + 权威事实源表 + 源码地图)。
 > **第 3 层**:以下各文档本身。
-> **判断原则**:产品问题看 `product/`、技术事实看 `technical/` + 真实代码、当前进度看 `TODO.md` + `progress.txt`、关键转向看 `decisions/`。
+> **判断原则**:产品问题看 `product/`、技术事实看 `technical/` + 真实代码、当前进度优先看项目根 `progress.txt`、关键转向看 `decisions/`。
 
 ## 状态图例
 
-- ✅ **权威当前**:对齐 v2.0.53 代码,可作事实源
+- ✅ **权威当前**:对齐 v2.0.74 代码,可作事实源
 - ⚠️ **可能滞后**:仍可参考,但部分内容可能未跟上最新代码(用前核对源码)
 - 🗄️ **历史归档**:仅供背景,不再是事实源
 - 📝 **草案**:未落地或部分落地
@@ -22,6 +22,13 @@
 | [APP_FLOW.md](product/APP_FLOW.md) | 用户操作流程总览 | ✅ |
 | [TEST_CHECKLIST.md](product/TEST_CHECKLIST.md) | 验收检查清单(分层) | ✅ |
 | [BEGINNER_GUIDE.md](product/BEGINNER_GUIDE.md) | 小白版使用教程 | ⚠️ |
+
+## 文件治理层(`docs/governance/`)
+
+| 文档 | 用途 | 状态 |
+|---|---|---|
+| [governance/file-placement-standard.md](governance/file-placement-standard.md) | 新增文件放哪里、根目录允许什么、命名红线 | ✅ |
+| [governance/document-maintenance-protocol.md](governance/document-maintenance-protocol.md) | 代码/协议/版本/页面事实变化后应该同步哪些文档 | ✅ |
 
 ## 架构层
 
@@ -87,7 +94,7 @@
 
 ## 上架资料(`docs/chrome-web-store/`)
 
-Chrome 商店上架相关(store-listing / privacy-policy / reviewer-notes / dashboard 填表速查)。当前对齐版本 **v2.0.53**。
+Chrome 商店上架相关(store-listing / privacy-policy / reviewer-notes / dashboard 填表速查)。当前对齐版本 **v2.0.74**。
 
 ---
 
