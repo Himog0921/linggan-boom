@@ -228,6 +228,67 @@ test('canDispatchTaskFromCapabilityReport validates douyin note detail targets',
   assert.equal(result.reasonCode, 'page_target_mismatch');
 });
 
+test('canDispatchTaskFromCapabilityReport 失效：detail 目标被重定向到首页 → CONTENT_NOT_FOUND（不报 unsupported）', () => {
+  // 小红书失效笔记：导航后平台 302 → /404 → /explore 首页，URL 站不住（实机验证 2026-07-07）
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'unknown',
+    url: 'https://www.xiaohongshu.com/explore',
+    readiness: { ready: false, reasonCode: 'page_context_unavailable', reasonMessage: '当前页面未形成可执行上下文' },
+    capabilities: { canRunTaskTypes: [] },
+  }, 'xhs.note_full', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/6a22268e000000002202989e?xsec_token=ABtbxvaa',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'content_not_found');
+  assert.match(result.reasonMessage, /6a22268e/);
+});
+
+test('canDispatchTaskFromCapabilityReport 失效：detail 目标落到 /404 中间页 → CONTENT_NOT_FOUND', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'unknown',
+    url: 'https://www.xiaohongshu.com/404?error_code=300031&error_msg=%E5%BD%93%E5%89%8D%E7%AC%94%E8%AE%B0%E6%9A%82%E6%97%B6%E6%97%A0%E6%B3%95%E6%B5%8F%E8%A7%88',
+    readiness: { ready: false, reasonCode: '', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: [] },
+  }, 'xhs.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/6a3cef89000000000702aab2',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'content_not_found');
+});
+
+test('canDispatchTaskFromCapabilityReport detail 目标正常站住 → 不误判失效', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/67fc0296000000001c010a8f?xsec_token=AB8R',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: ['xhs.batchNotes'] },
+  }, 'xhs.note_full', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/67fc0296000000001c010a8f?xsec_token=AB8R',
+  });
+
+  assert.equal(result.accepted, true);
+});
+
+test('canDispatchTaskFromCapabilityReport 非 detail（search）任务 URL 无 contentId → 不误判失效', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'unknown',
+    url: 'https://www.xiaohongshu.com/explore',
+    readiness: { ready: false, reasonCode: 'page_context_unavailable', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: [] },
+  }, 'xhs.batchNotes', {
+    pageType: 'search',
+    url: 'https://www.xiaohongshu.com/search_result?keyword=x',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'unsupported_task_type');
+});
+
 test('canDispatchTaskFromCapabilityReport accepts matching douyin note detail targets', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'detail',

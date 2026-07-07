@@ -70,6 +70,23 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
     return readinessRejection;
   }
 
+  // 失效检测：任务目标是某条具体笔记/视频（detail），但当前页面 URL 已提取不出该内容 ID
+  // （失效内容会被平台重定向到 /404 或首页，URL 站不住——例如小红书失效笔记会跳
+  // /404?error_msg=当前笔记暂时无法浏览 再转首页）。必须先于"任务类型不支持"判定为
+  // CONTENT_NOT_FOUND（终态，停止重试），否则失效内容会被误报成模糊的"能力不支持"，
+  // 在服务端反复重试刷屏（topic-dashboard PR#41 的根因）。
+  if (String(target?.pageType || '').trim() === 'detail') {
+    const targetContentId = extractContentIdentityFromUrl(target?.url);
+    const currentContentId = extractContentIdentityFromUrl(report?.url);
+    if (targetContentId && !currentContentId) {
+      return {
+        accepted: false,
+        reasonCode: REMOTE_ERROR_CODE.CONTENT_NOT_FOUND,
+        reasonMessage: `目标内容 ${targetContentId} 无法访问，页面被重定向（可能已删除/设私密/失效）`,
+      };
+    }
+  }
+
   if (!equivalentTaskTypes(taskType).some((type) => supportedTaskTypes.includes(type))) {
     return {
       accepted: false,

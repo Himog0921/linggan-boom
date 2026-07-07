@@ -205,6 +205,10 @@ test('mapErrorToProtocolError separates permission, login, page, and missing-con
   assert.equal(missing.code, 'content_not_found');
   assert.equal(missing.category, 'context');
   assert.equal(missing.retryable, false);
+  // 词表扩展（2026-07-07）：覆盖小红书失效页真实文案；并锁住"登录已失效"不被误判成 content_not_found
+  assert.equal(mapErrorToProtocolError('当前笔记暂时无法浏览').code, 'content_not_found');
+  assert.equal(mapErrorToProtocolError('笔记已私密').code, 'content_not_found');
+  assert.equal(mapErrorToProtocolError('登录已失效，请重新登录').code, 'login_expired');
 });
 
 test('mapErrorToProtocolError keeps explicit code and category overrides', () => {

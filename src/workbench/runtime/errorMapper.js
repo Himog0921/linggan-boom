@@ -21,7 +21,7 @@ function inferErrorCode(message = '') {
   if (/页面权限|缺少权限|host.?permission|permission.?denied/i.test(text)) {
     return REMOTE_ERROR_CODE.PAGE_PERMISSION_DENIED;
   }
-  if (/内容不存在|作品不存在|笔记不存在|已删除|404|not.?found/i.test(text)) {
+  if (/不存在|暂时无法浏览|无法浏览|已删除|已私密|设为私密|仅.{0,3}自己可见|链接.{0,3}失效|不可见|不可访问|已隐藏|404|not.?found|removed|deleted|private/i.test(text)) {
     return REMOTE_ERROR_CODE.CONTENT_NOT_FOUND;
   }
   if (/错误页|页面错误|error.?page/i.test(text)) {
