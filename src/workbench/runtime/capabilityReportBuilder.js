@@ -104,6 +104,7 @@ export function buildCapabilityReport(pageContext = {}) {
     mode: String(pageContext.mode || '').trim(),
     pageType: String(pageContext.pageType || '').trim(),
     url: String(pageContext.url || '').trim(),
+    title: String(pageContext.title || '').trim(),
     isStableSearchList: Boolean(pageContext.isStableSearchList),
     isDyVideoPage: Boolean(pageContext.isDyVideoPage),
     isDyStrictDetailPage: Boolean(pageContext.isDyStrictDetailPage),

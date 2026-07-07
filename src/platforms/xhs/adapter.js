@@ -55,12 +55,14 @@ export function createXhsPlatformAdapter(options = {}) {
       const page = this.detectPage(ctx);
       const mode = resolveXhsMode(page);
       const target = this.normalizeTarget(task);
+      const title = String(ctx?.win?.document?.title || '').trim();
       return {
         ...buildCapabilityReport({
           platform: 'xhs',
           mode,
           pageType: page.type,
           url: page.url,
+          title,
           isStableSearchList: mode === 'search',
           capabilities: {
             canCollectPrimary: mode === 'detail',

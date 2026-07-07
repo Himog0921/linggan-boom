@@ -274,6 +274,55 @@ test('canDispatchTaskFromCapabilityReport detail 目标正常站住 → 不误�
   assert.equal(result.accepted, true);
 });
 
+test('canDispatchTaskFromCapabilityReport 失效盲区：复用 tab URL 站住但 title 是失效页 → CONTENT_NOT_FOUND（2.0.76）', () => {
+  // 复用已有 tab 时 URL 可能停在原地址（contentId 还在，失效检测 URL 条件不成立），
+  // 但页面 title 已变"页面不见了/暂时无法浏览"——2.0.76 补 title 判断覆盖此盲区。
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/discovery/item/6a3bb945000000001603fcd6?xsec_token=ABE9',
+    title: '小红书 - 你访问的页面不见了',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: ['xhs.batchNotes'] },
+  }, 'xhs.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/discovery/item/6a3bb945000000001603fcd6?xsec_token=ABE9',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'content_not_found');
+});
+
+test('canDispatchTaskFromCapabilityReport 失效盲区：抖音 title 含"视频已删除" → CONTENT_NOT_FOUND', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.douyin.com/video/7321309610927770930',
+    title: '视频已删除 - 抖音',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: ['douyin.batchNotes'] },
+  }, 'douyin.batchNotes', {
+    pageType: 'detail',
+    url: 'https://www.douyin.com/video/7321309610927770930',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'content_not_found');
+});
+
+test('canDispatchTaskFromCapabilityReport 正常笔记 title 不含失效词 → 不误判（title 判断不误伤）', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    mode: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/67fc0296000000001c010a8f?xsec_token=AB8R',
+    title: 'ber 连起床喝水都觉得困难你让我去跑步 - 小红书',
+    readiness: { ready: true, reasonCode: '', reasonMessage: '' },
+    capabilities: { canRunTaskTypes: ['xhs.batchNotes'] },
+  }, 'xhs.note_full', {
+    pageType: 'detail',
+    url: 'https://www.xiaohongshu.com/explore/67fc0296000000001c010a8f?xsec_token=AB8R',
+  });
+
+  assert.equal(result.accepted, true);
+});
+
 test('canDispatchTaskFromCapabilityReport 非 detail（search）任务 URL 无 contentId → 不误判失效', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'unknown',

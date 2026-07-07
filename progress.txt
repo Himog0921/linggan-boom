@@ -1,3 +1,6 @@
+2026-07-08
+- 失效检测盲区修复（2.0.76，接 2.0.75）：实机排查 6a3bb945 executor_lost 根因——插件 resolveTaskExecutionTabId 会复用浏览器已有 tab，复用 tab 可能停在失效笔记原 URL（contentId 还在，没跳 /404），2.0.75 的失效检测只看"URL 站住"，漏判 → accept 失效页 → 采集卡死 → lease 过期。修复：capabilityReport 透传 page title；失效检测加第二条信号——title 含"页面不见了/暂时无法浏览/已删除/已私密/视频已删除"等失效词 → 直接判 content_not_found，覆盖"URL 没跳但页面已失效"盲区；xhs + douyin adapter 注入 title。验证：workbench-capability-check 新增 3 用例（xhs 盲区/抖音盲区/title 不误伤正常笔记）；全套 587/587；npm run build 通过。版本 2.0.75 → 2.0.76。
+
 2026-07-07
 - 小红书失效笔记识别修复完成（topic-dashboard PR#41 配套，插件端）：监控对已失效笔记反复派单刷屏的根因在插件——失效笔记被小红书重定向到 /404（error_msg=当前笔记暂时无法浏览）再转首页 /explore，URL 站不住，capabilityCheck 看到首页判成 unsupported_task_type（模糊），服务端翻译桥（PR#41）接不上明确码。修复：① capabilityCheck 在 unsupported 判定前加 detail 目标 URL 站住校验——目标有 noteId 但当前页面提取不出 → 直接报 content_not_found（终态，停止重试），优先于"能力不支持"；② errorMapper 词表补"暂时无法浏览/已私密/链接失效"等，去掉裸"已失效"避免误吃"登录已失效"。实机验证：失效笔记 6a22268e 导航后 302→/404→/explore 首页，正常笔记 URL 站住且调 comment/page API——站住校验成立。验证：workbench-capability-check 24/24（含 4 个失效用例）、workbench-progress-error 11/11（含回归保护：登录已失效不误判）、全套 tests/*.test.mjs 584/584、npm run build 通过。版本 2.0.74 → 2.0.75。待办：实机装 2.0.75 用失效笔记验收；抖音失效识别下一轮。
 

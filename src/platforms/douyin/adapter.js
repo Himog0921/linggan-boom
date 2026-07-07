@@ -117,6 +117,7 @@ export function createDouyinPlatformAdapter(options = {}) {
           mode,
           pageType: page.type,
           url: page.url,
+          title: String(win?.document?.title || '').trim(),
           isDyVideoPage: isDetailPage,
           isDyStrictDetailPage: isStrictDetail,
           isStableSearchList: Boolean(searchContext.stableSearchList),
