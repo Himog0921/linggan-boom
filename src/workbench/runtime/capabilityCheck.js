@@ -3,6 +3,7 @@ import {
   extractContentIdentityFromUrl,
   extractProfileIdentityFromUrl,
 } from '../../shared/targetIdentity.js';
+import { looksLikeDeadPageTitle } from '../../shared/deadPageSignals.js';
 
 function normalizeCapabilityPageMode(report = {}) {
   const mode = String(report?.mode || '').trim();
@@ -80,7 +81,7 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
     const targetContentId = extractContentIdentityFromUrl(target?.url);
     const currentContentId = extractContentIdentityFromUrl(report?.url);
     const pageTitle = String(report?.title || '').trim();
-    const looksLikeDeadPage = /页面不见了|暂时无法浏览|无法浏览|已删除|已私密|页面不存在|访问的页面|作品不存在|视频不可见|已失效/.test(pageTitle);
+    const looksLikeDeadPage = looksLikeDeadPageTitle(pageTitle);
     if (targetContentId && (!currentContentId || looksLikeDeadPage)) {
       return {
         accepted: false,

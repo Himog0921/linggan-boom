@@ -10,6 +10,7 @@ import { throttle, watchCaptcha, showCaptchaPauseOverlay } from './antiDetect.js
 import { sendToBackground, reportProgress, reportDone, reportWorkbenchRecord } from '../../shared/messaging.js';
 import { BATCH_CONFIG, COLLECT_MODE, COMMENT_DEPTH_MODE, MSG, TASK_STATE } from '../../shared/constants.js';
 import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
+import { looksLikeDeadPageTitle } from '../../shared/deadPageSignals.js';
 import { randomDelay, parseCount, extractNoteId } from '../../shared/utils.js';
 import { noteStore } from '../../db/noteStore.js';
 import { collectionRunStore } from '../../db/collectionRunStore.js';
@@ -909,6 +910,15 @@ export class BatchNoteController extends BaseBatchController {
     }
 
     if (!collectedNote) {
+      // 2026-07-08 归因修复：重试耗尽后不能只报通用文案——服务端靠关键词识别
+      // "内容已失效"，通用文案匹配不上，会被误判成"稍后再试"而不停重试。
+      // 这里复用 capabilityCheck.js 派发前用过的同一套失效 title 特征词
+      // （见 shared/deadPageSignals.js），命中才升级成明确的失效文案；不命中
+      // 说明是别的原因（页面卡顿、字段缺失等），保留原通用文案，不误伤。
+      const pageTitle = String(document.title || '').trim();
+      if (looksLikeDeadPageTitle(pageTitle)) {
+        throw new Error(`笔记不存在或暂时无法浏览：${noteInfo.noteId}（页面标题：${pageTitle}）`);
+      }
       throw new Error(`目标作品详情采集失败：${noteInfo.noteId}`);
     }
     return collectedNote;
