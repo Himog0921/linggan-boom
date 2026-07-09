@@ -403,8 +403,8 @@ function buildTaskFromReservation(reservation = {}) {
       Object.prototype.hasOwnProperty.call(normalizedPayload, 'commentLimit')
       || Object.prototype.hasOwnProperty.call(normalizedPayload, 'commentsLimit');
     if (!commentLimitAlreadySet) {
-      normalizedPayload.commentLimit = 20;
-      normalizedPayload.commentsLimit = 20;
+      normalizedPayload.commentLimit = 30;
+      normalizedPayload.commentsLimit = 30;
     }
     normalizedPayload.collectMode = normalizeString(normalizedPayload.collectMode)
       || (normalizedPayload.includeComments === false ? 'detailsOnly' : 'detailsWithComments');

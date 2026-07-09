@@ -83,7 +83,7 @@ export function inferPopupBatchDefaults({
     return {
       count: 10,
       topByLikes: false,
-      commentLimit: platform === 'douyin' ? '30' : '20',
+      commentLimit: '30',
       commentDepthMode: COMMENT_DEPTH_MODE.TWO_LEVEL,
     };
   }
@@ -100,7 +100,7 @@ export function inferPopupBatchDefaults({
   return {
     count: mode === 'profile' ? 10 : 10,
     topByLikes: mode === 'search',
-    commentLimit: platform === 'douyin' ? '30' : '20',
+    commentLimit: '30',
     commentDepthMode: COMMENT_DEPTH_MODE.TWO_LEVEL,
   };
 }

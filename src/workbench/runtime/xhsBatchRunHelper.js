@@ -13,7 +13,7 @@ function normalizeNonNegativeInteger(value) {
   return null;
 }
 
-const MAX_ATTACHED_COMMENTS = 20;
+const MAX_ATTACHED_COMMENTS = 30;
 
 function expectedCommentCountFrom({
   expectedCommentCount = null,

@@ -280,8 +280,8 @@ test('task lease client maps xhs note_full reservations to detail collection wit
   assert.equal(claim.task.target, 'https://www.xiaohongshu.com/discovery/item/6986ceb7000000000c03587f?source=webshare&xhsshare=pc_web&xsec_token=ABC&xsec_source=pc_share');
   assert.equal(claim.task.payload.targetPageType, 'detail');
   assert.equal(claim.task.payload.includeComments, true);
-  assert.equal(claim.task.payload.commentLimit, 20);
-  assert.equal(claim.task.payload.commentsLimit, 20);
+  assert.equal(claim.task.payload.commentLimit, 30);
+  assert.equal(claim.task.payload.commentsLimit, 30);
   assert.equal(claim.task.payload.collectMode, 'detailsWithComments');
   assert.equal(claim.task.payload.noteId, '6986ceb7000000000c03587f');
   assert.equal(claim.task.payload.platformContentId, '6986ceb7000000000c03587f');

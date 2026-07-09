@@ -409,6 +409,20 @@ test('buildXhsAttachedCommentResult marks returned comments as failed when fewer
   });
 });
 
+test('buildXhsAttachedCommentResult uses thirty comments as the default attached comment buffer', () => {
+  assert.deepEqual(buildXhsAttachedCommentResult({
+    noteId: 'n4',
+    total: 19,
+    publicCommentCount: 55,
+  }), {
+    noteId: 'n4',
+    total: 19,
+    publicCommentCount: 55,
+    expectedCommentCount: 30,
+    error: 'comments_under_expected',
+  });
+});
+
 test('buildXhsBatchNotesProgressPatch only counts processed targets during a running task', () => {
   const patch = buildXhsBatchNotesProgressPatch({
     noteList: [{ noteId: 'n1' }, { noteId: 'n2' }, { noteId: 'n3' }],

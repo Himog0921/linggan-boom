@@ -97,7 +97,7 @@ function buildBatchNotesPayload(task = {}) {
     ...(includeComments
       ? {
           includeComments: true,
-          commentLimit: ensurePositiveInteger(payload.commentLimit, 20),
+          commentLimit: ensurePositiveInteger(payload.commentLimit, 30),
           commentDepthMode: normalizeCommentDepthMode(payload.commentDepthMode),
         }
       : {}),

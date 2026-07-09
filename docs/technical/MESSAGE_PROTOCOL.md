@@ -365,7 +365,7 @@ note | comment | author | media
 
 小红书详情笔记的附带评论采集：
 
-- 内容工作台下发 `xhs.batchNotes` 且 payload 携带 `includeComments=true` / `collectComments=true` 时，插件必须在采集当前笔记正文、指标和公开评论数后，继续采集当前作品 20 条以内评论；不能改走只采正文的单篇路径。
+- 内容工作台下发 `xhs.batchNotes` 且 payload 携带 `includeComments=true` / `collectComments=true` 时，插件必须在采集当前笔记正文、指标和公开评论数后，继续采集当前作品 30 条以内评论；不能改走只采正文的单篇路径。
 - 笔记公开评论数不足 20 条时，预期评论数等于公开评论数；公开评论数明确为 0 时，附带评论结果应回传 `publicCommentCount: 0` 且不标失败。
 - 如果公开评论数大于 0，但实际没有带回评论正文，附带评论结果必须带 `error: "comments_empty_after_request"`；如果实际评论数少于预期，应带 `error: "comments_under_expected"` 和 `expectedCommentCount`。
 - 评论记录仍受最小结构校验约束：缺评论正文、评论 ID 或父级内容 ID 的记录不进入 outbox。
@@ -415,7 +415,7 @@ douyin.author_profile
 |---|---|---|
 | `xhs.list_scan` | 博主页 / 搜索页表层巡查，不进入每篇详情 | `author_surface` / `keyword_surface` |
 | `xhs.author_links` | 深度建档第一阶段，在作者主页持续发现作品链接，不进入详情 | `author_links` |
-| `xhs.note_full` | 打开小红书笔记详情页，一次带回正文、媒体、指标和 20 条以内评论 | `note_full` |
+| `xhs.note_full` | 打开小红书笔记详情页，一次带回正文、媒体、指标和 30 条以内评论 | `note_full` |
 | `xhs.comment_scan` | 纯评论采集；`xhs.note_full` 可覆盖 | `comment` |
 | `xhs.author_profile` | 读取作者主页资料 | `author_profile` |
 | `douyin.*` | 抖音侧同类能力 | 对应平台记录模式 |

@@ -407,7 +407,7 @@ export class BatchNoteController extends BaseBatchController {
     const { count = 10, topByLikes = false } = settings;
     this._topByLikes = Boolean(topByLikes);
     this._includeComments = Boolean(settings.includeComments || settings.collectComments) && !this.surfaceOnly;
-    const configuredCommentLimit = Number(settings.commentLimit ?? 20);
+    const configuredCommentLimit = Number(settings.commentLimit ?? 30);
     this._commentLimit = this._includeComments && Number.isFinite(configuredCommentLimit)
       ? Math.max(0, Math.floor(configuredCommentLimit))
       : 0;
