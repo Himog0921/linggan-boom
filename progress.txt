@@ -1,3 +1,6 @@
+2026-07-10
+- 修复工作台终态结果包保护失效：服务端派单的 `collectionProfile` 原本只存在任务顶层，插件 taskPoller 在首次接单和 service worker 重启恢复时都没有复制该字段，导致 `author_links` 页面实时记录绕过终态包保护，首批作品提前写入并关闭租约。现在活动任务保留 profile，并为旧任务类型提供 profile 兜底；版本提升到 v2.0.79。新增真实派单形态回归覆盖首次接单与恢复接单。
+
 2026-07-09
 - 小红书 `note_full` 评论采集冗余口径统一完成，版本提升到 v2.0.78：插件侧默认 `xhs.note_full` 附带评论上限从 20 调整为 30，工作台 reservation 缺省 `commentLimit/commentsLimit`、批量详情执行兜底、任务信封映射兜底、手动评论采集默认值和附带评论结果完整性判断全部同步到 30。显式传入 20 的历史任务仍按 20 执行；公开评论数少于 30 时仍按实际可见数量判断。发布包 `releases/linggan-boom-v2.0.78.zip` 已生成并同步到内容工作台托管下载位，SHA256 为 `86c072b4acfe99edfc90278fd3b8fabd5170952dd3ac9611c4d20526a60be7d1`，大小 `427345` 字节。验证：`node --test tests/workbench-task-lease.test.mjs tests/workbench-xhs-batch-run-helper.test.mjs tests/xhs-batch-remote-startup.test.mjs tests/workbench-capability-check.test.mjs tests/background-page-type.test.mjs` 88/88 通过；`npm run check:contracts`、`npm run build`、`npm run release:verify -- --version 2.0.78 --zip releases/linggan-boom-v2.0.78.zip` 通过，保留既有 webpack 包体积 warning。
 

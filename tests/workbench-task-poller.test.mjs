@@ -686,8 +686,9 @@ test('task poller recovers persisted context after worker restart', async () => 
       },
       task: {
         id: 'task_recover_context',
-        taskType: 'douyin.batchNotes',
-        platform: 'douyin',
+        taskType: 'xhs.authorNoteLinks',
+        platform: 'xhs',
+        collectionProfile: 'author_links',
         status: 'running',
       },
     }),
@@ -716,6 +717,7 @@ test('task poller recovers persisted context after worker restart', async () => 
   });
   assert.equal(poller.getState().activeTask.tabId, 456);
   assert.equal(poller.getState().activeTask.accountId, 'douyin_account_1');
+  assert.equal(poller.getState().activeTask.collectionProfile, 'author_links');
 });
 
 test('task poller ignores persisted context from a stale attempt', async () => {
@@ -2061,7 +2063,8 @@ test('task poller waits for terminal result package before enqueueing records', 
         id: 'task_terminal_records_only',
         taskType: 'xhs.authorNoteLinks',
         platform: 'xhs',
-        payload: { collectionProfile: 'author_links' },
+        collectionProfile: 'author_links',
+        payload: {},
       },
       lease: {
         leaseToken: 'lease-terminal-records-only',
@@ -2127,6 +2130,7 @@ test('task poller waits for terminal result package before enqueueing records', 
   });
 
   await poller.tick();
+  assert.equal(poller.getState().activeTask?.collectionProfile, 'author_links');
   const runningResult = await poller.tick();
 
   assert.equal(runningResult.final, false);

@@ -836,6 +836,31 @@ function resolveDispatchCollectionRunId(dispatch = {}) {
   ).trim();
 }
 
+function resolveCollectionProfile(task = {}, persistedContext = {}) {
+  const explicitProfile = String(
+    task?.collectionProfile
+    || persistedContext?.collectionProfile
+    || task?.payload?.collectionProfile
+    || '',
+  ).trim();
+  if (explicitProfile) return explicitProfile;
+
+  const taskType = String(task?.taskType || '').trim();
+  return {
+    'xhs.authorNoteLinks': 'author_links',
+    'xhs.author_links': 'author_links',
+    'xhs.collectAuthor': 'author_profile',
+    'xhs.author_profile': 'author_profile',
+    'xhs.list_scan': 'list_scan',
+    'xhs.note_full': 'note_full',
+    'xhs.comment_scan': 'comment_probe',
+    'douyin.author_profile': 'author_profile',
+    'douyin.list_scan': 'list_scan',
+    'douyin.note_full': 'note_full',
+    'douyin.comment_scan': 'comment_probe',
+  }[taskType] || '';
+}
+
 function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null) {
   const taskId = String(task?.id || '').trim();
   if (!taskId) return null;
@@ -849,6 +874,7 @@ function hydrateTrackedTask(task = {}, now = Date.now(), persistedContext = null
     source: String(task?.source || matchingPersisted?.source || '').trim(),
     taskStrategy: String(task?.taskStrategy || matchingPersisted?.taskStrategy || '').trim(),
     payload: task?.payload && typeof task.payload === 'object' ? task.payload : {},
+    collectionProfile: resolveCollectionProfile(task, matchingPersisted),
     pluginRunId: String(task?.pluginRunId || matchingPersisted?.pluginRunId || '').trim(),
     executorInstanceId: String(task?.executorInstanceId || matchingPersisted?.executorInstanceId || matchingPersisted?.stationId || '').trim(),
     accountId: String(task?.accountId || matchingPersisted?.accountId || '').trim(),
@@ -1669,6 +1695,7 @@ export function createTaskPoller(deps = {}) {
       source: String(task?.source || '').trim(),
       taskStrategy: String(task?.taskStrategy || task?.payload?.taskStrategy || '').trim(),
       payload: task?.payload && typeof task.payload === 'object' ? task.payload : {},
+      collectionProfile: resolveCollectionProfile(task),
       pluginRunId: dispatchCollectionRunId,
       executorInstanceId,
       accountId,
