@@ -23,6 +23,7 @@ import {
 import { mapTaskEnvelopeToCapabilityCheck, mapTaskEnvelopeToInternalCommand } from '../workbench/runtime/taskEnvelopeMapper.js';
 import { mapTaskControlToInternalCommand } from '../workbench/runtime/taskControlMapper.js';
 import { createResultPackager } from '../workbench/runtime/resultPackager.js';
+import { resolveCollectionProfile } from '../workbench/runtime/collectionProfile.js';
 import { canDispatchTaskFromCapabilityReport } from '../workbench/runtime/capabilityCheck.js';
 import { createExecutionStationClient } from '../workbench/runtime/executionStationClient.js';
 import {
@@ -897,16 +898,26 @@ const FINAL_RESULT_PACKAGE_ONLY_PROFILES = new Set([
   'note_full',
 ]);
 
-function collectionProfileForActiveTask(activeTask = {}) {
-  return String(
-    activeTask.collectionProfile
-    || activeTask.payload?.collectionProfile
-    || '',
-  ).trim();
+function collectionProfileForActiveTask(activeTask = {}, message = {}) {
+  return resolveCollectionProfile({
+    collectionProfile:
+      activeTask.collectionProfile
+      || activeTask.payload?.collectionProfile
+      || message.collectionProfile
+      || message.externalTaskMeta?.collectionProfile
+      || '',
+    taskType:
+      activeTask.taskType
+      || activeTask.payload?.taskType
+      || message.taskType
+      || message.externalTaskMeta?.externalTaskType
+      || '',
+    payload: activeTask.payload,
+  });
 }
 
-function shouldWaitForFinalResultPackage(activeTask = {}) {
-  return FINAL_RESULT_PACKAGE_ONLY_PROFILES.has(collectionProfileForActiveTask(activeTask));
+function shouldWaitForFinalResultPackage(activeTask = {}, message = {}) {
+  return FINAL_RESULT_PACKAGE_ONLY_PROFILES.has(collectionProfileForActiveTask(activeTask, message));
 }
 
 function deriveExternalRecordId(recordType = WORKBENCH_RECORD_TYPE.NOTE, record = {}) {
@@ -1796,7 +1807,7 @@ const bgHandlers = {
     if (!activeTask) {
       return { success: false, skipped: true, error: 'no_active_workbench_task' };
     }
-    if (shouldWaitForFinalResultPackage(activeTask)) {
+    if (shouldWaitForFinalResultPackage(activeTask, msg)) {
       return {
         success: true,
         skipped: true,

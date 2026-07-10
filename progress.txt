@@ -1,4 +1,7 @@
 2026-07-10
+- 修复终态结果包保护的根因，版本提升到 v2.0.80：`author_links` 采集内容脚本原本会逐条 `reportWorkbenchRecord`，与终态结果包并行写入；首个增量快照可能在 `discoverySummary` 到达前关闭服务端租约，剩余记录随后全部变成 `stale_result`。现在终态包 profile（`author_links`、`author_profile`、`list_scan`、详情/评论 profile）在内容侧直接禁止流式记录上报，只通过完整 `collectionRun` 结果包回传；后台继续保留 taskType/profile 兜底识别，防止恢复任务字段丢失。新增真实 `xhs.authorNoteLinks` 回归覆盖。验证：`node --test tests/collection-profile.test.mjs tests/content-collection-handlers.test.mjs tests/workbench-task-poller.test.mjs tests/workbench-result-packager.test.mjs` 68/68 通过；`npm run check:contracts`、`npm run build`、`npm run release:verify -- --version 2.0.80 --zip releases/linggan-boom-v2.0.80-final.zip` 通过；发布包 SHA256 为 `0b2ee0ccddb491073cb172c15a0607c20d767ef4c677810344c97cdef82668d2`，大小 `427720` 字节。
+
+2026-07-10
 - 修复工作台终态结果包保护失效：服务端派单的 `collectionProfile` 原本只存在任务顶层，插件 taskPoller 在首次接单和 service worker 重启恢复时都没有复制该字段，导致 `author_links` 页面实时记录绕过终态包保护，首批作品提前写入并关闭租约。现在活动任务保留 profile，并为旧任务类型提供 profile 兜底；版本提升到 v2.0.79。新增真实派单形态回归覆盖首次接单与恢复接单。
 
 2026-07-09

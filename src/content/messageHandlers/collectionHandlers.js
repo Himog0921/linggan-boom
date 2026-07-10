@@ -8,6 +8,7 @@ import {
   buildDouyinSurfaceNoteRecords,
   buildXhsSurfaceNoteRecords,
 } from '../../workbench/runtime/monitorTask.js';
+import { resolveCollectionProfile } from '../../workbench/runtime/collectionProfile.js';
 import { extractProfileIdentityFromUrl } from '../../shared/targetIdentity.js';
 import { buildDouyinSingleCommentRunPatch } from '../../platforms/douyin/commentTaskSupport.js';
 import { checkXhsAuthorMonitorTarget } from '../../platforms/xhs/batchController.js';
@@ -29,6 +30,25 @@ const buildAuthorBaselineShortfallNote = ({
 };
 
 const getMonitorMetaFromMessage = (msg = {}) => msg.monitorMeta || msg.externalTaskMeta?.monitorMeta || null;
+
+const FINAL_RESULT_PACKAGE_ONLY_PROFILES = new Set([
+  'author_links',
+  'author_profile',
+  'comment_probe',
+  'list_scan',
+  'note_detail',
+  'note_full',
+]);
+
+function shouldReportStreamingWorkbenchRecords(msg = {}) {
+  const externalTaskMeta = msg.externalTaskMeta || {};
+  const profile = resolveCollectionProfile({
+    collectionProfile: msg.collectionProfile || externalTaskMeta.collectionProfile || '',
+    taskType: msg.taskType || externalTaskMeta.externalTaskType || '',
+    payload: msg.payload,
+  });
+  return !FINAL_RESULT_PACKAGE_ONLY_PROFILES.has(profile);
+}
 
 function ensurePositiveInteger(value, fallback = 0) {
   const num = Number(value);
@@ -598,15 +618,17 @@ export function createCollectionHandlers({
             authorArchiveStage,
           });
           if (records.length > 0) await noteStore.bulkUpsert(records);
-          records.forEach((record, index) => {
-            emitWorkbenchRecordDelta(reportWorkbenchRecord, {
-              recordType: WORKBENCH_RECORD_TYPE.NOTE,
-              record,
-              collectionRunId: remoteRun?.collectionRunId || '',
-              externalTaskId: msg.externalTaskMeta?.externalTaskId || '',
-              sequence: Date.now() + index,
+          if (shouldReportStreamingWorkbenchRecords(msg)) {
+            records.forEach((record, index) => {
+              emitWorkbenchRecordDelta(reportWorkbenchRecord, {
+                recordType: WORKBENCH_RECORD_TYPE.NOTE,
+                record,
+                collectionRunId: remoteRun?.collectionRunId || '',
+                externalTaskId: msg.externalTaskMeta?.externalTaskId || '',
+                sequence: Date.now() + index,
+              });
             });
-          });
+          }
           const targetIds = records
             .map((record) => String(record.platformContentId || record.noteId || '').trim())
             .filter(Boolean);

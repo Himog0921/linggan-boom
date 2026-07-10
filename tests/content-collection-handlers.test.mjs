@@ -389,7 +389,7 @@ test('collection handlers pass profile selector and scan limit into xhs surface 
   }
 });
 
-test('collection handlers discover xhs author note links and report each link record', async () => {
+test('collection handlers keep xhs author note links in the terminal result package', async () => {
   const createRunCalls = [];
   const discoverCalls = [];
   const bulkUpsertCalls = [];
@@ -504,11 +504,7 @@ test('collection handlers discover xhs author note links and report each link re
     assert.equal(bulkUpsertCalls[0][0].authorArchiveJobId, 'archive_job_1');
     assert.equal(bulkUpsertCalls[0][1].sourceUrl, 'https://www.xiaohongshu.com/explore/note_2');
     assert.equal(bulkUpsertCalls[0][1].signedUrl, undefined);
-    assert.equal(reportedRecords.length, 2);
-    assert.equal(reportedRecords[0].recordType, 'note');
-    assert.equal(reportedRecords[0].externalRecordId, 'note_1');
-    assert.equal(reportedRecords[0].externalTaskId, 'task_author_note_links_1');
-    assert.equal(reportedRecords[0].collectionRunId, 'run_author_note_links_1');
+    assert.equal(reportedRecords.length, 0);
     assert.equal(doneCalls[0][0], 'run_author_note_links_1');
     assert.equal(doneCalls[0][1].itemsPlanned, 2);
     assert.equal(doneCalls[0][1].itemsSucceeded, 2);
