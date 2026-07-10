@@ -1,4 +1,5 @@
 import { buildCapabilityReport } from '../../workbench/runtime/capabilityReportBuilder.js';
+import { REMOTE_ERROR_CODE } from '../../workbench/protocol/schema.js';
 import { detectPageType } from './pageDetector.js';
 
 function getDefaultWindow() {
@@ -14,6 +15,13 @@ function resolveXhsMode(page = {}) {
   if (page.type === 'profile') return 'profile';
   if (page.type === 'search') return 'search';
   return 'unknown';
+}
+
+function hasXhsAppScanVerification(win = {}) {
+  const title = String(win?.document?.title || '').trim();
+  const bodyText = String(win?.document?.body?.innerText || '').trim().slice(0, 3000);
+  const text = `${title}\n${bodyText}`;
+  return /使用已登录.*小红书.*扫码验证身份|小红书\s*APP.*扫码验证身份|扫码验证身份/.test(text);
 }
 
 /**
@@ -55,7 +63,9 @@ export function createXhsPlatformAdapter(options = {}) {
       const page = this.detectPage(ctx);
       const mode = resolveXhsMode(page);
       const target = this.normalizeTarget(task);
-      const title = String(ctx?.win?.document?.title || '').trim();
+      const win = ctx.win || getWindow();
+      const title = String(win?.document?.title || '').trim();
+      const requiresAppScan = hasXhsAppScanVerification(win);
       return {
         ...buildCapabilityReport({
           platform: 'xhs',
@@ -64,6 +74,11 @@ export function createXhsPlatformAdapter(options = {}) {
           url: page.url,
           title,
           isStableSearchList: mode === 'search',
+          platformBlocked: requiresAppScan,
+          blockReasonCode: requiresAppScan ? REMOTE_ERROR_CODE.LOGIN_REQUIRED : '',
+          blockReasonMessage: requiresAppScan
+            ? '小红书要求使用已登录账号的 APP 扫码验证身份'
+            : '',
           capabilities: {
             canCollectPrimary: mode === 'detail',
             canCollectSecondary: mode === 'detail' || mode === 'profile',

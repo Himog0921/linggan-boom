@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { TASK_STATE } from '../src/shared/constants.js';
 import { resolveDouyinTaskbarRenderState } from '../src/platforms/douyin/taskbarRenderState.js';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('douyin terminal taskbar states render final status before hiding', () => {
   const done = resolveDouyinTaskbarRenderState({ taskState: TASK_STATE.DONE });

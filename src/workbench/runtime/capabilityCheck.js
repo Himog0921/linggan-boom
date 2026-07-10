@@ -91,6 +91,12 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
     }
   }
 
+  // Non-terminal readiness failures describe the current page more accurately
+  // than a missing task type. For example, an XHS login/scan page has no
+  // collection capabilities yet, but the station can still run the task once
+  // the page becomes ready.
+  if (readinessRejection) return readinessRejection;
+
   if (!equivalentTaskTypes(taskType).some((type) => supportedTaskTypes.includes(type))) {
     return {
       accepted: false,
@@ -134,8 +140,6 @@ export function canDispatchTaskFromCapabilityReport(report = {}, taskType = '', 
       };
     }
   }
-
-  if (readinessRejection) return readinessRejection;
 
   return {
     accepted: true,

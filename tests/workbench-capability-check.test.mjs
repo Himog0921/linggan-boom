@@ -7,6 +7,7 @@ import {
   mapTaskEnvelopeToInternalCommand,
 } from '../src/workbench/runtime/taskEnvelopeMapper.js';
 import { buildCapabilityReport } from '../src/workbench/runtime/capabilityReportBuilder.js';
+import { createXhsPlatformAdapter } from '../src/platforms/xhs/adapter.js';
 
 test('canDispatchTaskFromCapabilityReport accepts ready task types', () => {
   const result = canDispatchTaskFromCapabilityReport({
@@ -38,6 +39,29 @@ test('capability report exposes xhs author note link discovery on profile pages'
     'xhs.authorNoteLinks',
   ]);
   assert.equal(report.readiness.ready, true);
+});
+
+test('xhs capability report exposes app-scan verification as login required', async () => {
+  const adapter = createXhsPlatformAdapter({
+    detectPage: () => ({
+      type: 'unknown',
+      url: 'https://www.xiaohongshu.com/login',
+    }),
+    getWindow: () => ({
+      location: { href: 'https://www.xiaohongshu.com/login' },
+      document: {
+        title: '小红书登录',
+        body: { innerText: '为保护账号安全，请使用已登录该账号的小红书APP扫码验证身份' },
+      },
+    }),
+  });
+
+  const report = await adapter.checkCapability({}, {});
+
+  assert.equal(report.readiness.ready, false);
+  assert.equal(report.readiness.reasonCode, 'login_required');
+  assert.match(report.readiness.reasonMessage, /扫码验证身份/);
+  assert.deepEqual(report.capabilities.canRunTaskTypes, []);
 });
 
 test('canDispatchTaskFromCapabilityReport rejects unsupported task types', () => {
@@ -86,6 +110,30 @@ test('canDispatchTaskFromCapabilityReport forwards readiness failures', () => {
 
   assert.equal(result.accepted, false);
   assert.equal(result.reasonCode, 'search_list_unstable');
+});
+
+test('canDispatchTaskFromCapabilityReport preserves unavailable profile-page readiness over unsupported author links', () => {
+  const result = canDispatchTaskFromCapabilityReport({
+    platform: 'xhs',
+    mode: 'unknown',
+    pageType: 'unknown',
+    url: 'https://www.xiaohongshu.com/login',
+    readiness: {
+      ready: false,
+      reasonCode: 'page_context_unavailable',
+      reasonMessage: '当前页面未形成可执行上下文',
+    },
+    capabilities: {
+      canRunTaskTypes: [],
+    },
+  }, 'xhs.authorNoteLinks', {
+    pageType: 'profile',
+    url: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+  });
+
+  assert.equal(result.accepted, false);
+  assert.equal(result.reasonCode, 'page_context_unavailable');
+  assert.equal(result.reasonMessage, '当前页面未形成可执行上下文');
 });
 
 test('canDispatchTaskFromCapabilityReport prioritizes platform security verification over unsupported task type', () => {
@@ -323,7 +371,7 @@ test('canDispatchTaskFromCapabilityReport 正常笔记 title 不含失效词 →
   assert.equal(result.accepted, true);
 });
 
-test('canDispatchTaskFromCapabilityReport 非 detail（search）任务 URL 无 contentId → 不误判失效', () => {
+test('canDispatchTaskFromCapabilityReport 非 detail（search）任务 URL 无 contentId → 保留页面未就绪原因', () => {
   const result = canDispatchTaskFromCapabilityReport({
     mode: 'unknown',
     url: 'https://www.xiaohongshu.com/explore',
@@ -335,7 +383,7 @@ test('canDispatchTaskFromCapabilityReport 非 detail（search）任务 URL 无 c
   });
 
   assert.equal(result.accepted, false);
-  assert.equal(result.reasonCode, 'unsupported_task_type');
+  assert.equal(result.reasonCode, 'page_context_unavailable');
 });
 
 test('canDispatchTaskFromCapabilityReport accepts matching douyin note detail targets', () => {

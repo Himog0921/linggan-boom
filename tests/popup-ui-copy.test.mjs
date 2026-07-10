@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { sendToBackground, toFriendlyError } from '../src/popup/utils.js';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('popup current-content section collapses duplicate disabled copy into a single empty-state hint', () => {
   const source = fs.readFileSync(path.join(projectRoot, 'src/popup/components/ActionButtons.jsx'), 'utf8');

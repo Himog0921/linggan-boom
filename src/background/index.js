@@ -668,6 +668,15 @@ function clearWorkbenchTaskContext(taskId = '') {
   }
 }
 
+function shouldKeepNavigatedTaskTabForCapabilityFailure(result = {}) {
+  const reasonCode = String(result?.reasonCode || result?.error || '').trim();
+  return new Set([
+    REMOTE_ERROR_CODE.LOGIN_REQUIRED,
+    REMOTE_ERROR_CODE.LOGIN_EXPIRED,
+    REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE,
+  ]).has(reasonCode);
+}
+
 function getWorkbenchTaskTabId(taskId = '') {
   return getWorkbenchTaskContext(taskId)?.tabId || null;
 }
@@ -2614,7 +2623,7 @@ const taskPoller = createTaskPoller({
       task: mapTaskEnvelopeToCapabilityCheck(buildTaskEnvelopeFromCollectionTask(preparedTask)),
     }, {});
 
-    if (!result?.accepted) {
+    if (!result?.accepted && !shouldKeepNavigatedTaskTabForCapabilityFailure(result)) {
       await closeRememberedTaskExecutionTabs([taskId]);
       clearWorkbenchTaskContext(taskId);
     }
@@ -2689,7 +2698,7 @@ async function runWorkbenchTaskPollTick({ force = false } = {}) {
 
   const currentActiveTask = taskPoller?.getState?.()?.activeTask;
   const cleanupTask = result?.cleanupTask || (prevActiveTask && !currentActiveTask ? prevActiveTask : null);
-  if (cleanupTask) {
+  if (cleanupTask && !result?.preserveTaskExecutionContext) {
     const { registryIds, navigationIds, tabIds } = taskExecutionCleanupKeys(cleanupTask);
     for (const registryId of registryIds) {
       clearWorkbenchTaskContext(registryId);

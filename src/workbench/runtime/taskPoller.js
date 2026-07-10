@@ -242,6 +242,14 @@ function shouldFailCapabilityRejection(reasonCode = '', capability = {}) {
   );
 }
 
+function shouldPreserveTaskExecutionContextForCapabilityRejection(reasonCode = '') {
+  return new Set([
+    REMOTE_ERROR_CODE.LOGIN_REQUIRED,
+    REMOTE_ERROR_CODE.LOGIN_EXPIRED,
+    REMOTE_ERROR_CODE.PLATFORM_SECURITY_CHALLENGE,
+  ]).has(String(reasonCode || '').trim());
+}
+
 function buildCapabilityReportDiagnostic(report = {}) {
   if (!report || typeof report !== 'object' || Array.isArray(report)) return {};
   const readiness = report.readiness && typeof report.readiness === 'object' ? report.readiness : {};
@@ -1451,6 +1459,9 @@ export function createTaskPoller(deps = {}) {
         taskType: task.taskType,
         task,
       });
+      const preserveTaskExecutionContext = shouldPreserveTaskExecutionContextForCapabilityRejection(
+        rejection.reasonCode,
+      );
       const executorInstanceId = await resolveExecutorInstanceId();
       const eventFields = buildLeaseEventFields({
         task,
@@ -1502,6 +1513,7 @@ export function createTaskPoller(deps = {}) {
         success: true,
         skipped: true,
         reason: rejection.reasonMessage,
+        preserveTaskExecutionContext,
         cleanupTask: cleanupTaskSnapshot(task),
       };
     }

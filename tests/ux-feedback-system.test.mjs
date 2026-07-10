@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('dashboard actions and notices now use busy-state and structured feedback hooks', () => {
   const appSource = fs.readFileSync(path.join(projectRoot, 'src/dashboard/App.jsx'), 'utf8');

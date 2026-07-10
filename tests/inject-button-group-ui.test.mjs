@@ -2,8 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('detail inject button groups use banner brand variant and drop outer shadow shell', () => {
   const buttonGroupSource = fs.readFileSync(path.join(projectRoot, 'src/content/components/ButtonGroup.jsx'), 'utf8');

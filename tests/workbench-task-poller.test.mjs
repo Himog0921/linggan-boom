@@ -1406,6 +1406,57 @@ test('task poller releases a leased task when the content script is unavailable'
   assert.equal(poller.getState().activeTask, null);
 });
 
+test('task poller keeps the navigated tab available while xhs requires login verification', async () => {
+  const patches = [];
+  const events = [];
+  const poller = createTaskPoller({
+    claimTaskLease: async () => ({
+      task: {
+        id: 'task_xhs_login_verification',
+        taskType: 'xhs.authorNoteLinks',
+        platform: 'xhs',
+        target: 'https://www.xiaohongshu.com/user/profile/6926d8f4000000003702c666',
+      },
+      lease: {
+        leaseToken: 'lease-login-verification',
+        attemptId: 'attempt-login-verification',
+        leaseEpoch: 2,
+      },
+    }),
+    patchTask: async (taskId, patch) => {
+      patches.push([taskId, patch]);
+      return { success: true };
+    },
+    capabilityCheck: async () => ({
+      success: true,
+      accepted: false,
+      reasonCode: 'login_required',
+      reasonMessage: '小红书要求使用已登录账号的 APP 扫码验证身份',
+      recommendedAction: 'scan_xhs_login_qr',
+    }),
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    clearTaskLease: async () => {},
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.skipped, true);
+  assert.equal(result.preserveTaskExecutionContext, true);
+  assert.deepEqual(patches[0], [
+    'task_xhs_login_verification',
+    {
+      status: 'pending',
+      progress: 0,
+      errorMessage: '小红书要求使用已登录账号的 APP 扫码验证身份',
+    },
+  ]);
+  assert.equal(events.at(-1).eventType, 'task.released');
+  assert.equal(events.at(-1).payload.reasonCode, 'login_required');
+});
+
 test('task poller fails unavailable detail pages instead of returning them to pending', async () => {
   const patches = [];
   const events = [];

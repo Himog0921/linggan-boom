@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { normalizeWorkbenchMessageResponse } from '../src/workbench/protocol/responseEnvelope.js';
 import { MSG } from '../src/shared/constants.js';
 
-const projectRoot = '/Users/moglenny/proma/选题插件-打磨中/linggan-boom';
+const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 test('workbench message responses gain a data envelope while preserving legacy fields', () => {
   const result = normalizeWorkbenchMessageResponse(MSG.WORKBENCH_CAPABILITY_CHECK, {
