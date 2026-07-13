@@ -2465,6 +2465,10 @@ async function prepareManualExecutionLockForDispatch({ action = '', msg = {}, ta
 }
 
 const taskPoller = createTaskPoller({
+  // 出站积压熔断：写回积压超阈值时拒接新任务（OUTBOX_BACKLOG_BLOCKED），
+  // 并在熔断 tick 内触发补发自愈。
+  getOutboxBacklog: () => workbenchOutboxStore.countsByStatus(),
+  flushOutbox: () => taskDeltaReporter.flush(),
   beforeDispatch: async (task) => {
     const platform = String(task.platform || '').trim();
     if (platform !== 'xhs' && platform !== 'douyin') return { shouldPause: false };

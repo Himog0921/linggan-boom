@@ -3349,3 +3349,47 @@ test('task poller resumes a server lease returned by reconcile', async () => {
   assert.equal(poller.getState().activeTask.taskId, 'resume-task');
   assert.equal(poller.getState().activeLease.leaseToken, 'resume-token');
 });
+
+test('出站积压熔断：积压超阈值时不接新任务并返回 OUTBOX_BACKLOG_BLOCKED', async () => {
+  let claimCalls = 0;
+  let flushCalls = 0;
+  let backlog = { pending: 10, inFlight: 0, retryable: 250, deadLetter: 30, oldestUnsentCreatedAt: Date.now() - 60 * 60 * 1000 };
+  const poller = createTaskPoller({
+    getOutboxBacklog: async () => backlog,
+    flushOutbox: async () => { flushCalls += 1; },
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return { task: null, reason: { code: 'NO_PENDING_TASK', message: '暂无可接任务' } };
+    },
+  });
+
+  const blocked = await poller.tick();
+  assert.equal(blocked.idle, true);
+  assert.equal(blocked.idleReasonCode, 'OUTBOX_BACKLOG_BLOCKED');
+  assert.equal(claimCalls, 0, '积压熔断期间不得尝试领取新任务');
+  assert.equal(flushCalls, 1, '熔断 tick 应触发一次补发自愈');
+
+  // 积压恢复后正常接单
+  backlog = { pending: 1, inFlight: 0, retryable: 0, deadLetter: 30, oldestUnsentCreatedAt: Date.now() - 1000 };
+  const recovered = await poller.tick();
+  assert.equal(recovered.idleReasonCode, 'NO_PENDING_TASK');
+  assert.equal(claimCalls, 1);
+});
+
+test('出站积压熔断：最老未发送记录超龄同样熔断', async () => {
+  let claimCalls = 0;
+  const poller = createTaskPoller({
+    getOutboxBacklog: async () => ({
+      pending: 3, inFlight: 0, retryable: 2, deadLetter: 0,
+      oldestUnsentCreatedAt: Date.now() - 45 * 60 * 1000,
+    }),
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return { task: null };
+    },
+  });
+
+  const blocked = await poller.tick();
+  assert.equal(blocked.idleReasonCode, 'OUTBOX_BACKLOG_BLOCKED');
+  assert.equal(claimCalls, 0);
+});

@@ -987,6 +987,53 @@ export function createTaskPoller(deps = {}) {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
   }
 
+  // 出站积压熔断（报告 §9.2）：写回积压超过阈值（条数或最老记录年龄）时，
+  // 说明结果送不回服务端；此时接新任务只会批量制造租约过期。熔断期间
+  // 每 tick 触发一次补发自愈，积压回落后自动恢复接单。
+  async function evaluateOutboxBacklogGate() {
+    if (typeof deps.getOutboxBacklog !== 'function') return null;
+    let backlog = null;
+    try {
+      backlog = await deps.getOutboxBacklog();
+    } catch {
+      return null;
+    }
+    if (!backlog || typeof backlog !== 'object') return null;
+
+    const backlogLimit = Number.isFinite(Number(deps.outboxBacklogLimit))
+      ? Number(deps.outboxBacklogLimit)
+      : 200;
+    const maxAgeMs = Number.isFinite(Number(deps.outboxOldestUnsentMaxAgeMs))
+      ? Number(deps.outboxOldestUnsentMaxAgeMs)
+      : 30 * 60 * 1000;
+
+    const retryable = Number(backlog.retryable || 0);
+    const deadLetter = Number(backlog.deadLetter || 0);
+    const oldestUnsentCreatedAt = Number(backlog.oldestUnsentCreatedAt || 0);
+    const oldestUnsentAgeMs = oldestUnsentCreatedAt > 0 ? Math.max(0, getNow() - oldestUnsentCreatedAt) : 0;
+
+    const overCount = retryable + deadLetter > backlogLimit;
+    const overAge = oldestUnsentAgeMs > maxAgeMs;
+    if (!overCount && !overAge) return null;
+
+    if (typeof deps.flushOutbox === 'function') {
+      try {
+        await deps.flushOutbox();
+      } catch {
+        // 自愈补发失败不影响熔断结论
+      }
+    }
+
+    return {
+      reason: {
+        code: 'OUTBOX_BACKLOG_BLOCKED',
+        message: `本地写回积压（待重试 ${retryable} 条 / 死信 ${deadLetter} 条`
+          + `${oldestUnsentAgeMs > 0 ? `，最老 ${Math.round(oldestUnsentAgeMs / 60000)} 分钟` : ''}），暂停接新任务等待写回恢复`,
+      },
+      nextPollAfterMs: 60_000,
+    };
+  }
+
   async function readAuthorizationFailureBackoff() {
     if (typeof deps.readAuthorizationFailureBackoff !== 'function') return null;
     let snapshot = null;
@@ -2557,6 +2604,13 @@ export function createTaskPoller(deps = {}) {
         }
         if (reconciled?.recoveredTask) {
           return await pollActiveTask();
+        }
+
+        const backlogBlock = await evaluateOutboxBacklogGate();
+        if (backlogBlock) {
+          const idleSnapshot = createTaskLeaseIdleSnapshot(backlogBlock);
+          state.lastIdleReason = idleSnapshot;
+          return buildIdleTickResult(backlogBlock, idleSnapshot);
         }
 
         if (typeof deps.claimTaskLease !== 'function') {
