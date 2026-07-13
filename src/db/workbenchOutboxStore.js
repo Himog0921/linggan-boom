@@ -125,11 +125,54 @@ export const workbenchOutboxStore = {
 
   async countUnsent({ now: nowMs = now() } = {}) {
     await recoverStaleInFlightRows({ now: nowMs, limit: 50 });
-    const statuses = ['pending', 'failed', 'in_flight', 'failed_terminal'];
+    // 死信（failed_terminal）不再计入"待发送"：它们永远不会被自动重发，
+    // 混进计数会让操作者误以为等网络重试即可（2026-07-13 事故的 2144 计数教训）。
+    const statuses = ['pending', 'failed', 'in_flight'];
     const counts = await Promise.all(
       statuses.map((status) => db.workbenchOutbox.where('status').equals(status).count())
     );
     return counts.reduce((sum, count) => sum + Number(count || 0), 0);
+  },
+
+  // 分状态账本：传输态（pending/inFlight/retryable）与处置态（deadLetter）分开呈现。
+  // retryable 对应存储值 failed，deadLetter 对应存储值 failed_terminal——只做展示语义
+  // 映射，不迁移已有行（工位上的存量死信是恢复证据）。
+  async countsByStatus({ now: nowMs = now() } = {}) {
+    await recoverStaleInFlightRows({ now: nowMs, limit: 50 });
+    const [pending, inFlight, retryable, deadLetter, acked] = await Promise.all([
+      db.workbenchOutbox.where('status').equals('pending').count(),
+      db.workbenchOutbox.where('status').equals('in_flight').count(),
+      db.workbenchOutbox.where('status').equals('failed').count(),
+      db.workbenchOutbox.where('status').equals('failed_terminal').count(),
+      db.workbenchOutbox.where('status').equals('acked').count(),
+    ]);
+    const oldestCreatedAt = async (statuses) => {
+      const rows = await db.workbenchOutbox.where('status').anyOf(statuses).toArray();
+      return rows.reduce((min, row) => {
+        const createdAt = Number(row.createdAt || 0);
+        if (!createdAt) return min;
+        return min === 0 ? createdAt : Math.min(min, createdAt);
+      }, 0);
+    };
+    return {
+      pending: Number(pending || 0),
+      inFlight: Number(inFlight || 0),
+      retryable: Number(retryable || 0),
+      deadLetter: Number(deadLetter || 0),
+      acked: Number(acked || 0),
+      oldestUnsentCreatedAt: await oldestCreatedAt(['pending', 'failed', 'in_flight']),
+      oldestDeadLetterCreatedAt: await oldestCreatedAt(['failed_terminal']),
+    };
+  },
+
+  async listDeadLetters({ limit = 200 } = {}) {
+    const maxLimit = Math.max(1, Number(limit || 200));
+    const rows = await db.workbenchOutbox
+      .where('status')
+      .equals('failed_terminal')
+      .limit(maxLimit)
+      .toArray();
+    return rows.sort((a, b) => Number(a.createdAt || 0) - Number(b.createdAt || 0));
   },
 
   async markInFlight(ids = [], { timeoutMs = IN_FLIGHT_TIMEOUT_MS } = {}) {

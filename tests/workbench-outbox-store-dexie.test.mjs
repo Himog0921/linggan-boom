@@ -52,6 +52,38 @@ test('enqueue -> IndexedDB -> 读回：executionContext 完整存活', async () 
   assert.deepEqual(persisted.executionContext.pageFingerprint, FROZEN_CONTEXT.pageFingerprint);
 });
 
+test('状态分账：countUnsent 排除死信；countsByStatus 分桶；listDeadLetters 可导出', async () => {
+  const baseMs = Date.now() - 60_000;
+  await workbenchOutboxStore.enqueue(buildRow({ idempotencyKey: 'row-pending', createdAt: baseMs }));
+  await workbenchOutboxStore.enqueue(buildRow({ idempotencyKey: 'row-retryable', createdAt: baseMs + 1 }));
+  await workbenchOutboxStore.enqueue(buildRow({ idempotencyKey: 'row-dead', createdAt: baseMs + 2 }));
+  await workbenchOutboxStore.enqueue(buildRow({ idempotencyKey: 'row-acked', createdAt: baseMs + 3 }));
+
+  await workbenchOutboxStore.markRetry(['row-retryable'], new Error('network_flap'));
+  await workbenchOutboxStore.markTerminal(['row-dead'], new Error('outbox_execution_context_missing'));
+  await workbenchOutboxStore.markAcked(['row-acked']);
+
+  // 死信不允许再计入"待发送"（此前 2144 计数把 failed_terminal 一并相加）
+  const unsent = await workbenchOutboxStore.countUnsent();
+  assert.equal(unsent, 2, `待发送只含 pending+retryable，实际 ${unsent}`);
+
+  const counts = await workbenchOutboxStore.countsByStatus();
+  assert.equal(counts.pending, 1);
+  assert.equal(counts.retryable, 1);
+  assert.equal(counts.deadLetter, 1);
+  assert.equal(counts.acked, 1);
+  assert.equal(counts.inFlight, 0);
+  assert.ok(Number(counts.oldestUnsentCreatedAt) > 0, '必须给出最老未发送行时间');
+  assert.ok(Number(counts.oldestDeadLetterCreatedAt) > 0, '必须给出最老死信时间');
+
+  const deadLetters = await workbenchOutboxStore.listDeadLetters({ limit: 10 });
+  assert.equal(deadLetters.length, 1);
+  assert.equal(deadLetters[0].idempotencyKey, 'row-dead');
+  assert.equal(deadLetters[0].errorMessage, 'outbox_execution_context_missing');
+  assert.ok(deadLetters[0].executionContext, '死信行必须携带执行身份以便恢复归档');
+  assert.equal(deadLetters[0].taskId, 'task-1');
+});
+
 test('真实 store flush：严格校验放行，HTTP envelope 带冻结身份，行最终 acked', async () => {
   const committed = [];
   const outbox = createDeltaOutbox({
