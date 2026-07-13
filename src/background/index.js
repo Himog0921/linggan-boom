@@ -77,6 +77,7 @@ import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFo
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
 import { captureJournalStore } from '../db/captureJournalStore.js';
+import { buildOutboxRecoveryExport } from '../workbench/runtime/outboxRecoveryExport.js';
 import { accountStore } from '../db/accountStore.js';
 import { injectCookiesForAccount, selectAccountForWorkbenchTask, selectAvailableAccount } from '../workbench/runtime/cookieManager.js';
 import { noteStore } from '../db/noteStore.js';
@@ -1474,6 +1475,24 @@ const bgHandlers = {
         activeLockCount: activeLocks.length,
         unsentOutboxCount: Number(unsentOutboxCount || 0),
       },
+    };
+  },
+
+  [MSG.EXPORT_OUTBOX_RECOVERY]: async () => {
+    // plugin_local_recovery 导出（报告 §9.3）：只读打包账本 + 死信，不改任何行状态。
+    const identity = await executionStationClient.getStoredStationIdentity().catch(() => null);
+    const [journalEntries, deadLetters] = await Promise.all([
+      captureJournalStore.listAll({ limit: 5000 }),
+      workbenchOutboxStore.listDeadLetters({ limit: 5000 }),
+    ]);
+    return {
+      success: true,
+      export: buildOutboxRecoveryExport({
+        journalEntries,
+        deadLetters,
+        pluginVersion: getPluginVersion(),
+        stationId: identity?.stationId || '',
+      }),
     };
   },
 

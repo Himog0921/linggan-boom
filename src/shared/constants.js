@@ -62,6 +62,7 @@ export const MSG = {
   CLAIM_PLUGIN_AUTHORIZATION_REQUEST: 'claimPluginAuthorizationRequest',
   CLEAR_PLUGIN_AUTHORIZATION: 'clearPluginAuthorization',
   GET_EXECUTION_STATION_STATUS: 'getExecutionStationStatus',
+  EXPORT_OUTBOX_RECOVERY: 'exportOutboxRecovery',
   REGISTER_EXECUTION_STATION: 'registerExecutionStation',
   SEND_EXECUTION_STATION_HEARTBEAT: 'sendExecutionStationHeartbeat',
 
