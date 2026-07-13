@@ -76,6 +76,7 @@ import { applyPackagedInstallBootstrap } from '../workbench/runtime/pluginInstal
 import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFoundationPayload.js';
 import { collectionRunStore } from '../db/collectionRunStore.js';
 import { workbenchOutboxStore } from '../db/workbenchOutboxStore.js';
+import { captureJournalStore } from '../db/captureJournalStore.js';
 import { accountStore } from '../db/accountStore.js';
 import { injectCookiesForAccount, selectAccountForWorkbenchTask, selectAvailableAccount } from '../workbench/runtime/cookieManager.js';
 import { noteStore } from '../db/noteStore.js';
@@ -2332,6 +2333,8 @@ let getCurrentTaskExecutionContext = () => null;
 
 const taskDeltaReporter = createTaskDeltaReporter({
   store: workbenchOutboxStore,
+  captureJournal: captureJournalStore,
+  pluginVersion: getPluginVersion(),
   commitTaskDelta: async (config, taskId, envelope) => {
     const identity = await executionStationClient.getStoredStationIdentity();
     const authorization = await pluginAuthorizationClient.getStoredAuthorization();
@@ -2874,6 +2877,13 @@ if (chrome.alarms?.onAlarm) {
       void accountStore.resetDailyQuota();
       return;
     }
+    if (alarm?.name === 'capture-journal-prune') {
+      // 只修剪「已被服务端 ACK + 超过 14 天」的采集事实；未确认送达的永不清理。
+      void captureJournalStore.pruneAcked({
+        isAcked: async (entryId) => (await workbenchOutboxStore.getStatusByKey(entryId)) === 'acked',
+      }).catch(() => {});
+      return;
+    }
   });
 }
 
@@ -2943,6 +2953,9 @@ chrome.alarms?.create(WORKBENCH_STATION_HEARTBEAT_ALARM, { periodInMinutes: 1 })
 
 // 每日配额清零（每小时检查一次日期变化）
 chrome.alarms?.create('daily-quota-reset', { periodInMinutes: 60 });
+
+// 采集事实账本修剪（每 6 小时；只清已 ACK 且超龄条目）
+chrome.alarms?.create('capture-journal-prune', { periodInMinutes: 360 });
 
 void runPackagedInstallBootstrapTick().finally(() => {
   void registerWorkbenchPushSubscriptionTick();

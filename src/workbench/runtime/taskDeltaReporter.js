@@ -14,6 +14,8 @@ export function createTaskDeltaReporter({
   getExecutorInstanceId = null,
   autoFlush = true,
   requireExecutionIdentity = true,
+  captureJournal = null,
+  pluginVersion = '',
 } = {}) {
   const outbox = createDeltaOutbox({
     store,
@@ -21,6 +23,8 @@ export function createTaskDeltaReporter({
     getExecutorInstanceId,
     autoFlush,
     requireExecutionIdentity,
+    captureJournal,
+    pluginVersion,
     prepareRecordPayload: async (record) => {
       const config = typeof getFlywheelConfig === 'function'
         ? normalizeConfigResult(await getFlywheelConfig())

@@ -134,4 +134,18 @@ db.version(13).stores({
   accounts: 'accountId, name, status, platform, lastUsedAt, createdAt',
 });
 
+// v14: captureJournal 采集事实账本（2026-07-13 事故架构升级）。
+// 采集内容先落不可变账本，与租约是否仍有效解耦；即使出站行被判死信，
+// 采集事实仍可经 plugin_local_recovery 显式恢复导入，不会无声丢失。
+db.version(14).stores({
+  notes: 'noteId, contentId, platformContentId, platform, collectionRunId, url, title, type, authorId, authorEntityId, authorName, likes, collects, comments, releaseDate, publishedAt, collectedAt, ipLocation, lastUpdateTime, mediaDownloadStatus, dataSource, triggerSource, shareShortUrl, createdAt, syncStatus',
+  comments: '++id, commentEntityId, commentId, platform, contentId, noteId, noteUrl, text, author, authorId, profileUrl, location, ipLocation, likes, parentCommentId, rootCommentId, level, replyToCommentId, replyToUserName, publishedAt, collectedAt, sortMode, collectionRunId, createdAt, syncStatus',
+  authors: 'userId, authorEntityId, platformAuthorId, platform, collectionRunId, handle, secUserId, redId, name, profileUrl, fans, follows, interactions, ipLocation, gender, accountStatus, followedByMe, collectedAt, createdAt, syncStatus',
+  collectionRuns: 'collectionRunId, externalTaskId, externalTaskType, executorInstanceId, protocolVersion, platform, taskType, pageType, triggerSource, status, resultUploadStatus, lastHeartbeatAt, startedAt, finishedAt, createdAt',
+  mediaAssets: 'assetId, contentId, collectionRunId, assetType, role, quality, downloadStatus, lastResolvedAt, createdAt',
+  workbenchOutbox: 'id, taskId, pluginRunId, &idempotencyKey, kind, status, nextAttemptAt, createdAt, [status+nextAttemptAt+createdAt]',
+  accounts: 'accountId, name, status, platform, lastUsedAt, createdAt',
+  captureJournal: 'entryId, taskId, capturedAt, payloadHash',
+});
+
 export default db;

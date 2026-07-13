@@ -236,6 +236,11 @@ export const workbenchOutboxStore = {
     }));
   },
 
+  async getStatusByKey(idempotencyKey = '') {
+    const row = await getByKey(idempotencyKey);
+    return row ? normalizeText(row.status) : '';
+  },
+
   async getLastSequence(taskId = '', pluginRunId = '') {
     const rows = await db.workbenchOutbox
       .where('taskId')

@@ -130,6 +130,8 @@ export function createDeltaOutbox({
   batchLimit = 250,
   autoFlush = true,
   requireExecutionIdentity = false,
+  captureJournal = null,
+  pluginVersion = '',
 } = {}) {
   const state = {
     flushing: false,
@@ -245,6 +247,29 @@ export function createDeltaOutbox({
     }
   }
 
+  // Capture Journal（报告 §9.2）：record 类采集事实先落不可变账本，与租约
+  // 是否有效、出站行是否被判死信解耦。账本写入失败不阻塞出站主链路。
+  async function appendCaptureJournal(row, executionContext) {
+    if (!captureJournal || typeof captureJournal.append !== 'function') return;
+    if (normalizeText(row.kind) !== 'record') return;
+    try {
+      await captureJournal.append({
+        entryId: row.idempotencyKey || row.id,
+        taskId: row.taskId,
+        pluginRunId: row.pluginRunId,
+        kind: row.kind,
+        recordType: row.recordType || '',
+        externalRecordId: row.externalRecordId || '',
+        payload: normalizeObject(row.payload),
+        capturedAt: Date.now(),
+        executionContext,
+        pluginVersion,
+      });
+    } catch {
+      // 账本失败不能挡住出站；出站行本身仍带 executionContext。
+    }
+  }
+
   async function enqueueRow(row, { deferFlush = false } = {}) {
     if (!store || typeof store.enqueue !== 'function') {
       return null;
@@ -262,6 +287,8 @@ export function createDeltaOutbox({
         executionContext = {};
       }
     }
+    // 账本先于身份校验：即使下面严格校验拒绝入队，采集事实也已经保住。
+    await appendCaptureJournal(row, executionContext);
     if (requireExecutionIdentity && !hasFrozenExecutionIdentity(executionContext)) {
       const error = new Error('task_report_context_missing');
       error.retryable = false;
@@ -374,6 +401,8 @@ export function createDeltaOutbox({
       pluginRunId,
       idempotencyKey: record.idempotencyKey,
       kind: 'record',
+      recordType,
+      externalRecordId,
       sequence: normalizedSequence,
       payload: record,
       snapshot,
