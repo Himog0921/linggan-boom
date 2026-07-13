@@ -1450,10 +1450,11 @@ const bgHandlers = {
   [MSG.GET_EXECUTION_STATION_STATUS]: async () => {
     const authorizationStatus = await getPluginAuthorizationSnapshot();
     const identity = await executionStationClient.getStoredStationIdentity();
-    const [runtimeSnapshot, lockSnapshot, unsentOutboxCount] = await Promise.all([
+    const [runtimeSnapshot, lockSnapshot, unsentOutboxCount, outboxStatusCounts] = await Promise.all([
       collectExecutionStationRuntimeSnapshot(identity),
       executionAccountLockManager.snapshot().catch(() => ({ locks: {} })),
       workbenchOutboxStore.countUnsent().catch(() => 0),
+      workbenchOutboxStore.countsByStatus().catch(() => null),
     ]);
     const activeLocks = Object.values(lockSnapshot?.locks || {})
       .map((lock) => summarizeExecutionLockForDiagnostics(lock))
@@ -1474,6 +1475,7 @@ const bgHandlers = {
         activeLocks,
         activeLockCount: activeLocks.length,
         unsentOutboxCount: Number(unsentOutboxCount || 0),
+        outboxStatusCounts: outboxStatusCounts || null,
       },
     };
   },

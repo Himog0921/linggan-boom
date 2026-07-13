@@ -1,4 +1,6 @@
-import React from 'react';
+import React, { useState } from 'react';
+import { MSG } from '../../shared/constants.js';
+import { sendToBackground } from '../utils.js';
 
 const PLATFORM_LABELS = {
   xhs: '小红书',
@@ -119,6 +121,29 @@ export default function FlywheelSection({
   onTest,
   onSync,
 }) {
+  const [exportingRecovery, setExportingRecovery] = useState(false);
+
+  // 导出恢复包：只读操作，拿到 JSON 后本地保存，供 plugin_local_recovery 导入。
+  const handleExportRecovery = async () => {
+    if (exportingRecovery) return;
+    setExportingRecovery(true);
+    try {
+      const response = await sendToBackground(MSG.EXPORT_OUTBOX_RECOVERY, {}, { timeoutMs: 60000 });
+      if (!response?.success || !response.export) return;
+      const blob = new Blob([JSON.stringify(response.export, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `linggan-recovery-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+    } finally {
+      setExportingRecovery(false);
+    }
+  };
+
   const statusText = {
     unconfigured: '未配置',
     configured: '已配置',
@@ -161,13 +186,25 @@ export default function FlywheelSection({
   const diagnostics = stationStatus.diagnostics || {};
   const activeLocks = Array.isArray(diagnostics.activeLocks) ? diagnostics.activeLocks : [];
   const unsentOutboxCount = Number(diagnostics.unsentOutboxCount || 0);
+  const outboxStatusCounts = diagnostics.outboxStatusCounts || null;
+  const deadLetterCount = Number(outboxStatusCounts?.deadLetter || 0);
+  const oldestDeadLetterAt = Number(outboxStatusCounts?.oldestDeadLetterCreatedAt || 0);
   const accountDiagnostics = accounts.map(formatAccountDiagnostics);
   const diagnosticItems = [
     { label: '插件版本', value: stationStatus.pluginVersion || '未知' },
     { label: '工位编号', value: shortId(stationStatus.identity?.stationId) || '未绑定' },
     { label: '当前任务', value: formatCurrentTask(diagnostics.currentTask) },
     { label: '本机锁', value: formatLockSummary(activeLocks) },
-    { label: '待发送事件', value: `${unsentOutboxCount} 条` },
+    // 待发送 = 仍会自动重试的记录；死信 = 已永久停发、需人工恢复的记录。
+    // 两者必须分开呈现（2026-07-13 事故：死信混入待发送导致 2144 无法解释）。
+    { label: '待发送', value: `${unsentOutboxCount} 条` },
+    {
+      label: '死信（不再自动发送）',
+      value: deadLetterCount > 0
+        ? `${deadLetterCount} 条${oldestDeadLetterAt ? `，最早 ${new Date(oldestDeadLetterAt).toLocaleString()}` : ''}`
+        : '0 条',
+      alert: deadLetterCount > 0,
+    },
   ];
   const shouldShowDiagnostics = Boolean(stationStatus.pluginVersion || stationStatus.registered || accountDiagnostics.length);
   const presets = [
@@ -316,10 +353,23 @@ export default function FlywheelSection({
               {diagnosticItems.map((item) => (
                 <div className="station-diagnostic-item" key={item.label}>
                   <span>{item.label}</span>
-                  <strong title={item.value}>{item.value}</strong>
+                  <strong title={item.value} style={item.alert ? { color: '#d03050' } : undefined}>{item.value}</strong>
                 </div>
               ))}
             </div>
+            {deadLetterCount > 0 ? (
+              <div className="station-diagnostic-item">
+                <span>这些数据不会再自动发送，可导出后走恢复通道找回</span>
+                <button
+                  type="button"
+                  className={`popup-btn outline small${exportingRecovery ? ' is-busy' : ''}`}
+                  disabled={exportingRecovery}
+                  onClick={handleExportRecovery}
+                >
+                  {exportingRecovery ? '导出中...' : '导出恢复数据'}
+                </button>
+              </div>
+            ) : null}
             {accountDiagnostics.length ? (
               <div className="station-runtime-list">
                 {accountDiagnostics.map((item) => (
