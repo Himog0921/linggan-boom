@@ -86,7 +86,13 @@ function formatCurrentTask(task = null) {
   const taskName = text(task.taskType) || shortId(task.externalTaskId) || shortId(task.taskId) || '当前任务';
   const status = TASK_STATUS_LABELS[text(task.workbenchStatus)] || text(task.workbenchStatus) || '执行中';
   const account = shortId(task.accountId);
-  return uniqueParts([platformLabel(task.platform), taskName, account, status]).join(' · ');
+  // 报告 §9.1：活跃任务的采集进度封顶显示 95%——100% 是"服务端已确认入库"，
+  // 只要任务还在本地活跃，就说明还没拿到服务端终态确认。
+  const rawProgress = Number(task.progress);
+  const progressPart = Number.isFinite(rawProgress) && rawProgress > 0
+    ? (rawProgress >= 95 ? '95%（等待服务端确认）' : `${Math.floor(rawProgress)}%`)
+    : '';
+  return uniqueParts([platformLabel(task.platform), taskName, account, status, progressPart]).join(' · ');
 }
 
 function formatLockSummary(locks = []) {

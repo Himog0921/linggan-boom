@@ -26,6 +26,16 @@ function toOptionalInteger(value) {
   return Number.isFinite(num) ? Math.floor(num) : undefined;
 }
 
+// 报告 §9.1：采集阶段进度上限 95%。100% 是"服务端已确认终态包入库"的语义，
+// 只能由服务端在 commit_raw_snapshot/release_job 被接受后判定，插件不得自报。
+const CAPTURE_PROGRESS_CAP = 95;
+
+function clampCaptureProgress(value) {
+  const num = toOptionalInteger(value);
+  if (num === undefined) return undefined;
+  return Math.min(CAPTURE_PROGRESS_CAP, Math.max(0, num));
+}
+
 function normalizeLeaseSnapshot({
   task = null,
   lease = null,
@@ -833,7 +843,7 @@ export async function commitCollectionTaskDeltaThroughSync({
         jobId: normalizedTaskId,
         leaseToken,
         leaseEpoch,
-        progress: toOptionalInteger(envelope?.snapshot?.progress),
+        progress: clampCaptureProgress(envelope?.snapshot?.progress),
         stage: normalizeString(envelope?.snapshot?.status || 'running'),
         observedAt,
       }];
@@ -959,7 +969,7 @@ export async function syncCollectionTaskStatusThroughSync({
         jobId: normalizedTaskId,
         leaseToken,
         leaseEpoch,
-        progress: toOptionalInteger(patch?.progress),
+        progress: clampCaptureProgress(patch?.progress),
         stage: status || 'running',
         observedAt: new Date().toISOString(),
       }];

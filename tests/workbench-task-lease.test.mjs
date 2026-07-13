@@ -1256,3 +1256,46 @@ test('task lease storage store survives service worker memory loss', async () =>
   await store.clear();
   assert.equal(await store.read(), null);
 });
+
+test('采集阶段进度封顶 95：progress_update 不允许自报 100（报告 §9.1）', async () => {
+  const requests = [];
+  const fetchFn = async (url, options = {}) => {
+    requests.push(JSON.parse(options.body || '{}'));
+    const body = JSON.parse(options.body || '{}');
+    const op = body.operations?.[0] || {};
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        return {
+          operationResults: { [op.operationId]: { status: 'accepted' } },
+          reservations: [],
+          controlCommands: [],
+        };
+      },
+    };
+  };
+
+  await commitCollectionTaskDeltaThroughSync({
+    serverUrl: 'http://localhost:3000',
+    taskId: 'job-progress-1',
+    envelope: {
+      taskId: 'job-progress-1',
+      pluginRunId: 'run-progress-1',
+      attemptId: 'attempt-p1',
+      leaseToken: 'lease-p1',
+      leaseEpoch: 1,
+      snapshot: { status: 'running', progress: 100 },
+      records: [],
+      events: [{ idempotencyKey: 'event-p1' }],
+    },
+    stationId: 'station-1',
+    stationToken: 'station-token',
+    fetchFn,
+    storageArea: createMemoryStorage(),
+  });
+
+  const op = requests[0]?.operations?.[0];
+  assert.equal(op?.type, 'progress_update');
+  assert.equal(op?.progress, 95, '采集阶段自报 100 必须被封顶到 95');
+});
