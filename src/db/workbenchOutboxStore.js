@@ -59,6 +59,14 @@ function normalizeOutboxRow(item = {}) {
     snapshot: item.snapshot && typeof item.snapshot === 'object' && !Array.isArray(item.snapshot)
       ? item.snapshot
       : null,
+    // 2026-07-13 事故根因：此前 normalize 重建对象时丢掉 executionContext，
+    // 冻结的租约身份（attemptId/leaseToken/leaseEpoch）在真实持久化边界消失，
+    // 严格校验随后在发 HTTP 前把记录判成 failed_terminal。该字段必须原样持久化。
+    executionContext: item.executionContext
+      && typeof item.executionContext === 'object'
+      && !Array.isArray(item.executionContext)
+      ? { ...item.executionContext }
+      : null,
     sequence: Number.isFinite(Number(item.sequence)) ? Math.floor(Number(item.sequence)) : 0,
     attemptCount: Number.isFinite(Number(item.attemptCount)) ? Math.floor(Number(item.attemptCount)) : 0,
     nextAttemptAt: Number.isFinite(Number(item.nextAttemptAt)) ? Number(item.nextAttemptAt) : 0,

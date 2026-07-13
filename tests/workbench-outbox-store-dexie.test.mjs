@@ -1,0 +1,87 @@
+// 2026-07-13 事故回归测试：executionContext 必须在真实 IndexedDB 持久化边界存活。
+//
+// 此前 tests/workbench-delta-outbox.test.mjs 只用内存 Map store（`...item` 保留全部字段），
+// 从未经过 normalizeOutboxRow + Dexie round-trip，导致 2.0.83 的冻结身份修复在
+// 真实持久化层丢字段（enqueue 后读回无 executionContext），严格校验在发 HTTP 前
+// 把记录判成 failed_terminal。本文件用 fake-indexeddb 走真实 Dexie 路径堵住这个测试边界。
+import 'fake-indexeddb/auto';
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+const { workbenchOutboxStore } = await import('../src/db/workbenchOutboxStore.js');
+const { default: db } = await import('../src/db/index.js');
+const { createDeltaOutbox } = await import('../src/workbench/runtime/deltaOutbox.js');
+
+const FROZEN_CONTEXT = {
+  attemptId: 'attempt-001',
+  leaseToken: 'lease-token-abc',
+  leaseEpoch: 3,
+  stationId: 'station-zs-1',
+  accountId: 'acct-9',
+  platform: 'xiaohongshu',
+  pageFingerprint: { url: 'https://www.xiaohongshu.com/user/profile/6897f2e8', title: '希希妈妈聊 ADHD' },
+};
+
+function buildRow(overrides = {}) {
+  return {
+    id: overrides.idempotencyKey || 'evt-ctx-1',
+    idempotencyKey: overrides.idempotencyKey || 'evt-ctx-1',
+    taskId: 'task-1',
+    pluginRunId: 'run-1',
+    kind: 'event',
+    sequence: Date.now(),
+    payload: { idempotencyKey: overrides.idempotencyKey || 'evt-ctx-1', eventType: 'task.progress' },
+    executionContext: { ...FROZEN_CONTEXT },
+    ...overrides,
+  };
+}
+
+test.beforeEach(async () => {
+  await db.workbenchOutbox.clear();
+});
+
+test('enqueue -> IndexedDB -> 读回：executionContext 完整存活', async () => {
+  await workbenchOutboxStore.enqueue(buildRow({ idempotencyKey: 'evt-roundtrip-1' }));
+
+  const persisted = await db.workbenchOutbox.get('evt-roundtrip-1');
+  assert.ok(persisted, '行必须已落库');
+  assert.ok(persisted.executionContext, 'executionContext 不允许在持久化边界被丢弃');
+  assert.equal(persisted.executionContext.attemptId, FROZEN_CONTEXT.attemptId);
+  assert.equal(persisted.executionContext.leaseToken, FROZEN_CONTEXT.leaseToken);
+  assert.equal(persisted.executionContext.leaseEpoch, FROZEN_CONTEXT.leaseEpoch);
+  assert.deepEqual(persisted.executionContext.pageFingerprint, FROZEN_CONTEXT.pageFingerprint);
+});
+
+test('真实 store flush：严格校验放行，HTTP envelope 带冻结身份，行最终 acked', async () => {
+  const committed = [];
+  const outbox = createDeltaOutbox({
+    store: workbenchOutboxStore,
+    requireExecutionIdentity: true,
+    autoFlush: false,
+    commitDelta: async (taskId, envelope) => {
+      committed.push({ taskId, envelope });
+      return { success: true, acceptedEventKeys: envelope.events.map((e) => e.idempotencyKey) };
+    },
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task-1',
+    pluginRunId: 'run-1',
+    eventType: 'task.progress',
+    sequence: 1001,
+    payload: { progress: 50 },
+    executionContext: { ...FROZEN_CONTEXT },
+  });
+
+  const result = await outbox.flush();
+  assert.equal(result.success, true, `flush 必须成功，实际：${JSON.stringify(result)}`);
+  assert.equal(committed.length, 1, '必须发出一次 HTTP 提交（此前故障：发 HTTP 前被判 failed_terminal）');
+  assert.equal(committed[0].envelope.attemptId, FROZEN_CONTEXT.attemptId);
+  assert.equal(committed[0].envelope.leaseToken, FROZEN_CONTEXT.leaseToken);
+  assert.equal(committed[0].envelope.leaseEpoch, FROZEN_CONTEXT.leaseEpoch);
+
+  const rows = await db.workbenchOutbox.toArray();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'acked', `行应 acked，实际 ${rows[0].status}（errorMessage=${rows[0].errorMessage}）`);
+  assert.notEqual(rows[0].status, 'failed_terminal');
+});
