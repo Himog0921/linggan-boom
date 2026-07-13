@@ -307,11 +307,12 @@ function buildLeaseEventFields({ task = {}, lease = null, executorInstanceId = '
   const fields = {
     attemptId: String(lease?.attemptId || task?.currentAttemptId || task?.attemptId || '').trim(),
     leaseId: String(lease?.leaseToken || '').trim(),
+    leaseEpoch: toOptionalInteger(lease?.leaseEpoch ?? task?.leaseEpoch),
     stationId: String(executorInstanceId || task?.executorInstanceId || '').trim(),
     accountId: String(accountId || task?.accountId || '').trim(),
     platform: String(task?.platform || '').trim(),
   };
-  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value));
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined && value !== ''));
 }
 
 function buildDispatchFailurePayload({
@@ -777,7 +778,13 @@ function buildWorkbenchResultSummary(run = {}) {
   };
 }
 
-function buildWorkbenchRecordDeltas(activeTask = {}, pluginRunId = '', resultSummary = {}, sequenceBase = Date.now()) {
+function buildWorkbenchRecordDeltas(
+  activeTask = {},
+  pluginRunId = '',
+  resultSummary = {},
+  sequenceBase = Date.now(),
+  executionContext = null,
+) {
   const taskId = String(activeTask.taskId || '').trim();
   const runId = String(pluginRunId || activeTask.pluginRunId || activeTask.externalTaskId || activeTask.taskId || '').trim();
   if (!taskId || !runId) return [];
@@ -796,6 +803,7 @@ function buildWorkbenchRecordDeltas(activeTask = {}, pluginRunId = '', resultSum
     externalRecordId: String(note.noteId || note.platformContentId || note.url || '').trim(),
     sequence: nextSequence(),
     payload: note,
+    executionContext,
   }));
 
   const commentDeltas = (Array.isArray(records.comments) ? records.comments : []).map((comment) => ({
@@ -805,6 +813,7 @@ function buildWorkbenchRecordDeltas(activeTask = {}, pluginRunId = '', resultSum
     externalRecordId: String(comment.commentId || comment.id || '').trim(),
     sequence: nextSequence(),
     payload: comment,
+    executionContext,
   }));
 
   const authorDeltas = (Array.isArray(records.authors) ? records.authors : []).map((author) => ({
@@ -814,6 +823,7 @@ function buildWorkbenchRecordDeltas(activeTask = {}, pluginRunId = '', resultSum
     externalRecordId: String(author.authorId || author.userId || author.profileUrl || '').trim(),
     sequence: nextSequence(),
     payload: author,
+    executionContext,
   }));
 
   const mediaDeltas = (Array.isArray(records.mediaAssets) ? records.mediaAssets : []).map((asset) => ({
@@ -823,6 +833,7 @@ function buildWorkbenchRecordDeltas(activeTask = {}, pluginRunId = '', resultSum
     externalRecordId: String(asset.assetId || asset.sourceUrl || asset.localPath || '').trim(),
     sequence: nextSequence(),
     payload: asset,
+    executionContext,
   }));
 
   return [
@@ -1429,12 +1440,19 @@ export function createTaskPoller(deps = {}) {
         errorMessage: String(error?.message || error || 'capability_check_failed'),
       });
       if (isRecoverable && typeof deps.enqueueEvent === 'function') {
+        const executorInstanceId = await resolveExecutorInstanceId();
         await deps.enqueueEvent({
           taskId: task.id,
           pluginRunId: '',
           eventType: recoveryStatus.eventType,
           source: WORKBENCH_EVENT_SOURCE.PLUGIN,
           sequence: Date.now(),
+          ...buildLeaseEventFields({
+            task,
+            lease,
+            executorInstanceId,
+            accountId: preCheck?.accountId,
+          }),
           payload: {
             reason: 'connection_interrupted',
             message: recoveryStatus.message,
@@ -1738,6 +1756,19 @@ export function createTaskPoller(deps = {}) {
     return String(activeTask.pluginRunId || activeTask.externalTaskId || activeTask.taskId || '').trim();
   }
 
+  function executionContextForTask(activeTask = {}) {
+    const lease = state.activeLease ? normalizeLeaseSnapshot(state.activeLease) : {};
+    return {
+      attemptId: String(lease.attemptId || activeTask.attemptId || '').trim(),
+      leaseToken: String(lease.leaseToken || '').trim(),
+      leaseEpoch: toOptionalInteger(lease.leaseEpoch ?? activeTask.leaseEpoch),
+      pageFingerprint: activeTask.pageFingerprint || null,
+      stationId: String(activeTask.executorInstanceId || '').trim(),
+      accountId: String(activeTask.accountId || '').trim(),
+      platform: String(activeTask.platform || '').trim(),
+    };
+  }
+
   async function enqueueTaskEvent(activeTask, eventType, payload = {}, options = {}) {
     if (!activeTask || typeof deps.enqueueEvent !== 'function') return null;
     const sequence = options.sequence || getNow();
@@ -1756,6 +1787,7 @@ export function createTaskPoller(deps = {}) {
         report: options.reportRuntime,
       }),
       snapshot: options.snapshot || null,
+      executionContext: executionContextForTask(activeTask),
     });
   }
 
@@ -2254,6 +2286,8 @@ export function createTaskPoller(deps = {}) {
       activeTask,
       pluginRunId || getPluginRunId(activeTask),
       resultSummary,
+      getNow(),
+      executionContextForTask(activeTask),
     );
     const failurePayload = mapped.status === 'failed'
       ? buildFailureEventPayload({

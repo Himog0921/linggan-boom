@@ -98,6 +98,28 @@ function hasFrozenExecutionIdentity(context = {}) {
   );
 }
 
+function explicitExecutionContext({
+  executionContext = null,
+  attemptId = '',
+  leaseToken = '',
+  leaseId = '',
+  leaseEpoch,
+  stationId = '',
+  accountId = '',
+  platform = '',
+} = {}) {
+  const provided = snapshotExecutionContext(executionContext);
+  return snapshotExecutionContext({
+    ...provided,
+    attemptId: provided.attemptId || attemptId,
+    leaseToken: provided.leaseToken || leaseToken || leaseId,
+    leaseEpoch: provided.leaseEpoch ?? leaseEpoch,
+    stationId: provided.stationId || stationId,
+    accountId: provided.accountId || accountId,
+    platform: provided.platform || platform,
+  });
+}
+
 export function createDeltaOutbox({
   store,
   commitDelta,
@@ -228,12 +250,22 @@ export function createDeltaOutbox({
       return null;
     }
     let executionContext = snapshotExecutionContext(row.executionContext);
-    if (Object.keys(executionContext).length === 0 && typeof getTaskExecutionContext === 'function') {
+    // Generic, non-task callers may still enrich their messages from a lookup.
+    // Task reporting must carry the lease identity from the producer instead:
+    // looking it up later can accidentally attach a result to a newer attempt.
+    if (!requireExecutionIdentity
+      && Object.keys(executionContext).length === 0
+      && typeof getTaskExecutionContext === 'function') {
       try {
         executionContext = snapshotExecutionContext(await getTaskExecutionContext(row.taskId));
       } catch {
         executionContext = {};
       }
+    }
+    if (requireExecutionIdentity && !hasFrozenExecutionIdentity(executionContext)) {
+      const error = new Error('task_report_context_missing');
+      error.retryable = false;
+      throw error;
     }
     const stored = await store.enqueue({
       ...row,
@@ -258,10 +290,13 @@ export function createDeltaOutbox({
     snapshot = null,
     occurredAt = '',
     attemptId = '',
+    leaseToken = '',
     leaseId = '',
+    leaseEpoch,
     stationId = '',
     accountId = '',
     platform = '',
+    executionContext = null,
   } = {}) {
     const normalizedSequence = normalizeSequence(sequence);
     const event = buildTaskEvent({
@@ -287,6 +322,16 @@ export function createDeltaOutbox({
       sequence: normalizedSequence,
       payload: event,
       snapshot,
+      executionContext: explicitExecutionContext({
+        executionContext,
+        attemptId,
+        leaseToken,
+        leaseId,
+        leaseEpoch,
+        stationId,
+        accountId,
+        platform,
+      }),
     });
   }
 
@@ -299,6 +344,7 @@ export function createDeltaOutbox({
     payload = {},
     collectedAt = '',
     snapshot = null,
+    executionContext = null,
   } = {}, { deferFlush = false } = {}) {
     const normalizedSequence = normalizeSequence(sequence);
     const preparedPayload = typeof prepareRecordPayload === 'function'
@@ -331,6 +377,7 @@ export function createDeltaOutbox({
       sequence: normalizedSequence,
       payload: record,
       snapshot,
+      executionContext: explicitExecutionContext({ executionContext }),
     }, { deferFlush });
   }
 

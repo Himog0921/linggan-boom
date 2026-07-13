@@ -2192,6 +2192,26 @@ test('task poller waits for terminal result package before enqueueing records', 
   assert.equal(finalResult.final, true);
   assert.equal(recordBatches.length, 1);
   assert.equal(recordBatches[0].length, 2);
+  assert.deepEqual(recordBatches[0].map((record) => record.executionContext), [
+    {
+      attemptId: 'attempt-terminal-records-only',
+      leaseToken: 'lease-terminal-records-only',
+      leaseEpoch: 2,
+      pageFingerprint: null,
+      stationId: '',
+      accountId: '',
+      platform: 'xhs',
+    },
+    {
+      attemptId: 'attempt-terminal-records-only',
+      leaseToken: 'lease-terminal-records-only',
+      leaseEpoch: 2,
+      pageFingerprint: null,
+      stationId: '',
+      accountId: '',
+      platform: 'xhs',
+    },
+  ]);
 });
 
 test('task poller refreshes the account execution lock while a task is running', async () => {

@@ -337,6 +337,39 @@ test('delta outbox never borrows a newer lease for legacy packets without frozen
   assert.match(legacyRow.errorMessage, /outbox_execution_context_missing/);
 });
 
+test('strict task outbox rejects a missing producer context without consulting a newer lease', async () => {
+  const store = createMemoryOutboxStore();
+  let lookupCalls = 0;
+  const outbox = createDeltaOutbox({
+    store,
+    requireExecutionIdentity: true,
+    getTaskExecutionContext: async () => {
+      lookupCalls += 1;
+      return {
+        attemptId: 'new-attempt-that-must-not-be-read',
+        leaseToken: 'new-lease-that-must-not-be-read',
+        leaseEpoch: 99,
+      };
+    },
+    commitDelta: async () => ({ success: true }),
+    autoFlush: false,
+  });
+
+  await assert.rejects(
+    outbox.enqueueEvent({
+      taskId: 'task_missing_producer_context',
+      pluginRunId: 'run_missing_producer_context',
+      eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED,
+      sequence: 1,
+      payload: { status: 'completed' },
+    }),
+    /task_report_context_missing/,
+  );
+
+  assert.equal(lookupCalls, 0);
+  assert.equal(store.rows.size, 0);
+});
+
 test('delta outbox drains an auto-scheduled terminal packet before flush resolves', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
@@ -421,6 +454,57 @@ test('delta outbox preserves explicit event execution identity fields', async ()
   assert.equal(event.stationId, 'station-release-1');
   assert.equal(event.accountId, 'account-release-1');
   assert.equal(event.platform, 'xhs');
+});
+
+test('strict task outbox commits records with producer-frozen execution identity', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  const outbox = createDeltaOutbox({
+    store,
+    requireExecutionIdentity: true,
+    getTaskExecutionContext: async () => {
+      throw new Error('strict task reporting must not do a late context lookup');
+    },
+    commitDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return {
+        success: true,
+        acceptedEventKeys: [],
+        acceptedRecordKeys: envelope.records.map((record) => record.idempotencyKey),
+        duplicateKeys: [],
+      };
+    },
+    autoFlush: false,
+  });
+
+  await outbox.enqueueRecord({
+    taskId: 'task_frozen_record_identity',
+    pluginRunId: 'run_frozen_record_identity',
+    recordType: 'note',
+    externalRecordId: 'note_frozen_identity',
+    sequence: 7,
+    payload: {
+      targetKey: 'xhs:note:note_frozen_identity',
+      platform: 'xhs',
+      noteId: 'note_frozen_identity',
+      observedAt: '2026-07-13T08:28:54.128Z',
+      title: '冻结身份测试',
+    },
+    executionContext: {
+      attemptId: 'attempt-frozen-record',
+      leaseToken: 'lease-frozen-record',
+      leaseEpoch: 2,
+      platform: 'xhs',
+    },
+  });
+
+  await outbox.flush();
+
+  assert.equal(envelopes.length, 1);
+  assert.equal(envelopes[0][1].attemptId, 'attempt-frozen-record');
+  assert.equal(envelopes[0][1].leaseToken, 'lease-frozen-record');
+  assert.equal(envelopes[0][1].leaseEpoch, 2);
+  assert.equal([...store.rows.values()][0].status, 'acked');
 });
 
 test('delta outbox prepares record payloads before storing them', async () => {

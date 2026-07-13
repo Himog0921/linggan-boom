@@ -958,6 +958,7 @@ async function enqueueWorkbenchProgressEvent(message = {}, sender = {}) {
   const progressEvent = normalizeProgressEvent(message.progressEvent || message);
   const pluginRunId = getActivePluginRunId(activeTask, message);
   if (!pluginRunId) return;
+  const executionContext = getCurrentTaskExecutionContext(activeTask.taskId);
   await taskDeltaReporter.enqueueEvent({
     taskId: activeTask.taskId,
     pluginRunId,
@@ -977,6 +978,7 @@ async function enqueueWorkbenchProgressEvent(message = {}, sender = {}) {
         : undefined,
       latestHeartbeatAt: new Date(progressEvent.heartbeatAt || Date.now()).toISOString(),
     },
+    executionContext,
   });
 }
 
@@ -1824,6 +1826,7 @@ const bgHandlers = {
       };
     }
 
+    const executionContext = getCurrentTaskExecutionContext(activeTask.taskId);
     const incomingRecords = Array.isArray(msg.records) && msg.records.length > 0
       ? msg.records
       : [msg];
@@ -1840,6 +1843,7 @@ const bgHandlers = {
           sequence: Number(item.sequence || Date.now()),
           payload: record,
           collectedAt: String(item.collectedAt || ''),
+          executionContext,
         };
       })
       .filter(Boolean);
@@ -1868,6 +1872,7 @@ const bgHandlers = {
       return { success: false, skipped: true, error: 'no_active_workbench_task' };
     }
     const pluginRunId = getActivePluginRunId(activeTask, msg);
+    const executionContext = getCurrentTaskExecutionContext(activeTask.taskId);
     const controlAction = String(msg.controlAction || '').trim();
     const status = String(msg.status || '').trim();
     const sequence = Date.now();
@@ -1892,6 +1897,7 @@ const bgHandlers = {
         message: String(msg.message || ''),
         occurredAt: msg.occurredAt || new Date(sequence).toISOString(),
       },
+      executionContext,
     });
     await taskDeltaReporter.enqueueEvent({
       taskId: activeTask.taskId,
@@ -1910,6 +1916,7 @@ const bgHandlers = {
         status,
         latestHeartbeatAt: new Date(sequence).toISOString(),
       },
+      executionContext,
     });
     return { success: true };
   },
@@ -2361,7 +2368,6 @@ const taskDeltaReporter = createTaskDeltaReporter({
   },
   shouldPollWorkbenchTasks,
   getExecutorInstanceId: getPersistentExecutorInstanceId,
-  getTaskExecutionContext: (taskId) => getCurrentTaskExecutionContext(taskId),
 });
 
 const executionAccountLockManager = createExecutionAccountLockManager({

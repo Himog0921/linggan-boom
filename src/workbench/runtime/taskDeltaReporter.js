@@ -12,7 +12,6 @@ export function createTaskDeltaReporter({
   shouldPollWorkbenchTasks = () => true,
   executorInstanceId = '',
   getExecutorInstanceId = null,
-  getTaskExecutionContext = null,
   autoFlush = true,
   requireExecutionIdentity = true,
 } = {}) {
@@ -20,7 +19,6 @@ export function createTaskDeltaReporter({
     store,
     executorInstanceId,
     getExecutorInstanceId,
-    getTaskExecutionContext,
     autoFlush,
     requireExecutionIdentity,
     prepareRecordPayload: async (record) => {
