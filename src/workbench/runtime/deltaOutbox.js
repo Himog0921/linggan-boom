@@ -31,10 +31,23 @@ function createCursor(rows = []) {
   return maxSequence ? `local-outbox-seq-${maxSequence}` : '';
 }
 
+function executionContextKey(row = {}) {
+  const context = normalizeObject(row.executionContext);
+  return [
+    normalizeText(context.attemptId),
+    normalizeText(context.leaseToken),
+    Number.isFinite(Number(context.leaseEpoch)) ? Math.floor(Number(context.leaseEpoch)) : '',
+  ].join('\u0001');
+}
+
 function groupRows(rows = []) {
   const grouped = new Map();
   for (const row of rows) {
-    const key = `${normalizeText(row.taskId)}\u0000${normalizeText(row.pluginRunId)}`;
+    const key = [
+      normalizeText(row.taskId),
+      normalizeText(row.pluginRunId),
+      executionContextKey(row),
+    ].join('\u0000');
     if (!grouped.has(key)) grouped.set(key, []);
     grouped.get(key).push(row);
   }
@@ -56,6 +69,35 @@ function rowToRecord(row = {}) {
   return normalizeObject(row.payload);
 }
 
+function snapshotExecutionContext(value = {}) {
+  const source = normalizeObject(value);
+  const context = {};
+  const attemptId = normalizeText(source.attemptId);
+  const leaseToken = normalizeText(source.leaseToken);
+  const leaseEpoch = Number(source.leaseEpoch);
+  const stationId = normalizeText(source.stationId);
+  const accountId = normalizeText(source.accountId);
+  const platform = normalizeText(source.platform);
+  if (attemptId) context.attemptId = attemptId;
+  if (leaseToken) context.leaseToken = leaseToken;
+  if (Number.isFinite(leaseEpoch)) context.leaseEpoch = Math.floor(leaseEpoch);
+  if (stationId) context.stationId = stationId;
+  if (accountId) context.accountId = accountId;
+  if (platform) context.platform = platform;
+  if (source.pageFingerprint && typeof source.pageFingerprint === 'object' && !Array.isArray(source.pageFingerprint)) {
+    context.pageFingerprint = { ...source.pageFingerprint };
+  }
+  return context;
+}
+
+function hasFrozenExecutionIdentity(context = {}) {
+  return Boolean(
+    normalizeText(context.attemptId)
+    && normalizeText(context.leaseToken)
+    && Number.isFinite(Number(context.leaseEpoch)),
+  );
+}
+
 export function createDeltaOutbox({
   store,
   commitDelta,
@@ -65,6 +107,7 @@ export function createDeltaOutbox({
   prepareRecordPayload = null,
   batchLimit = 250,
   autoFlush = true,
+  requireExecutionIdentity = false,
 } = {}) {
   const state = {
     flushing: false,
@@ -92,9 +135,17 @@ export function createDeltaOutbox({
         const resolvedExecutorInstanceId = typeof getExecutorInstanceId === 'function'
           ? normalizeText(await getExecutorInstanceId())
           : normalizeText(executorInstanceId);
-        const executionContext = typeof getTaskExecutionContext === 'function'
-          ? normalizeObject(await getTaskExecutionContext(first.taskId))
-          : {};
+        const persistedExecutionContext = snapshotExecutionContext(first.executionContext);
+        // A queued row belongs to the lease that existed when it was produced.
+        // Task reporting cannot legally recover a legacy packet by borrowing a
+        // later attempt's execution right.
+        if (requireExecutionIdentity && !hasFrozenExecutionIdentity(persistedExecutionContext)) {
+          const error = new Error('outbox_execution_context_missing');
+          error.retryable = false;
+          await store.markTerminal?.(ids, error);
+          continue;
+        }
+        const executionContext = persistedExecutionContext;
         const leaseEpoch = Number(executionContext.leaseEpoch);
         const envelope = buildCommitEnvelope({
           taskId: first.taskId,
@@ -137,13 +188,6 @@ export function createDeltaOutbox({
       return { success, sent };
     } finally {
       state.flushing = false;
-      state.currentFlush = null;
-      if (state.scheduled) {
-        state.scheduled = false;
-        queueMicrotask(() => {
-          void flush();
-        });
-      }
     }
   }
 
@@ -152,7 +196,23 @@ export function createDeltaOutbox({
       state.scheduled = true;
       return state.currentFlush;
     }
-    const flushPromise = runFlush();
+    const flushPromise = (async () => {
+      let aggregate = null;
+      do {
+        state.scheduled = false;
+        const result = await runFlush();
+        if (!aggregate) {
+          aggregate = { ...result };
+        } else {
+          aggregate = {
+            ...result,
+            success: aggregate.success !== false && result.success !== false,
+            sent: Number(aggregate.sent || 0) + Number(result.sent || 0),
+          };
+        }
+      } while (state.scheduled);
+      return aggregate || { success: true, idle: true };
+    })();
     state.currentFlush = flushPromise;
     try {
       return await flushPromise;
@@ -167,7 +227,18 @@ export function createDeltaOutbox({
     if (!store || typeof store.enqueue !== 'function') {
       return null;
     }
-    const stored = await store.enqueue(row);
+    let executionContext = snapshotExecutionContext(row.executionContext);
+    if (Object.keys(executionContext).length === 0 && typeof getTaskExecutionContext === 'function') {
+      try {
+        executionContext = snapshotExecutionContext(await getTaskExecutionContext(row.taskId));
+      } catch {
+        executionContext = {};
+      }
+    }
+    const stored = await store.enqueue({
+      ...row,
+      ...(Object.keys(executionContext).length > 0 ? { executionContext } : {}),
+    });
     if (autoFlush && !deferFlush) {
       queueMicrotask(() => {
         void flush();

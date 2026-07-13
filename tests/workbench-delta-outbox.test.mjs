@@ -258,6 +258,132 @@ test('delta outbox attaches lease credentials and page fingerprint to commit env
   });
 });
 
+test('delta outbox retains execution identity when a terminal packet flushes after local cleanup', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  let executionContext = {
+    attemptId: 'attempt-terminal-identity',
+    leaseToken: 'lease-terminal-identity',
+    leaseEpoch: 7,
+    pageFingerprint: { platform: 'xhs', pageType: 'author' },
+  };
+  const outbox = createDeltaOutbox({
+    store,
+    getTaskExecutionContext: async () => executionContext,
+    commitDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    autoFlush: false,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_terminal_identity',
+    pluginRunId: 'run_terminal_identity',
+    eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED,
+    sequence: 1,
+    payload: { status: 'completed' },
+  });
+
+  executionContext = {};
+  await outbox.flush();
+
+  assert.equal(envelopes.length, 1);
+  assert.equal(envelopes[0][1].attemptId, 'attempt-terminal-identity');
+  assert.equal(envelopes[0][1].leaseToken, 'lease-terminal-identity');
+  assert.equal(envelopes[0][1].leaseEpoch, 7);
+});
+
+test('delta outbox never borrows a newer lease for legacy packets without frozen execution identity', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  await store.enqueue({
+    taskId: 'task_legacy_identity',
+    pluginRunId: 'run_legacy_identity',
+    idempotencyKey: 'legacy-event-1',
+    kind: 'event',
+    sequence: 1,
+    payload: {
+      idempotencyKey: 'legacy-event-1',
+      eventType: WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED,
+      type: WORKBENCH_TASK_EVENT_TYPE.TASK_COMPLETED,
+    },
+  });
+  const outbox = createDeltaOutbox({
+    store,
+    getTaskExecutionContext: async () => ({
+      attemptId: 'new-attempt-that-must-not-be-borrowed',
+      leaseToken: 'new-lease-that-must-not-be-borrowed',
+      leaseEpoch: 9,
+    }),
+    commitDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      return { success: true, acceptedEventKeys: ['legacy-event-1'] };
+    },
+    autoFlush: false,
+    requireExecutionIdentity: true,
+  });
+
+  await outbox.flush();
+
+  assert.equal(envelopes.length, 0);
+  const legacyRow = store.rows.get('legacy-event-1');
+  assert.equal(legacyRow.status, 'failed_terminal');
+  assert.match(legacyRow.errorMessage, /outbox_execution_context_missing/);
+});
+
+test('delta outbox drains an auto-scheduled terminal packet before flush resolves', async () => {
+  const store = createMemoryOutboxStore();
+  const envelopes = [];
+  let outbox;
+  outbox = createDeltaOutbox({
+    store,
+    getTaskExecutionContext: async () => ({
+      attemptId: 'attempt-drain',
+      leaseToken: 'lease-drain',
+      leaseEpoch: 8,
+    }),
+    commitDelta: async (taskId, envelope) => {
+      envelopes.push([taskId, envelope]);
+      if (envelope.events.some((event) => event.eventType === 'first')) {
+        await outbox.enqueueEvent({
+          taskId,
+          pluginRunId: 'run-drain',
+          eventType: 'terminal',
+          sequence: 2,
+          payload: { status: 'completed' },
+        });
+      }
+      return {
+        success: true,
+        acceptedEventKeys: envelope.events.map((event) => event.idempotencyKey),
+        acceptedRecordKeys: [],
+        duplicateKeys: [],
+      };
+    },
+    autoFlush: true,
+  });
+
+  await outbox.enqueueEvent({
+    taskId: 'task_drain',
+    pluginRunId: 'run-drain',
+    eventType: 'first',
+    sequence: 1,
+    payload: { status: 'running' },
+  });
+
+  await outbox.flush();
+
+  assert.equal(envelopes.length, 2);
+  assert.equal(envelopes[1][1].events[0].eventType, 'terminal');
+  assert.equal(envelopes[1][1].attemptId, 'attempt-drain');
+});
+
 test('delta outbox preserves explicit event execution identity fields', async () => {
   const store = createMemoryOutboxStore();
   const envelopes = [];
