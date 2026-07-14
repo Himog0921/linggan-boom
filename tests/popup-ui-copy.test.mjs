@@ -204,7 +204,8 @@ test('popup execution station diagnostics expose local runtime state in user-fac
   assert.match(componentSource, /工位编号/);
   assert.match(componentSource, /当前任务/);
   assert.match(componentSource, /本机锁/);
-  assert.match(componentSource, /待发送事件/);
+  assert.match(componentSource, /待发送/);
+  assert.match(componentSource, /死信（不再自动发送）/);
   assert.match(componentSource, /工位诊断/);
   assert.match(componentSource, /页面权限正常/);
   assert.match(componentSource, /缺少页面权限/);

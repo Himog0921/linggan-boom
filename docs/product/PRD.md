@@ -648,7 +648,7 @@ flowchart TB
 flowchart LR
     subgraph 内容工作台
         API1["POST /api/plugin-authorizations/activate"]
-        API2["POST /api/collect/batch"]
+        API2["POST /api/execution-tasks/manual-import"]
         API3["POST /api/media-assets/cover"]
         API4["POST /api/execution-stations/sync"]
         API5["POST /api/execution-stations/sync<br/>progress_update"]

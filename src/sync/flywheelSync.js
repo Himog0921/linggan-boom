@@ -410,16 +410,32 @@ async function throwForWorkbenchHttpError(response, fallbackMessage = 'workbench
 function normalizeSource(s) {
   const rawData = s.rawData || s;
   const qualityReason = s?.qualityReason ?? rawData?.qualityReason;
+  const platformContentId = s.noteId || s.platformContentId || s.platformId || s.id;
+  const embeddedComments = [
+    s.commentsData,
+    s.comments,
+    rawData?.commentsData,
+    rawData?.comments,
+  ].find(Array.isArray) || [];
+  const commentCount = s.metrics?.comments
+    ?? s.comments_count
+    ?? s.commentCount
+    ?? (typeof s.comments === 'number' || typeof s.comments === 'string' ? s.comments : undefined);
   const normalized = {
+    ...rawData,
+    ...s,
     platform: s.platform || 'xhs',
-    platformId: s.noteId || s.platformId || s.id,
+    noteId: s.noteId || platformContentId,
+    platformContentId,
+    platformId: platformContentId,
     url: s.url,
     title: s.title,
+    content: s.content || s.bodyText || s.desc,
     bodyText: s.content || s.bodyText || s.desc,
     coverUrl: s.coverImage || s.coverUrl,
     likes: s.metrics?.likes || s.likes,
     collects: s.metrics?.collects || s.collects,
-    comments: s.metrics?.comments || s.comments,
+    comments: commentCount,
     shares: s.metrics?.shares || s.shares,
     authorId: s.author?.id || s.authorId,
     authorName: s.author?.name || s.authorName,
@@ -428,7 +444,7 @@ function normalizeSource(s) {
     sourceTier: String(s?.sourceTier ?? rawData?.sourceTier ?? '').trim(),
     collectionRunId: String(s?.collectionRunId ?? rawData?.collectionRunId ?? '').trim(),
     rawData,
-    commentsData: s.comments || s.commentsData,
+    commentsData: embeddedComments,
   };
   return enrichNoteWithDataFoundationPayload(normalized, {
     source: 'plugin_manual_sync',
@@ -437,30 +453,134 @@ function normalizeSource(s) {
   });
 }
 
-async function sendBatch(batchSources, tag, operator) {
-  const config = await readFlywheelStorage();
-  const dataConfig = await ensureFlywheelDataSession(config);
-  const preparedSources = await prepareNotesWithStableCovers(dataConfig, batchSources);
-  const response = await fetchFlywheel('/api/collect/batch', {
+const MANUAL_IMPORT_BATCH_SIZE = 50;
+
+function createManualImportBatches(records = {}, batchSize = MANUAL_IMPORT_BATCH_SIZE) {
+  const entries = [
+    ...(Array.isArray(records.notes) ? records.notes.map((record) => ['notes', record]) : []),
+    ...(Array.isArray(records.comments) ? records.comments.map((record) => ['comments', record]) : []),
+    ...(Array.isArray(records.authors) ? records.authors.map((record) => ['authors', record]) : []),
+  ];
+  const batches = [];
+  for (let index = 0; index < entries.length; index += batchSize) {
+    const batch = { notes: [], comments: [], authors: [] };
+    for (const [kind, record] of entries.slice(index, index + batchSize)) {
+      batch[kind].push(record);
+    }
+    batches.push(batch);
+  }
+  return batches;
+}
+
+function embeddedCommentsFromNotes(notes = []) {
+  return notes.flatMap((note) => {
+    if (!Array.isArray(note?.commentsData)) return [];
+    return note.commentsData.map((comment) => ({
+      ...comment,
+      platform: comment?.platform || note.platform || 'xhs',
+      noteId: comment?.noteId || comment?.contentId || note.noteId || note.platformContentId,
+    }));
+  });
+}
+
+function emptyManualImportMeta() {
+  return {
+    notesReceived: 0,
+    notesImported: 0,
+    notesSkipped: 0,
+    commentsReceived: 0,
+    commentsRegistered: 0,
+    commentsSkipped: 0,
+    commentsInvalid: 0,
+    authorsReceived: 0,
+    authorsIngested: 0,
+    jobs: [],
+  };
+}
+
+function mergeManualImportMeta(total, incoming = {}) {
+  const next = { ...total };
+  for (const key of Object.keys(total)) {
+    if (key === 'jobs') continue;
+    next[key] = Number(total[key] || 0) + Number(incoming[key] || 0);
+  }
+  next.jobs = [...(total.jobs || []), ...(Array.isArray(incoming.jobs) ? incoming.jobs : [])];
+  return next;
+}
+
+async function sendManualImportBatch(dataConfig, records, metadata = {}) {
+  const response = await fetchFlywheel('/api/execution-tasks/manual-import', {
     ...dataConfig,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      sources: preparedSources.map(normalizeSource),
-      tag,
-      operator,
-      timestamp: new Date().toISOString(),
+      source: 'plugin_manual_sync',
+      result: { records },
+      metadata,
     }),
+    timeoutMs: 45000,
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
-    throw new Error(error.error || `HTTP ${response.status}`);
+    await throwForWorkbenchHttpError(response, 'plugin_manual_import_failed');
   }
 
   return response.json();
+}
+
+export async function syncManualRecordsToWorkbench(config = {}, records = {}, metadata = {}) {
+  const dataConfig = await ensureFlywheelDataSession(config);
+  const preparedNotes = await prepareNotesWithStableCovers(
+    dataConfig,
+    Array.isArray(records.notes) ? records.notes : [],
+  );
+  const normalizedNotes = preparedNotes.map(normalizeSource);
+  const normalizedRecords = {
+    notes: normalizedNotes,
+    comments: [
+      ...(Array.isArray(records.comments) ? records.comments : []),
+      ...embeddedCommentsFromNotes(normalizedNotes),
+    ],
+    authors: Array.isArray(records.authors) ? records.authors : [],
+  };
+  const batches = createManualImportBatches(normalizedRecords);
+  if (batches.length === 0) {
+    return { success: true, imported: 0, skipped: 0, details: [], meta: emptyManualImportMeta() };
+  }
+
+  let imported = 0;
+  let skipped = 0;
+  let meta = emptyManualImportMeta();
+  const details = [];
+  const errors = [];
+  let successfulBatchCount = 0;
+
+  for (const batch of batches) {
+    try {
+      const result = await sendManualImportBatch(dataConfig, batch, metadata);
+      successfulBatchCount += 1;
+      imported += Number(result.imported) || 0;
+      skipped += Number(result.skipped) || 0;
+      meta = mergeManualImportMeta(meta, result.meta);
+      if (Array.isArray(result.sources)) details.push(...result.sources);
+    } catch (error) {
+      errors.push(String(error?.message || error || 'plugin_manual_import_failed'));
+    }
+  }
+
+  if (errors.length > 0 && successfulBatchCount === 0) {
+    return { success: false, imported, skipped, details, meta, error: errors.join('; ') };
+  }
+  return {
+    success: true,
+    imported,
+    skipped,
+    details,
+    meta,
+    ...(errors.length > 0 ? { partial: true, error: errors.join('; ') } : {}),
+  };
 }
 
 /**
@@ -471,62 +591,12 @@ async function sendBatch(batchSources, tag, operator) {
  * @returns {Promise<{success: boolean, imported?: number, skipped?: number, error?: string}>}
  */
 export async function syncToFlywheel(sources, tag = 'evaluate', operator = 'anonymous') {
-  const BATCH_SIZE = 50;
-  const total = sources.length;
-
-  if (total === 0) {
-    return { success: true, imported: 0, skipped: 0, details: [] };
-  }
-
-  let imported = 0;
-  let skipped = 0;
-  const details = [];
-  const batchErrors = [];
-  let successfulBatchCount = 0;
-
-  for (let i = 0; i < total; i += BATCH_SIZE) {
-    const batch = sources.slice(i, i + BATCH_SIZE);
-    try {
-      const result = await sendBatch(batch, tag, operator);
-      successfulBatchCount += 1;
-      imported += Number(result.imported) || 0;
-      skipped += Number(result.skipped) || 0;
-      if (Array.isArray(result.sources)) {
-        details.push(...result.sources);
-      }
-    } catch (error) {
-      console.error(`Sync batch ${Math.floor(i / BATCH_SIZE) + 1} failed:`, error);
-      batchErrors.push(error.message);
-    }
-  }
-
-  if (batchErrors.length > 0) {
-    if (successfulBatchCount > 0) {
-      return {
-        success: true,
-        imported,
-        skipped,
-        details,
-        error: batchErrors.join('; '),
-        partial: true,
-      };
-    }
-    return {
-      success: false,
-      imported,
-      skipped,
-      details,
-      error: batchErrors.join('; '),
-      partial: successfulBatchCount > 0,
-    };
-  }
-
-  return {
-    success: true,
-    imported,
-    skipped,
-    details,
-  };
+  const config = await readFlywheelStorage();
+  return syncManualRecordsToWorkbench(
+    config,
+    { notes: Array.isArray(sources) ? sources : [], comments: [], authors: [] },
+    { tag, operator },
+  );
 }
 
 export async function testConnection(serverUrl = '') {

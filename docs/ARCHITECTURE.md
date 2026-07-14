@@ -255,7 +255,7 @@ idle → running ⇄ paused → stopping → done / error
 ```
 内容工作台 (Next.js)
   POST /api/plugin-authorizations/activate      → 激活插件授权
-  POST /api/collect/batch                     ← 插件推送数据
+  POST /api/execution-tasks/manual-import    ← 插件手动同步，先留原始证据再归并
   POST /api/media-assets/cover                ← 插件上传封面图片本体，工作台返回稳定资产地址
   POST /api/execution-stations/sync           → 工位轻量同步、信箱检查、对账与接单
   POST /api/collection-tasks/[id]/lease       ← 执行工位续租

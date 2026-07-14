@@ -7,11 +7,16 @@ import {
   mapCommentToFlywheel,
   mapAuthorToFlywheel,
 } from '../src/popup/utils.js';
-import { saveFlywheelConfig, syncToFlywheel } from '../src/sync/flywheelSync.js';
+import {
+  saveFlywheelConfig,
+  syncManualRecordsToWorkbench,
+  syncToFlywheel,
+} from '../src/sync/flywheelSync.js';
 
 const popupAppSourcePath = new URL('../src/popup/App.jsx', import.meta.url);
 const popupUtilsSourcePath = new URL('../src/popup/utils.js', import.meta.url);
 const backgroundSourcePath = new URL('../src/background/index.js', import.meta.url);
+const flywheelSyncSourcePath = new URL('../src/sync/flywheelSync.js', import.meta.url);
 
 test('popup flywheel mappers preserve quality fields and collectionRunId', () => {
   const note = mapNoteToFlywheel({
@@ -90,11 +95,12 @@ test('syncToFlywheel posts quality fields and collectionRunId in batch payload',
     assert.equal(calls.length, 1);
 
     const payload = JSON.parse(calls[0][1].body);
-    assert.equal(payload.sources[0].dataQuality, 'seed');
-    assert.equal(payload.sources[0].qualityReason, 'search_summary_seed');
-    assert.equal(payload.sources[0].sourceTier, 'seed');
-    assert.equal(payload.sources[0].collectionRunId, 'run_note_1');
-    assert.equal(payload.sources[0].rawData.collectionRunId, 'run_note_1');
+    assert.equal(payload.result.records.notes[0].dataQuality, 'seed');
+    assert.equal(payload.result.records.notes[0].qualityReason, 'search_summary_seed');
+    assert.equal(payload.result.records.notes[0].sourceTier, 'seed');
+    assert.equal(payload.result.records.notes[0].collectionRunId, 'run_note_1');
+    assert.equal(payload.result.records.notes[0].rawData.collectionRunId, 'run_note_1');
+    assert.match(calls[0][0], /\/api\/execution-tasks\/manual-import$/);
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -129,6 +135,72 @@ test('syncToFlywheel keeps partial batch success when a later batch fails', asyn
     assert.equal(result.imported, 50);
     assert.equal(result.skipped, 0);
     assert.deepEqual(result.details, []);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('manual workbench sync carries comment-only and author-only records', async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options]);
+    return new Response(JSON.stringify({
+      imported: 2,
+      skipped: 0,
+      meta: {
+        commentsReceived: 1,
+        commentsRegistered: 1,
+        authorsReceived: 1,
+        authorsIngested: 1,
+      },
+    }), { status: 200 });
+  };
+
+  try {
+    const result = await syncManualRecordsToWorkbench(
+      { serverUrl: 'http://localhost:3000' },
+      {
+        comments: [{ commentId: 'comment_1', text: '求方法', platform: 'xhs' }],
+        authors: [{ userId: 'author_1', name: '作者', platform: 'xhs' }],
+      },
+    );
+    const payload = JSON.parse(calls[0][1].body);
+
+    assert.equal(result.success, true);
+    assert.equal(payload.result.records.notes.length, 0);
+    assert.equal(payload.result.records.comments[0].commentId, 'comment_1');
+    assert.equal(payload.result.records.authors[0].userId, 'author_1');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('manual workbench sync separates embedded comment records from the note comment count', async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options]);
+    return new Response(JSON.stringify({ imported: 2, skipped: 0, meta: {} }), { status: 200 });
+  };
+
+  try {
+    await syncManualRecordsToWorkbench(
+      { serverUrl: 'http://localhost:3000' },
+      {
+        notes: [{
+          noteId: 'note_with_comments',
+          platform: 'xhs',
+          comments_count: 12,
+          comments: [{ commentId: 'embedded_comment', text: '想看后续' }],
+        }],
+      },
+    );
+    const payload = JSON.parse(calls[0][1].body);
+
+    assert.equal(payload.result.records.notes[0].comments, 12);
+    assert.equal(payload.result.records.comments[0].commentId, 'embedded_comment');
+    assert.equal(payload.result.records.comments[0].noteId, 'note_with_comments');
   } finally {
     globalThis.fetch = originalFetch;
   }
@@ -193,12 +265,17 @@ test('syncToFlywheel reads apiToken from flywheel config instead of hardcoded to
   }
 });
 
-test('background workbench sync sends browser login credentials with authorized uploads', async () => {
-  const source = await fs.readFile(backgroundSourcePath, 'utf8');
+test('background workbench sync delegates to the shared authorized manual importer', async () => {
+  const [backgroundSource, syncSource] = await Promise.all([
+    fs.readFile(backgroundSourcePath, 'utf8'),
+    fs.readFile(flywheelSyncSourcePath, 'utf8'),
+  ]);
 
-  assert.match(source, /ensureFlywheelDataSession/);
-  assert.match(source, /\/api\/collect\/batch[\s\S]*credentials:\s*'include'/);
-  assert.match(source, /X-Plugin-Data-Token/);
+  assert.match(backgroundSource, /syncManualRecordsToWorkbench/);
+  assert.match(syncSource, /ensureFlywheelDataSession/);
+  assert.match(syncSource, /\/api\/execution-tasks\/manual-import/);
+  assert.match(syncSource, /credentials:\s*'include'/);
+  assert.match(syncSource, /X-Plugin-Data-Token/);
 });
 
 test('popup app uses shared flywheel mappers from utils instead of local duplicates', async () => {

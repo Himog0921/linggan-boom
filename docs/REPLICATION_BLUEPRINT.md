@@ -674,7 +674,7 @@ record: {taskId}:{pluginRunId}:record:{recordType}:{externalRecordId || sequence
 | GET  | `/api/collection-tasks/:taskId/control-requests?executorInstanceId=<id>&after=<cursor>` | 带游标拉取 |
 | PATCH| `/api/collection-tasks/:taskId` | 状态更新 |
 | POST | `/api/media-assets/cover` | 上传封面图片本体，返回稳定 `publicUrl` |
-| POST | `/api/collect/batch` | 旧式批量推送（仍存在）|
+| POST | `/api/execution-tasks/manual-import` | 手动同步笔记、评论、博主；建立只导入不派单的可追踪任务 |
 | POST | `/api/plugin-data-workspace` | 绑定当前登录使用者账号（普通同步前必走）|
 | GET  | `/api/push/vapid-public-key` | Web Push 公钥 |
 | POST | `/api/execution-stations/push-subscription` | 注册 push 订阅 |

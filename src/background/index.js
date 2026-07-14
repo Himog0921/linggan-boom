@@ -5,10 +5,9 @@ import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
-  ensureFlywheelDataSession,
-  prepareNotesWithStableCovers,
   prepareRecordWithStableCover,
   mergeFlywheelAuthorization,
+  syncManualRecordsToWorkbench,
 } from '../sync/flywheelSync.js';
 import { validateCapabilityCheck, validateTaskControl, validateTaskEnvelope } from '../workbench/protocol/validator.js';
 import {
@@ -1364,16 +1363,12 @@ const bgHandlers = {
 
     const authorization = authorizationStatus.authorization || {};
     const config = mergeFlywheelAuthorization(await getFlywheelConfig(), authorization);
-    const serverUrl = config?.serverUrl || 'https://lingganboom.fun';
     const authorizationToken = String(config?.apiToken || '').trim();
-
-    const url = serverUrl.replace(/\/+$/, '').replace(/^(?!https?:\/\/)/, 'http://');
-    let dataConfig;
     try {
-      dataConfig = await ensureFlywheelDataSession({
+      return await syncManualRecordsToWorkbench({
         ...config,
         apiToken: authorizationToken,
-      });
+      }, { notes, comments, authors });
     } catch (error) {
       return {
         success: false,
@@ -1381,31 +1376,6 @@ const bgHandlers = {
         errorCode: 'plugin_data_workspace_required',
       };
     }
-    const preparedNotes = await prepareNotesWithStableCovers(dataConfig, notes);
-    const resp = await fetch(`${url}/api/collect/batch`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(authorizationToken ? { Authorization: `Bearer ${authorizationToken}` } : {}),
-        ...(dataConfig?.dataToken ? { 'X-Plugin-Data-Token': dataConfig.dataToken } : {}),
-      },
-      body: JSON.stringify({ notes: preparedNotes, comments, authors }),
-      signal: AbortSignal.timeout(30000),
-    });
-
-    if (!resp.ok) {
-      const text = await resp.text().catch(() => '');
-      return { success: false, error: `Server returned ${resp.status}: ${text}` };
-    }
-
-    const data = await resp.json();
-    return {
-      success: true,
-      imported: data.imported || 0,
-      skipped: data.skipped || 0,
-      meta: data.meta || {},
-    };
   },
 
   [MSG.TEST_FLYWHEEL_CONNECTION]: async (msg) => {
