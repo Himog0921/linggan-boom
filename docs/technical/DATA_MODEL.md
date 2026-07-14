@@ -204,8 +204,30 @@
 | `attemptCount` | number | 上传尝试次数 |
 | `nextAttemptAt` | number | 下次允许上传时间 |
 | `errorMessage` | string | 最近一次失败原因 |
+| `executionContext` | object | 冻结的执行身份（`attemptId / leaseToken / leaseEpoch / stationId / accountId / platform / pageFingerprint`）。2026-07-13 事故根因：此前 normalize 落库时丢弃该字段，严格校验在发 HTTP 前把行判成 `failed_terminal`。必须原样持久化（有 fake-indexeddb 回归测试保护） |
 | `createdAt` | number | 创建时间 |
 | `updatedAt` | number | 最近更新时间 |
+
+状态语义（2026-07-13 分账）：`pending / in_flight / failed`（可重试）计入「待发送」；`failed_terminal` 是死信——不再自动发送、不计入待发送，只能经恢复导出 → `plugin_local_recovery` 找回。`countsByStatus()` 提供分桶计数与最老时间，`listDeadLetters()` 供导出。
+
+### captureJournal
+
+采集事实账本（2026-07-13 架构升级，报告 §9.2）：record 类采集内容在入 outbox 之前先落此表，与租约有效性解耦，append-only 不可变；即使出站行被判死信，事实仍在。修剪只清「已被服务端 ACK + 超 14 天」条目（background 每 6 小时）。
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `entryId` | string (PK) | = outbox 行的 `idempotencyKey` |
+| `taskId` | string | 内容工作台任务 ID |
+| `pluginRunId` | string | 插件本地执行 ID |
+| `kind` | string | 目前只journal `record` |
+| `recordType` | string | `note / comment / author` 等 |
+| `externalRecordId` | string | 平台侧记录 ID |
+| `payload` | object | 采集内容原文 |
+| `payloadHash` | string | canonical JSON 的 sha-256 hex |
+| `capturedAt` | number | 采集时间 |
+| `executionContext` | object | 冻结执行身份（同 outbox） |
+| `pluginVersion` | string | 采集时插件版本 |
+| `createdAt` | number | 写入时间 |
 
 ### accounts
 
@@ -245,6 +267,7 @@
 | v11 | 新增 `accounts`，支持平台账号状态和多账号执行管理 |
 | v12 | `workbenchOutbox.idempotencyKey` 改为唯一索引，并在升级时清理重复 outbox 行 |
 | v13 | `notes / authors` 新增 `collectionRunId` 索引，避免按任务打包结果时全表扫描 |
+| v14 | 新增 `captureJournal` 采集事实账本（不可变、与租约解耦），2026-07-13 写回事故架构升级 |
 
 ## 当前模型的局限
 

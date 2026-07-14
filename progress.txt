@@ -211,3 +211,19 @@
   提交：插件 main c7e68db（2 files）；工作台修复恢复至 codex/bug 工作区待合并。
   验证：npm test 72/72 通过；npm run build 通过。
   待办：重载插件并触发监控轮次进行实机验证。
+
+[2026-07-14] 出站协议根治 v2.0.84（对应 07-13 写回事故 CTO 报告 §9-§11）
+  根因修复：workbenchOutboxStore.normalizeOutboxRow 落库时丢 executionContext，
+        严格校验在发 HTTP 前把记录判成 failed_terminal（服务端收不到 RawSnapshot）。
+  本轮改动（P1-P7，均 TDD 先红后绿）：
+  ① executionContext 原样持久化 + fake-indexeddb 真实 IndexedDB round-trip 回归测试
+  ② 死信分账：countUnsent 不再混入 failed_terminal；新增 countsByStatus/listDeadLetters
+  ③ Dexie v14 captureJournal 采集事实账本（append-only，与租约解耦，ACK+14天才修剪）
+  ④ EXPORT_OUTBOX_RECOVERY 只读恢复导出（对接工作台 plugin_local_recovery 导入）
+  ⑤ 面板：待发送/死信分开展示，死信红色告警 + 导出按钮
+  ⑥ 出站积压熔断 OUTBOX_BACKLOG_BLOCKED（>200 条或最老 >30 分钟拒接新单+自愈补发）
+  ⑦ 采集进度传输层封顶 95%，活跃任务显示「95%（等待服务端确认）」
+  验证：npm run test:douyin 251/251 通过；npm run build 通过。
+  配套：工作台侧同日上线 stop 释放租约/服务端进度95语义/恢复导入API/调度watchdog收口/写回停滞告警。
+  待办（Mog 拍板）：单工位 canary 过报告 §11 六门槛后才提 V11_MIN_PLUGIN_VERSION；
+        两工位浏览器存储严禁清理（死信是恢复证据）；恢复导入先演练希希妈妈单目标。

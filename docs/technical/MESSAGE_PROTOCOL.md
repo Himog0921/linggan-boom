@@ -60,6 +60,7 @@
 | `DELETE_NOTE / DELETE_COMMENT / DELETE_AUTHOR` | Dashboard → Content | `{ noteId / id / userId }` | 删除单条 |
 | `CLEAR_ALL_NOTES / CLEAR_ALL_COMMENTS / CLEAR_ALL_AUTHORS` | Dashboard → Content | `{}` | 清空某类数据 |
 | `EXPORT_CSV / EXPORT_JSON` | Popup / Dashboard → Content | `{}` | 导出数据 |
+| `EXPORT_OUTBOX_RECOVERY` | Popup → Background | `{}` | 只读导出恢复包（captureJournal + 死信 outbox 行，plugin-local-recovery/v1），供工作台 `POST /api/execution-tasks/recovery-import` 显式恢复导入；不改任何行状态 |
 | `DOWNLOAD_NOTE_MEDIA` | Dashboard → Content | `{ noteId }` | 下载内容媒体 |
 
 ### 2.5 Background 专属
