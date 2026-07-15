@@ -7,6 +7,7 @@
 import 'fake-indexeddb/auto';
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
 
 const { workbenchOutboxStore } = await import('../src/db/workbenchOutboxStore.js');
 const { default: db } = await import('../src/db/index.js');
@@ -73,8 +74,8 @@ test('状态分账：countUnsent 排除死信；countsByStatus 分桶；listDead
   assert.equal(counts.deadLetter, 1);
   assert.equal(counts.acked, 1);
   assert.equal(counts.inFlight, 0);
-  assert.ok(Number(counts.oldestUnsentCreatedAt) > 0, '必须给出最老未发送行时间');
-  assert.ok(Number(counts.oldestDeadLetterCreatedAt) > 0, '必须给出最老死信时间');
+  assert.equal(counts.oldestUnsentCreatedAt, baseMs, '必须从索引返回最老未发送行时间');
+  assert.equal(counts.oldestDeadLetterCreatedAt, baseMs + 2, '必须从索引返回最老死信时间');
 
   const deadLetters = await workbenchOutboxStore.listDeadLetters({ limit: 10 });
   assert.equal(deadLetters.length, 1);
@@ -82,6 +83,24 @@ test('状态分账：countUnsent 排除死信；countsByStatus 分桶；listDead
   assert.equal(deadLetters[0].errorMessage, 'outbox_execution_context_missing');
   assert.ok(deadLetters[0].executionContext, '死信行必须携带执行身份以便恢复归档');
   assert.equal(deadLetters[0].taskId, 'task-1');
+});
+
+test('countsByStatus 通过 status+createdAt 索引取最老行，不加载全量 payload', () => {
+  assert.ok(
+    db.workbenchOutbox.schema.idxByName['[status+createdAt]'],
+    'workbenchOutbox 必须提供 [status+createdAt] 索引'
+  );
+
+  const source = fs.readFileSync(new URL('../src/db/workbenchOutboxStore.js', import.meta.url), 'utf8');
+  const start = source.indexOf('async countsByStatus');
+  const end = source.indexOf('async listDeadLetters', start);
+  const countsByStatusSource = source.slice(start, end);
+  assert.match(countsByStatusSource, /\[status\+createdAt\]/);
+  assert.doesNotMatch(
+    countsByStatusSource,
+    /\.toArray\(/,
+    '诊断轮询不得为了最老时间戳加载全部 outbox 大对象'
+  );
 });
 
 test('真实 store flush：严格校验放行，HTTP envelope 带冻结身份，行最终 acked', async () => {

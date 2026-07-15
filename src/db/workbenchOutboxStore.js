@@ -147,8 +147,14 @@ export const workbenchOutboxStore = {
       db.workbenchOutbox.where('status').equals('acked').count(),
     ]);
     const oldestCreatedAt = async (statuses) => {
-      const rows = await db.workbenchOutbox.where('status').anyOf(statuses).toArray();
+      const rows = await Promise.all(statuses.map((status) => (
+        db.workbenchOutbox
+          .where('[status+createdAt]')
+          .between([status, Dexie.minKey], [status, Dexie.maxKey])
+          .first()
+      )));
       return rows.reduce((min, row) => {
+        if (!row) return min;
         const createdAt = Number(row.createdAt || 0);
         if (!createdAt) return min;
         return min === 0 ? createdAt : Math.min(min, createdAt);

@@ -208,7 +208,9 @@
 | `createdAt` | number | 创建时间 |
 | `updatedAt` | number | 最近更新时间 |
 
-状态语义（2026-07-13 分账）：`pending / in_flight / failed`（可重试）计入「待发送」；`failed_terminal` 是死信——不再自动发送、不计入待发送，只能经恢复导出 → `plugin_local_recovery` 找回。`countsByStatus()` 提供分桶计数与最老时间，`listDeadLetters()` 供导出。
+状态语义（2026-07-13 分账，2026-07-15 熔断修正）：`pending / in_flight / failed`（可重试）计入「待发送」；`failed_terminal` 是死信——不再自动发送、不计入待发送，也不计入 `OUTBOX_BACKLOG_BLOCKED` 的数量阈值，只能经恢复导出 → `plugin_local_recovery` 找回。`countsByStatus()` 提供分桶计数与最老时间，`listDeadLetters()` 供导出。
+
+性能语义（v15）：`countsByStatus()` 的最老时间通过 `[status+createdAt]` 复合索引逐状态取首行，禁止对 outbox 使用全量 `toArray()`；避免 Popup 诊断轮询和接单 tick 在大积压时反复反序列化 payload/snapshot。
 
 ### captureJournal
 

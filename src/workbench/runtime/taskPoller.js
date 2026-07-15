@@ -987,9 +987,10 @@ export function createTaskPoller(deps = {}) {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
   }
 
-  // 出站积压熔断（报告 §9.2）：写回积压超过阈值（条数或最老记录年龄）时，
+  // 出站积压熔断（报告 §9.2）：可补发写回超过阈值（条数或最老记录年龄）时，
   // 说明结果送不回服务端；此时接新任务只会批量制造租约过期。熔断期间
-  // 每 tick 触发一次补发自愈，积压回落后自动恢复接单。
+  // 每 tick 触发一次补发自愈，积压回落后自动恢复接单。终态死信只做告警，
+  // 不计入熔断条数；它们不会被补发清除，计入会造成永久拒接且无法自愈。
   async function evaluateOutboxBacklogGate() {
     if (typeof deps.getOutboxBacklog !== 'function') return null;
     let backlog = null;
@@ -1012,7 +1013,7 @@ export function createTaskPoller(deps = {}) {
     const oldestUnsentCreatedAt = Number(backlog.oldestUnsentCreatedAt || 0);
     const oldestUnsentAgeMs = oldestUnsentCreatedAt > 0 ? Math.max(0, getNow() - oldestUnsentCreatedAt) : 0;
 
-    const overCount = retryable + deadLetter > backlogLimit;
+    const overCount = retryable > backlogLimit;
     const overAge = oldestUnsentAgeMs > maxAgeMs;
     if (!overCount && !overAge) return null;
 

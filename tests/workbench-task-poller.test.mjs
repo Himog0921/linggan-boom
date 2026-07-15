@@ -3376,6 +3376,32 @@ test('出站积压熔断：积压超阈值时不接新任务并返回 OUTBOX_BAC
   assert.equal(claimCalls, 1);
 });
 
+test('出站积压熔断：历史死信只告警不阻塞接单，也不触发无法自愈的补发', async () => {
+  let claimCalls = 0;
+  let flushCalls = 0;
+  const poller = createTaskPoller({
+    getOutboxBacklog: async () => ({
+      pending: 0,
+      inFlight: 0,
+      retryable: 0,
+      deadLetter: 2144,
+      oldestUnsentCreatedAt: 0,
+      oldestDeadLetterCreatedAt: Date.now() - 24 * 60 * 60 * 1000,
+    }),
+    flushOutbox: async () => { flushCalls += 1; },
+    claimTaskLease: async () => {
+      claimCalls += 1;
+      return { task: null, reason: { code: 'NO_PENDING_TASK', message: '暂无可接任务' } };
+    },
+  });
+
+  const result = await poller.tick();
+
+  assert.equal(result.idleReasonCode, 'NO_PENDING_TASK');
+  assert.equal(claimCalls, 1, '只存在死信时必须继续尝试领取新任务');
+  assert.equal(flushCalls, 0, '死信不会被自动补发，不应触发无效的自愈 flush');
+});
+
 test('出站积压熔断：最老未发送记录超龄同样熔断', async () => {
   let claimCalls = 0;
   const poller = createTaskPoller({

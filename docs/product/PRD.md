@@ -392,7 +392,7 @@ flowchart TD
 | **前置条件** | 工作台地址已配置 + 插件已授权 + **执行工位已配对**（三层缺一不认领） |
 | **接单链路** | `/sync capacity(报可用车道) → reservations[](服务端预留任务) → start_job(确认领取 lease) → capabilityCheck(能力检查) → dispatchTask(派单) → 创建/绑定 collectionRun → 平台采集器执行 → deltaOutbox 增量上传 → patchCollectionTask(回写最终状态)` |
 | **调度机制** | 任务轮询 alarm `30s`（`periodInMinutes = 0.5`）；工位心跳 alarm `1 分钟`；collectionRun 心跳 `30s` 间隔（3s 去抖）；lease 超时 `2h`；**Web Push 唤醒**（D21，push 只唤醒不替代接单）；push 失效时 alarm 兜底 |
-| **outbox 韧性** | 重试间隔 `1s→2s→5s→15s→60s`（指数退避，`nextAttemptAt` 持久化到 IndexedDB）；`in_flight` 行 `5 分钟`超时自动复位；`chrome.alarms` 唤醒 SW 时 flush |
+| **outbox 韧性** | 重试间隔 `1s→2s→5s→15s→60s`（指数退避，`nextAttemptAt` 持久化到 IndexedDB）；`in_flight` 行 `5 分钟`超时自动复位；`chrome.alarms` 唤醒 SW 时 flush；仅可补发记录超过 200 条或最老未发送超过 30 分钟时暂停接单并自愈补发；`failed_terminal` 死信只告警、只读导出，不计入接单熔断条数 |
 | **页面策略** | 优先复用已打开的匹配 tab；若只剩"用户当前正在看的前台页"则改开独立执行窗口，不劫持前台页；**插件自开的任务页**（`pluginOpenedTabId`）终态自动关闭，用户原有页面不误关 |
 | **启动成功判定** | 只有页内执行动作真正启动并成功创建/绑定本地 `collectionRun` 后，才视为"已启动成功"；不把"消息发出但页面没开跑"当成功 |
 | **假启动处理** | 认领但长时间无 `collectionRun` → 自动标失败并释放，避免队列卡在 `dispatched` |
@@ -491,7 +491,7 @@ flowchart TD
 
 ## 5. 数据模型
 
-> 插件以本地 IndexedDB（Dexie）作为执行事实源。事实源：`src/db/index.js` v13。
+> 插件以本地 IndexedDB（Dexie）作为执行事实源。事实源：`src/db/index.js` v15。
 
 ### 5.1 数据库概览
 
@@ -499,8 +499,8 @@ flowchart TD
 |------|------|
 | 数据库名 | `LingganBoomDB` |
 | ORM | Dexie.js v4 |
-| 当前 Schema 版本 | v13 |
-| 表数量 | 6 张 Dexie 表 + `chrome.storage.local` 扩展存储 |
+| 当前 Schema 版本 | v15 |
+| 表数量 | 8 张 Dexie 表 + `chrome.storage.local` 扩展存储 |
 
 ### 5.2 表结构总览
 
@@ -511,8 +511,9 @@ flowchart TD
 | `authors` | `userId` | 博主资料 | `authorEntityId, platform, handle, redId, collectionRunId` |
 | `collectionRuns` | `collectionRunId` | 批量任务上下文 + 远程任务与本地执行记录映射 | `externalTaskId, executorInstanceId, status, lastHeartbeatAt` |
 | `mediaAssets` | `assetId` | 内容媒体与评论图片区资产 | `contentId, collectionRunId, assetType, downloadStatus` |
-| `workbenchOutbox` | `id` | 工作台事件/记录增量发件箱（离线重试 + 幂等） | `taskId, pluginRunId, &idempotencyKey(唯一), [status+nextAttemptAt+createdAt]` |
+| `workbenchOutbox` | `id` | 工作台事件/记录增量发件箱（离线重试 + 幂等） | `taskId, pluginRunId, &idempotencyKey(唯一), [status+nextAttemptAt+createdAt], [status+createdAt]` |
 | `accounts` | `accountId` | 采集账号（多账号 Cookie 轮换与配额追踪） | `platform, status, lastUsedAt` |
+| `captureJournal` | `entryId` | 不可变采集事实账本；死信也可只读导出恢复 | `taskId, capturedAt, payloadHash` |
 
 ### 5.3 表关键字段（精简）
 
@@ -525,6 +526,7 @@ flowchart TD
 - **mediaAssets**：`assetId / contentId / collectionRunId / assetType(image·video·comment_image) / role(cover·body·comment·avatar·primary·fallback) / quality(origin·download·medium·thumb·unknown) / url / candidateUrls[] / downloadStatus / lastResolvedAt / createdAt`
 - **workbenchOutbox**：`id / taskId / pluginRunId / idempotencyKey(唯一) / kind(event·record) / status(pending·in_flight·failed·failed_terminal·acked) / payload / snapshot / sequence / attemptCount / nextAttemptAt / errorMessage / createdAt / updatedAt`
 - **accounts**：`accountId / name / cookieJson / platform / status / dailyQuotaUsed / dailyQuotaLimit / cooldownUntil / lastUsedAt / totalUsed / lastResetDate / createdAt`
+- **captureJournal**：`entryId / taskId / captureId / payloadHash / capturedAt / payload / executionContext / ackedAt`
 
 > **mediaAssets 字段说明**：URL 通过 `url`（单值，首选候选）+ `candidateUrls[]`（高清候选列表）两个字段保存，`normalizeMediaAssetRecord` 会 spread 原始 record 透传 URL 字段。下载时优先 `candidateUrls[0]`，失败逐个回退。
 
@@ -556,6 +558,8 @@ flowchart TD
 | v11 | 新增 `accounts`，支持多账号 Cookie 轮换 |
 | v12 | `workbenchOutbox.idempotencyKey` 改为唯一索引，升级时清理重复行 |
 | v13 | `notes / authors` 新增 `collectionRunId` 索引，按任务打包结果不再全表扫描 |
+| v14 | 新增不可变 `captureJournal` 采集事实账本；死信可通过只读恢复包导出，不清理、不重绑租约 |
+| v15 | `workbenchOutbox` 新增 `[status+createdAt]` 索引，诊断计数直接读取各状态最老行，不再加载全量 payload |
 
 ### 5.6 chrome.storage.local 扩展存储
 

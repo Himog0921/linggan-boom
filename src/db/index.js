@@ -148,4 +148,10 @@ db.version(14).stores({
   captureJournal: 'entryId, taskId, capturedAt, payloadHash',
 });
 
+// v15: 诊断和接单闸门需要频繁读取各状态最老记录。增加复合索引后可直接
+// 取每个状态的首行，不再反序列化包含 payload/snapshot 的全量 outbox。
+db.version(15).stores({
+  workbenchOutbox: 'id, taskId, pluginRunId, &idempotencyKey, kind, status, nextAttemptAt, createdAt, [status+nextAttemptAt+createdAt], [status+createdAt]',
+});
+
 export default db;

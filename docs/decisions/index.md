@@ -222,7 +222,6 @@
 
 - **日期**：2026-07-14
 - **背景**：2026-07-13 写回事故：2.0.83 的 `normalizeOutboxRow` 落库时丢弃 `executionContext`，严格校验在发 HTTP 前把记录判成 `failed_terminal`，服务端收不到 RawSnapshot 直至租约过期；死信混入「待发送 2144」计数不可解释；测试只用内存 Map 从未覆盖真实 IndexedDB 边界（CTO 交接报告 §4-§9）。
-- **方案**：①`executionContext` 原样持久化 + fake-indexeddb 真实 round-trip 回归测试（先红后绿）；②死信与待发送分账（`countsByStatus` / `listDeadLetters`），面板分开展示并提供导出；③新增 `captureJournal` 采集事实账本（v14，append-only，与租约解耦），record 在身份校验前先落账本；④恢复走只读导出（`EXPORT_OUTBOX_RECOVERY`）→ 工作台 `plugin_local_recovery` 显式导入，绝不把旧包绑新租约；⑤出站积压熔断 `OUTBOX_BACKLOG_BLOCKED`（待重试+死信 >200 或最老未发送 >30 分钟时拒接新单并触发补发自愈）；⑥采集进度传输层封顶 95%，100% 语义收归服务端终态确认。
+- **方案**：①`executionContext` 原样持久化 + fake-indexeddb 真实 round-trip 回归测试（先红后绿）；②死信与待发送分账（`countsByStatus` / `listDeadLetters`），面板分开展示并提供导出；③新增 `captureJournal` 采集事实账本（v14，append-only，与租约解耦），record 在身份校验前先落账本；④恢复走只读导出（`EXPORT_OUTBOX_RECOVERY`）→ 工作台 `plugin_local_recovery` 显式导入，绝不把旧包绑新租约；⑤出站积压熔断 `OUTBOX_BACKLOG_BLOCKED`（仅可补发记录 >200 或最老未发送 >30 分钟时拒接新单并触发补发自愈；死信只告警，不计入数量阈值）；⑥采集进度传输层封顶 95%，100% 语义收归服务端终态确认。
 - **结果**：v2.0.84。node --test 全绿（含新回归测试），构建通过。
 - **影响**：以后任何插件发布必须过真实浏览器存储 + 服务端 ACK 的端到端验证，版本号不能作为唯一发布依据；服务端把最低版本升到 2.0.84 前必须先过单工位 canary（报告 §11 六门槛，Mog 拍板）；工位本地存量死信是恢复证据，禁止清理浏览器存储。
-
