@@ -8,7 +8,7 @@ import {
   detectPlatformByUrl, getModeFromUrl, getPageCapabilities,
   getPrimaryActionWarning, getSecondaryActionWarning, getBatchActionWarning,
   toFriendlyError, formatMaintenanceStats, inferProgressStage,
-  sendToTab, sendToBackground,
+  sendToTab, sendToBackground, POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS,
   unwrapTabResponseData,
   mapNoteToFlywheel, mapCommentToFlywheel, mapAuthorToFlywheel,
   getPageContextText,
@@ -889,6 +889,8 @@ export default function App() {
           notes: notes.map(mapNoteToFlywheel),
           comments: (comments || []).map(mapCommentToFlywheel),
           authors: (authors || []).map(mapAuthorToFlywheel),
+        }, {
+          timeoutMs: POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS,
         });
         setProgressVisible(false);
         if (result?.success) {

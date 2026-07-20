@@ -244,6 +244,8 @@ export function sendToTab(tabId, payload, options = {}) {
   });
 }
 
+export const POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS = 120000;
+
 export function unwrapTabResponseData(result, fallback) {
   return unwrapCompatResponseData(result, fallback);
 }

@@ -4,7 +4,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { sendToBackground, toFriendlyError } from '../src/popup/utils.js';
+import {
+  POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS,
+  sendToBackground,
+  toFriendlyError,
+} from '../src/popup/utils.js';
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
@@ -247,4 +251,14 @@ test('popup background messages time out with a visible user hint', async () => 
   } finally {
     globalThis.chrome = previousChrome;
   }
+});
+
+test('popup all-data workbench sync uses its dedicated long response window', () => {
+  const appSource = fs.readFileSync(path.join(projectRoot, 'src/popup/App.jsx'), 'utf8');
+  const syncCallStart = appSource.indexOf('sendToBackground(MSG.SYNC_TO_WORKBENCH');
+  const syncCallSource = appSource.slice(syncCallStart, syncCallStart + 600);
+
+  assert.equal(POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS, 120000);
+  assert.notEqual(syncCallStart, -1);
+  assert.match(syncCallSource, /timeoutMs:\s*POPUP_SYNC_TO_WORKBENCH_TIMEOUT_MS/);
 });
