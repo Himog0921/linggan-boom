@@ -554,11 +554,27 @@ export default function App() {
           return;
         }
         if (result?.success) {
-          const { imported, skipped, invalid, total, detailText, failReason } = summarizeWorkbenchSyncResult(
+          const { imported, skipped, invalid, total, detailText, outcomeText, failReason } = summarizeWorkbenchSyncResult(
             currentTab,
             selectedItems.length,
             result,
           );
+          if (currentTab === 'comments') {
+            const hasRetry = Number(result?.meta?.commentsFailed || 0) > 0;
+            const hasPending = Number(result?.meta?.commentsQueued || 0) > 0;
+            showNotice(
+              `评论同步完成：${outcomeText || `已入库 ${imported} 条`}`,
+              hasRetry ? 'warning' : hasPending ? 'info' : 'success',
+            );
+            return;
+          }
+          if (currentTab === 'authors') {
+            showNotice(
+              `博主同步完成：${outcomeText || `已导入监控来源 ${imported} 条`}`,
+              skipped > 0 ? 'warning' : 'success',
+            );
+            return;
+          }
           const invalidText = invalid > 0 ? `，无效 ${invalid} 条` : '';
           if (imported === total) {
             showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');

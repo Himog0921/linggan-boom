@@ -490,10 +490,14 @@ function emptyManualImportMeta() {
     notesSkipped: 0,
     commentsReceived: 0,
     commentsRegistered: 0,
+    commentsProcessed: 0,
+    commentsQueued: 0,
+    commentsFailed: 0,
     commentsSkipped: 0,
     commentsInvalid: 0,
     authorsReceived: 0,
     authorsIngested: 0,
+    authorsSkipped: 0,
     jobs: [],
   };
 }

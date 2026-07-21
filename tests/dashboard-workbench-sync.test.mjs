@@ -105,14 +105,35 @@ test('dashboard workbench sync summarizes comment imports from comment metadata'
     meta: {
       commentsReceived: 50,
       commentsRegistered: 48,
+      commentsProcessed: 47,
+      commentsQueued: 0,
+      commentsFailed: 1,
       commentsSkipped: 2,
       commentsInvalid: 0,
     },
   });
 
-  assert.equal(summary.imported, 48);
+  assert.equal(summary.imported, 47);
   assert.equal(summary.skipped, 2);
   assert.equal(summary.invalid, 0);
   assert.equal(summary.total, 50);
   assert.equal(summary.detailText, '（评论 50）');
+  assert.equal(summary.outcomeText, '已接收 50 条，已入库 47 条，已跳过 2 条，待重试 1 条');
+});
+
+test('dashboard workbench sync identifies synced authors as monitor sources', () => {
+  const summary = summarizeWorkbenchSyncResult('authors', 2, {
+    success: true,
+    imported: 2,
+    skipped: 0,
+    meta: {
+      authorsReceived: 2,
+      authorsIngested: 1,
+      authorsSkipped: 1,
+    },
+  });
+
+  assert.equal(summary.imported, 1);
+  assert.equal(summary.skipped, 1);
+  assert.equal(summary.outcomeText, '已导入监控来源 1 条，已跳过 1 条');
 });

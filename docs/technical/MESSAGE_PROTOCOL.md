@@ -75,7 +75,7 @@
 
 | Action | 发送方 → 接收方 | Payload | 说明 |
 |--------|----------------|---------|------|
-| `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台；Dashboard 会按大批量评论同步等待，评论成功数以工作台返回的评论登记数为准 |
+| `SYNC_TO_WORKBENCH` | Dashboard / Content → Background | `{ notes?, comments?, authors? }` | 将选中的本地记录同步到内容工作台；Dashboard 会按大批量评论同步等待，并展示工作台返回的评论接收、入库、跳过、待处理和待重试结果；博主结果以实际创建的监控来源数为准 |
 | `WORKBENCH_CAPABILITY_CHECK` | Background → Content | `{ tabId?, task }` | 对远程任务做页面能力检查 |
 | `WORKBENCH_DISPATCH_TASK` | Background → Content | `{ tabId?, task }` | 将工作台任务协议映射到内部动作并派单；成功回包必须保留本次执行页 `tabId` |
 | `WORKBENCH_TASK_CONTROL` | Background → Content | `{ tabId?, taskControl?, command? }` | 对已接单任务执行暂停 / 继续 / 停止；统一归口到 Content runtime 的工作台处理器 |

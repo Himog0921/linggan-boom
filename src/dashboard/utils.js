@@ -209,15 +209,25 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
   let imported = countValue(result?.imported);
   let skipped = countValue(result?.skipped);
   let invalid = 0;
+  let outcomeText = '';
 
   if (normalizedTab === 'comments') {
-    imported = countValue(meta.commentsRegistered, imported);
+    const received = countValue(meta.commentsReceived, total);
+    imported = countValue(meta.commentsProcessed, countValue(meta.commentsRegistered, imported));
     skipped = countValue(meta.commentsSkipped, skipped);
     invalid = countValue(meta.commentsInvalid);
+    const queued = countValue(meta.commentsQueued);
+    const failed = countValue(meta.commentsFailed);
+    const outcome = [`已接收 ${received} 条`, `已入库 ${imported} 条`, `已跳过 ${skipped} 条`];
+    if (invalid > 0) outcome.push(`无效 ${invalid} 条`);
+    if (queued > 0) outcome.push(`待处理 ${queued} 条`);
+    if (failed > 0) outcome.push(`待重试 ${failed} 条`);
+    outcomeText = outcome.join('，');
   } else if (normalizedTab === 'authors') {
     const authorsReceived = countValue(meta.authorsReceived, total);
     imported = countValue(meta.authorsIngested, imported);
-    skipped = countValue(result?.skipped, Math.max(authorsReceived - imported, 0));
+    skipped = countValue(meta.authorsSkipped, countValue(result?.skipped, Math.max(authorsReceived - imported, 0)));
+    outcomeText = `已导入监控来源 ${imported} 条，已跳过 ${skipped} 条`;
   }
 
   const details = [];
@@ -232,6 +242,7 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
     total,
     details,
     detailText: details.length ? `（${details.join('，')}）` : '',
+    outcomeText,
     failReason: String(meta.failReason || meta.errorReason || '').trim(),
   };
 }
