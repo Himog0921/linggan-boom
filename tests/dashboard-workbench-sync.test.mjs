@@ -130,10 +130,14 @@ test('dashboard workbench sync identifies synced authors as monitor sources', ()
       authorsReceived: 2,
       authorsIngested: 1,
       authorsSkipped: 1,
+      monitorSourcesCreated: 1,
+      monitorSourcesExisting: 0,
+      monitorSourcesSkipped: 1,
     },
   });
 
   assert.equal(summary.imported, 1);
   assert.equal(summary.skipped, 1);
-  assert.equal(summary.outcomeText, '已导入监控来源 1 条，已跳过 1 条');
+  assert.equal(summary.monitorOutcomeConfirmed, true);
+  assert.equal(summary.outcomeText, '已新增监控来源 1 条，未创建 1 条');
 });

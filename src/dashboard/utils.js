@@ -210,6 +210,8 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
   let skipped = countValue(result?.skipped);
   let invalid = 0;
   let outcomeText = '';
+  let existing = 0;
+  let monitorOutcomeConfirmed = false;
 
   if (normalizedTab === 'comments') {
     const received = countValue(meta.commentsReceived, total);
@@ -224,10 +226,25 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
     if (failed > 0) outcome.push(`待重试 ${failed} 条`);
     outcomeText = outcome.join('，');
   } else if (normalizedTab === 'authors') {
-    const authorsReceived = countValue(meta.authorsReceived, total);
-    imported = countValue(meta.authorsIngested, imported);
-    skipped = countValue(meta.authorsSkipped, countValue(result?.skipped, Math.max(authorsReceived - imported, 0)));
-    outcomeText = `已导入监控来源 ${imported} 条，已跳过 ${skipped} 条`;
+    monitorOutcomeConfirmed = [
+      'monitorSourcesCreated',
+      'monitorSourcesExisting',
+      'monitorSourcesSkipped',
+    ].some((key) => Object.prototype.hasOwnProperty.call(meta, key));
+    if (monitorOutcomeConfirmed) {
+      imported = countValue(meta.monitorSourcesCreated);
+      existing = countValue(meta.monitorSourcesExisting);
+      skipped = countValue(meta.monitorSourcesSkipped);
+      const outcome = [];
+      if (imported > 0) outcome.push(`已新增监控来源 ${imported} 条`);
+      if (existing > 0) outcome.push(`监控来源已存在 ${existing} 条`);
+      if (skipped > 0) outcome.push(`未创建 ${skipped} 条`);
+      outcomeText = outcome.join('，') || '没有可创建的监控来源';
+    } else {
+      imported = 0;
+      skipped = 0;
+      outcomeText = '工作台未确认监控来源写入，请刷新监控中心核对';
+    }
   }
 
   const details = [];
@@ -239,6 +256,8 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
     imported,
     skipped,
     invalid,
+    existing,
+    monitorOutcomeConfirmed,
     total,
     details,
     detailText: details.length ? `（${details.join('，')}）` : '',

@@ -498,6 +498,9 @@ function emptyManualImportMeta() {
     authorsReceived: 0,
     authorsIngested: 0,
     authorsSkipped: 0,
+    monitorSourcesCreated: 0,
+    monitorSourcesExisting: 0,
+    monitorSourcesSkipped: 0,
     jobs: [],
   };
 }

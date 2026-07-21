@@ -554,7 +554,16 @@ export default function App() {
           return;
         }
         if (result?.success) {
-          const { imported, skipped, invalid, total, detailText, outcomeText, failReason } = summarizeWorkbenchSyncResult(
+          const {
+            imported,
+            skipped,
+            invalid,
+            total,
+            detailText,
+            outcomeText,
+            failReason,
+            monitorOutcomeConfirmed,
+          } = summarizeWorkbenchSyncResult(
             currentTab,
             selectedItems.length,
             result,
@@ -570,8 +579,8 @@ export default function App() {
           }
           if (currentTab === 'authors') {
             showNotice(
-              `博主同步完成：${outcomeText || `已导入监控来源 ${imported} 条`}`,
-              skipped > 0 ? 'warning' : 'success',
+              `博主同步完成：${outcomeText || `已新增监控来源 ${imported} 条`}`,
+              !monitorOutcomeConfirmed ? 'info' : skipped > 0 ? 'warning' : imported > 0 ? 'success' : 'info',
             );
             return;
           }

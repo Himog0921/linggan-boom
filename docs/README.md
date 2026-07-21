@@ -7,7 +7,7 @@
 
 ## 状态图例
 
-- ✅ **权威当前**:对齐 v2.0.87 代码,可作事实源
+- ✅ **权威当前**:对齐 v2.0.89 代码,可作事实源
 - ⚠️ **可能滞后**:仍可参考,但部分内容可能未跟上最新代码(用前核对源码)
 - 🗄️ **历史归档**:仅供背景,不再是事实源
 - 📝 **草案**:未落地或部分落地
@@ -94,7 +94,7 @@
 
 ## 上架资料(`docs/chrome-web-store/`)
 
-Chrome 商店上架相关(store-listing / privacy-policy / reviewer-notes / dashboard 填表速查)。当前对齐版本 **v2.0.87**。
+Chrome 商店上架相关(store-listing / privacy-policy / reviewer-notes / dashboard 填表速查)。当前对齐版本 **v2.0.89**。
 
 ---
 
