@@ -91,17 +91,10 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `topicIds` | 平台原始话题 ID |
 | `authorEntityId` | 关联到 authors 表 |
 | `authorName` | 作者名快照 |
-| `coverUrl` | 稳定封面图。同步到内容工作台前，插件会尽量把第三方封面图片上传为工作台资产，并把这里替换为稳定 `publicUrl` |
-| `sourceCoverUrl` | 原第三方封面链接，仅用于来源追溯，不作为长期展示地址 |
-| `originalCoverUrl` | 采集时拿到的原始封面链接，便于排查与回溯 |
-| `coverMediaAssetId` | 工作台封面资产 ID；上传失败或未上传时可为空 |
-| `coverStorageProvider` | 封面资产存储服务，例如 `vercel_blob` |
-| `coverAssetUploadStatus` | 封面上传状态；失败时为 `failed`，采集记录仍可正常回传 |
-| `coverAssetUploadError` | 封面上传失败原因，限制为排查摘要 |
-| `imageUrls` | 图片列表；首图应尽量与稳定封面地址保持一致 |
-| `videoPlayUrl` | 当前播放直链 |
-| `videoDownloadUrl` | 当前下载直链 |
-| `videoStreams` | 备选流列表；小红书视频会保留主链与备用链接，用于下载失败时顺序重试 |
+| `coverUrl` | 采集到的平台原始封面来源；同步时作为唯一媒体账本的 `source_cover` 登记依据，不替换为展示地址 |
+| `imageUrls` | 有序图片来源列表；工作台按顺序登记 `source_image` 关系 |
+| `videoUrl` | 已选定的视频原始来源；视频内容必须有该字段，工作台登记为 `source_video`，缺失即为可见的采集契约异常 |
+| `videoStreams` | 仅允许留在 `rawData` 的本地采集候选流，用于本地下载和排障；不得作为跨端笔记的顶层业务字段，不替代 `videoUrl` |
 | `livePhotoStreams` | 小红书 Live 图备选流列表，用于采集后或数据面板按 Live 类型下载 |
 | `stats.likes` | 点赞数 |
 | `stats.comments` | 评论数 |

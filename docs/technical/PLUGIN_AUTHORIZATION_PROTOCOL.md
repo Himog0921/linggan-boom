@@ -139,7 +139,6 @@ Authorization: Bearer <authorizationToken>
 
 - `POST /api/execution-stations/sync`
 - `POST /api/execution-tasks/manual-import`（Dashboard / Popup 手动同步，先落 RawSnapshot）
-- `POST /api/media-assets/cover`（上传采集封面图片本体，返回工作台稳定 `publicUrl`）
 - `POST /api/collection-tasks/:taskId/ingest`
 - `GET /api/collection-tasks/:taskId/control-requests`
 
@@ -147,9 +146,9 @@ Authorization: Bearer <authorizationToken>
 
 执行工位模式下，插件不再调用 `GET /api/collection-tasks` 恢复扫描任务列表，也不再调用旧的 `heartbeat / reconcile / dispatch` 工位接口；旧版本如果继续高频轮询，会被工作台入口层拦截。
 
-普通同步数据归属规则：插件授权只证明“这台浏览器可以使用插件”，不代表普通采集数据应该写入授权者账号。Dashboard 手动同步、批量同步和封面上传在写入前必须先通过 `POST /api/plugin-data-workspace` 绑定当前登录的内容工作台使用者账号，并在后续请求里携带 `X-Plugin-Data-Token`。如果没有使用者登录或绑定失败，工作台应拒绝同步，而不是回退写到授权者、系统所有者或共享执行池。手动同步统一走 `POST /api/execution-tasks/manual-import`：工作台为每个平台建立只导入、不派单的可追踪任务，笔记、评论和博主先落 RawSnapshot / RawRecord，再进入数据地基；相同内容重复提交直接复用，不重复写入。
+普通同步数据归属规则：插件授权只证明“这台浏览器可以使用插件”，不代表普通采集数据应该写入授权者账号。Dashboard 手动同步和批量同步在写入前必须先通过 `POST /api/plugin-data-workspace` 绑定当前登录的内容工作台使用者账号，并在后续请求里携带 `X-Plugin-Data-Token`。如果没有使用者登录或绑定失败，工作台应拒绝同步，而不是回退写到授权者、系统所有者或共享执行池。手动同步统一走 `POST /api/execution-tasks/manual-import`：工作台为每个平台建立只导入、不派单的可追踪任务；笔记、评论和博主先落 RawSnapshot / RawRecord。笔记在同一事务中创建或复用 ContentAsset，并将媒体清单登记到唯一 MediaItem / MediaOrigin / ContentMediaUsage 账本，再由账本 outbox 请求标准物化；相同内容重复提交直接复用，不重复写入。
 
-封面同步规则：插件在批量同步或任务增量回传前，会优先从采集记录里的 `coverImage / cover / coverImg / coverUrl / thumbnail / images / imageCandidates` 找到封面地址，抓取图片本体后用 `multipart/form-data` 上传到 `POST /api/media-assets/cover`。上传成功后，回传给工作台的封面字段改为稳定 `publicUrl`；原第三方链接保留在 `sourceCoverUrl / originalCoverUrl`，用于追溯来源。上传失败不阻断采集数据回传，只标记 `coverAssetUploadStatus=failed`。
+媒体同步规则：插件只回传采集事实，不再把封面或视频字节上传到单独资产接口，也不把平台原始地址改写成展示地址。跨端笔记协议只能使用 `coverUrl`、有序 `imageUrls`、`videoUrl` 三个媒体字段；插件内部的 `cover / coverImage / images / video / videoStreams` 等平台采集字段只可保留在 `rawData` 原始证据中，不能作为并行的业务字段出站。工作台将规范字段登记到唯一媒体账本并异步物化；明确给出但不是 HTTP(S) 的来源必须计入 `mediaInvalid`，不能静默忽略。导入结果除了数量外必须以 `mediaRegistrationConfirmed: true` 明确确认账本登记，前端不得由计数推断成功；“已登记/已入队”不等同于媒体文件已经下载完成。
 
 ## 5. 失效与撤销
 
@@ -169,6 +168,6 @@ Authorization: Bearer <authorizationToken>
 3. 授权连接或审批领取时自动创建 / 复用工位
 4. Popup / 页内按钮 / Background 接单链路接入授权门禁
 5. 工作台请求在心跳 / 租约 / 同步时带授权信息和工位身份
-6. 封面图片本体上传到工作台资产接口，采集记录默认回传稳定封面地址
+6. 所有手动同步与任务增量只回传规范媒体源字段；媒体账本负责关联、去重和后续物化
 
 内容工作台设置页已保留旧版配对入口，但日常路径应以“连接插件后自动出现工位”为准。

@@ -141,3 +141,41 @@ test('dashboard workbench sync identifies synced authors as monitor sources', ()
   assert.equal(summary.monitorOutcomeConfirmed, true);
   assert.equal(summary.outcomeText, '已新增监控来源 1 条，未创建 1 条');
 });
+
+test('dashboard workbench sync distinguishes media registration from completed media delivery', () => {
+  const summary = summarizeWorkbenchSyncResult('notes', 1, {
+    success: true,
+    imported: 1,
+    skipped: 0,
+    meta: {
+      mediaRegistrationConfirmed: true,
+      notesReceived: 1,
+      mediaObserved: 2,
+      mediaEnqueued: 2,
+      mediaRequiredMissing: 1,
+      mediaUnlinked: 0,
+      mediaInvalid: 0,
+      mediaConflicted: 0,
+      mediaRejected: 0,
+    },
+  });
+
+  assert.equal(summary.mediaRegistrationConfirmed, true);
+  assert.equal(summary.mediaIncomplete, true);
+  assert.equal(summary.outcomeText, '媒体已登记 2 项，已进入处理队列 2 项，媒体登记异常 1 项');
+});
+
+test('dashboard workbench sync does not infer media registration confirmation from counts', () => {
+  const summary = summarizeWorkbenchSyncResult('notes', 1, {
+    success: true,
+    imported: 1,
+    skipped: 0,
+    meta: {
+      mediaObserved: 2,
+      mediaEnqueued: 2,
+    },
+  });
+
+  assert.equal(summary.mediaRegistrationConfirmed, false);
+  assert.match(summary.outcomeText, /工作台未确认媒体账本登记/);
+});

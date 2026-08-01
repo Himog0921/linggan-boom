@@ -202,176 +202,6 @@ function firstText(value) {
   return typeof value === 'string' && value.trim() ? value.trim() : '';
 }
 
-function pickMediaUrlFromArray(value) {
-  if (!Array.isArray(value)) return '';
-
-  for (const item of value) {
-    const direct = firstText(item);
-    if (direct) return direct;
-
-    const nestedArray = pickMediaUrlFromArray(item);
-    if (nestedArray) return nestedArray;
-
-    if (item && typeof item === 'object' && !Array.isArray(item)) {
-      const nested = firstText(item.urlDefault)
-        || firstText(item.url)
-        || firstText(item.src);
-      if (nested) return nested;
-    }
-  }
-
-  return '';
-}
-
-function pickCoverUrl(record = {}) {
-  return firstText(record.coverImage)
-    || firstText(record.cover)
-    || firstText(record.coverImg)
-    || firstText(record.coverUrl)
-    || firstText(record.thumbnail)
-    || pickMediaUrlFromArray(record.images)
-    || pickMediaUrlFromArray(record.imageCandidates);
-}
-
-function canUploadCoverUrl(url = '') {
-  return /^https?:\/\//i.test(String(url || ''));
-}
-
-function platformContentIdFrom(record = {}) {
-  return firstText(record.platformContentId)
-    || firstText(record.noteId)
-    || firstText(record.videoId)
-    || firstText(record.awemeId)
-    || firstText(record.contentId).replace(/^xhs_/, '');
-}
-
-function replaceFirstMediaUrl(value, publicUrl) {
-  if (!Array.isArray(value) || value.length === 0) return [publicUrl];
-  const [first, ...rest] = value;
-  if (typeof first === 'string') return [publicUrl, ...rest];
-  if (Array.isArray(first)) return [[publicUrl], ...rest];
-  if (first && typeof first === 'object') return [{ ...first, url: publicUrl }, ...rest];
-  return [publicUrl, ...rest];
-}
-
-async function fetchImageBlob(sourceUrl) {
-  const response = await fetch(sourceUrl, {
-    credentials: 'include',
-    signal: AbortSignal.timeout(12000),
-  });
-  if (!response.ok) {
-    throw createHttpError(`cover_fetch_failed: HTTP ${response.status}`, {
-      status: response.status,
-      retryable: isRetryableStatus(response.status),
-    });
-  }
-  const blob = await response.blob();
-  if (!blob || Number(blob.size || 0) <= 0) {
-    throw createHttpError('cover_fetch_failed: empty_blob', { retryable: false });
-  }
-  const type = String(blob.type || response.headers?.get?.('content-type') || '').toLowerCase();
-  if (type && !type.startsWith('image/')) {
-    throw createHttpError(`cover_fetch_failed: ${type}`, { retryable: false });
-  }
-  return blob;
-}
-
-function filenameForCover(record = {}, sourceUrl = '', mimeType = '') {
-  const cleanUrl = String(sourceUrl || '').split('?')[0].split('#')[0];
-  const urlExt = cleanUrl.match(/\.([a-z0-9]{2,5})$/i)?.[1];
-  const mimeExt = String(mimeType || '').split('/')[1]?.replace('jpeg', 'jpg');
-  const ext = (urlExt || mimeExt || 'jpg').toLowerCase();
-  const id = platformContentIdFrom(record) || Date.now();
-  return `cover-${id}.${ext}`;
-}
-
-function formDataSet(formData, key, value) {
-  const text = firstText(value);
-  if (text) formData.set(key, text);
-}
-
-export async function uploadCoverMediaAsset(config = {}, record = {}) {
-  const sourceUrl = pickCoverUrl(record);
-  if (!canUploadCoverUrl(sourceUrl)) {
-    return { success: false, skipped: true, reason: 'missing_cover_url' };
-  }
-
-  const imageBlob = await fetchImageBlob(sourceUrl);
-  const formData = new FormData();
-  formData.set('file', imageBlob, filenameForCover(record, sourceUrl, imageBlob.type));
-  formDataSet(formData, 'sourceUrl', sourceUrl);
-  formDataSet(formData, 'platform', record.platform || config.platform);
-  formDataSet(formData, 'platformContentId', platformContentIdFrom(record));
-
-  const response = await fetchFlywheel('/api/media-assets/cover', {
-    serverUrl: config?.serverUrl || '',
-    apiToken: config?.apiToken,
-    dataToken: config?.dataToken,
-    method: 'POST',
-    body: formData,
-    timeoutMs: 30000,
-  });
-  if (!response.ok) {
-    await throwForWorkbenchHttpError(response, 'upload_cover_failed');
-  }
-
-  const data = await response.json().catch(() => ({}));
-  const publicUrl = firstText(data?.asset?.publicUrl) || firstText(data?.publicUrl);
-  if (!publicUrl) {
-    throw createHttpError('upload_cover_failed: missing_public_url', { retryable: true });
-  }
-  return {
-    success: true,
-    publicUrl,
-    asset: data.asset || null,
-    sourceUrl,
-  };
-}
-
-export async function prepareRecordWithStableCover(config = {}, record = {}) {
-  const sourceUrl = pickCoverUrl(record);
-  if (!canUploadCoverUrl(sourceUrl) || firstText(record.coverStorageProvider)) {
-    return record;
-  }
-
-  try {
-    const upload = await uploadCoverMediaAsset(config, record);
-    if (!upload.success || !upload.publicUrl) return record;
-    return {
-      ...record,
-      sourceCoverUrl: firstText(record.sourceCoverUrl) || upload.sourceUrl,
-      originalCoverUrl: firstText(record.originalCoverUrl) || upload.sourceUrl,
-      coverImage: upload.publicUrl,
-      cover: upload.publicUrl,
-      coverImg: upload.publicUrl,
-      coverUrl: upload.publicUrl,
-      thumbnail: firstText(record.thumbnail) ? upload.publicUrl : record.thumbnail,
-      images: replaceFirstMediaUrl(record.images, upload.publicUrl),
-      coverMediaAssetId: firstText(upload.asset?.id),
-      coverStorageProvider: firstText(upload.asset?.storageProvider) || 'vercel_blob',
-    };
-  } catch (error) {
-    return {
-      ...record,
-      coverAssetUploadStatus: 'failed',
-      coverAssetUploadError: String(error?.message || error || 'upload_cover_failed').slice(0, 240),
-    };
-  }
-}
-
-export async function prepareNotesWithStableCovers(config = {}, notes = []) {
-  const list = Array.isArray(notes) ? notes : [];
-  const prepared = [];
-  for (const note of list) {
-    if (!note || typeof note !== 'object' || Array.isArray(note)) {
-      prepared.push(note);
-      continue;
-    }
-    prepared.push(await prepareRecordWithStableCover(config, note));
-  }
-  return prepared;
-}
-
 function createHttpError(message, { status = 0, bodyText = '', retryable = false } = {}) {
   const error = new Error(message);
   error.status = status;
@@ -501,6 +331,15 @@ function emptyManualImportMeta() {
     monitorSourcesCreated: 0,
     monitorSourcesExisting: 0,
     monitorSourcesSkipped: 0,
+    mediaObserved: 0,
+    mediaEnqueued: 0,
+    mediaSkipped: 0,
+    mediaInvalid: 0,
+    mediaConflicted: 0,
+    mediaRejected: 0,
+    mediaRequiredMissing: 0,
+    mediaUnlinked: 0,
+    mediaRegistrationConfirmed: true,
     jobs: [],
   };
 }
@@ -509,6 +348,10 @@ function mergeManualImportMeta(total, incoming = {}) {
   const next = { ...total };
   for (const key of Object.keys(total)) {
     if (key === 'jobs') continue;
+    if (key === 'mediaRegistrationConfirmed') {
+      next[key] = Boolean(total[key]) && Boolean(incoming[key]);
+      continue;
+    }
     next[key] = Number(total[key] || 0) + Number(incoming[key] || 0);
   }
   next.jobs = [...(total.jobs || []), ...(Array.isArray(incoming.jobs) ? incoming.jobs : [])];
@@ -539,11 +382,7 @@ async function sendManualImportBatch(dataConfig, records, metadata = {}) {
 
 export async function syncManualRecordsToWorkbench(config = {}, records = {}, metadata = {}) {
   const dataConfig = await ensureFlywheelDataSession(config);
-  const preparedNotes = await prepareNotesWithStableCovers(
-    dataConfig,
-    Array.isArray(records.notes) ? records.notes : [],
-  );
-  const normalizedNotes = preparedNotes.map(normalizeSource);
+  const normalizedNotes = (Array.isArray(records.notes) ? records.notes : []).map(normalizeSource);
   const normalizedRecords = {
     notes: normalizedNotes,
     comments: [

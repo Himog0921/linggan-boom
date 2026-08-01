@@ -255,8 +255,7 @@ idle → running ⇄ paused → stopping → done / error
 ```
 内容工作台 (Next.js)
   POST /api/plugin-authorizations/activate      → 激活插件授权
-  POST /api/execution-tasks/manual-import    ← 插件手动同步，先留原始证据再归并
-  POST /api/media-assets/cover                ← 插件上传封面图片本体，工作台返回稳定资产地址
+  POST /api/execution-tasks/manual-import    ← 插件手动同步：原始证据、内容关联和媒体账本登记
   POST /api/execution-stations/sync           → 工位轻量同步、信箱检查、对账与接单
   POST /api/collection-tasks/[id]/lease       ← 执行工位续租
   POST /api/collection-tasks/[id]/ingest      ← 增量上传
@@ -269,7 +268,7 @@ linggan-boom 插件
   taskPoller (对账恢复、租约认领、续租和提交；不再扫旧任务列表)
   executionStationClient (工位配对、身份、心跳)
   taskLeaseClient (本地租约持久化、续租)
-  deltaOutbox (增量上传 + 离线重试；笔记记录入队前会先整理为稳定封面地址)
+  deltaOutbox (增量上传 + 离线重试；笔记记录入队前规范化平台媒体源字段)
   heartbeat (3s 心跳)
 ```
 

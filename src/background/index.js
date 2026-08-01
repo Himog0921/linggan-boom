@@ -5,7 +5,6 @@ import {
   testConnection,
   getFlywheelConfig,
   saveFlywheelConfig,
-  prepareRecordWithStableCover,
   mergeFlywheelAuthorization,
   syncManualRecordsToWorkbench,
 } from '../sync/flywheelSync.js';
@@ -2353,8 +2352,7 @@ const taskDeltaReporter = createTaskDeltaReporter({
     if (String(record?.recordType || '').trim() !== WORKBENCH_RECORD_TYPE.NOTE) {
       return record?.payload || {};
     }
-    const prepared = await prepareRecordWithStableCover(config, record?.payload || {});
-    return enrichNoteWithDataFoundationPayload(prepared, {
+    return enrichNoteWithDataFoundationPayload(record?.payload || {}, {
       taskId: record?.taskId,
       pluginRunId: record?.pluginRunId,
       externalRecordId: record?.externalRecordId,

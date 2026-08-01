@@ -62,6 +62,32 @@ test('enrichNoteWithDataFoundationPayload infers Douyin video identity', () => {
   assert.deepEqual(enriched.keywords, ['注意力']);
 });
 
+test('enrichNoteWithDataFoundationPayload emits canonical media source fields for a captured XHS video', () => {
+  const enriched = enrichNoteWithDataFoundationPayload({
+    platform: 'xhs',
+    noteId: '6a68a020000000000f02a43b',
+    type: 'video',
+    cover: 'https://sns-img.example.com/original-cover.webp',
+    images: [
+      'https://sns-img.example.com/original-cover.webp',
+      'https://sns-img.example.com/detail-1.webp',
+    ],
+    video: 'https://sns-video.example.com/stream.mp4',
+    videoStreams: [{ url: 'https://sns-video.example.com/stream.mp4', quality: '720p' }],
+  });
+
+  assert.equal(enriched.coverUrl, 'https://sns-img.example.com/original-cover.webp');
+  assert.deepEqual(enriched.imageUrls, [
+    'https://sns-img.example.com/original-cover.webp',
+    'https://sns-img.example.com/detail-1.webp',
+  ]);
+  assert.equal(enriched.videoUrl, 'https://sns-video.example.com/stream.mp4');
+  assert.equal(enriched.cover, undefined);
+  assert.equal(enriched.images, undefined);
+  assert.equal(enriched.video, undefined);
+  assert.equal(enriched.videoStreams, undefined);
+});
+
 test('enrichNoteWithDataFoundationPayload parses compact platform fan counts', () => {
   assert.equal(enrichNoteWithDataFoundationPayload({ noteId: 'a', authorFans: '1.2万' }).authorFans, 12000);
   assert.equal(enrichNoteWithDataFoundationPayload({ noteId: 'b', authorFans: '3w' }).authorFans, 30000);

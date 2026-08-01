@@ -212,6 +212,19 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
   let outcomeText = '';
   let existing = 0;
   let monitorOutcomeConfirmed = false;
+  // 计数只是服务端返回的描述，不能代替“账本已写入并关联”的明确确认。
+  // 老版本接口缺少此字段时宁可显示未确认，也不能把同步成功误报为媒体已登记。
+  const mediaRegistrationConfirmed = meta.mediaRegistrationConfirmed === true;
+  const mediaObserved = countValue(meta.mediaObserved);
+  const mediaEnqueued = countValue(meta.mediaEnqueued);
+  const mediaIncompleteCount = [
+    meta.mediaInvalid,
+    meta.mediaConflicted,
+    meta.mediaRejected,
+    meta.mediaRequiredMissing,
+    meta.mediaUnlinked,
+  ].reduce((totalCount, value) => totalCount + countValue(value), 0);
+  const mediaIncomplete = mediaIncompleteCount > 0;
 
   if (normalizedTab === 'comments') {
     const received = countValue(meta.commentsReceived, total);
@@ -245,6 +258,14 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
       skipped = 0;
       outcomeText = '工作台未确认监控来源写入，请刷新监控中心核对';
     }
+  } else if (normalizedTab === 'notes' && mediaRegistrationConfirmed) {
+    const outcome = [];
+    if (mediaObserved > 0) outcome.push(`媒体已登记 ${mediaObserved} 项`);
+    if (mediaEnqueued > 0) outcome.push(`已进入处理队列 ${mediaEnqueued} 项`);
+    if (mediaIncomplete) outcome.push(`媒体登记异常 ${mediaIncompleteCount} 项`);
+    outcomeText = outcome.join('，');
+  } else if (normalizedTab === 'notes') {
+    outcomeText = '工作台未确认媒体账本登记';
   }
 
   const details = [];
@@ -258,6 +279,8 @@ export function summarizeWorkbenchSyncResult(tab = '', selectedCount = 0, result
     invalid,
     existing,
     monitorOutcomeConfirmed,
+    mediaRegistrationConfirmed,
+    mediaIncomplete,
     total,
     details,
     detailText: details.length ? `（${details.join('，')}）` : '',

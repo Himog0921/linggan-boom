@@ -563,6 +563,8 @@ export default function App() {
             outcomeText,
             failReason,
             monitorOutcomeConfirmed,
+            mediaIncomplete,
+            mediaRegistrationConfirmed,
           } = summarizeWorkbenchSyncResult(
             currentTab,
             selectedItems.length,
@@ -585,8 +587,11 @@ export default function App() {
             return;
           }
           const invalidText = invalid > 0 ? `，无效 ${invalid} 条` : '';
-          if (imported === total) {
-            showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}`, 'success');
+          if (imported === total && !mediaIncomplete && mediaRegistrationConfirmed) {
+            const outcomeSuffix = outcomeText ? `，${outcomeText}` : '';
+            showNotice(`成功同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}${outcomeSuffix}`, 'success');
+          } else if (imported === total && (mediaIncomplete || !mediaRegistrationConfirmed)) {
+            showNotice(`内容已同步 ${total} 条${getTabLabel(currentTab)}到内容工作台${detailText}，${outcomeText || '媒体登记未完成'}`, 'warning');
           } else if (imported > 0) {
             const reasonText = failReason ? `，原因：${failReason}` : '';
             showNotice(`部分同步成功：导入 ${imported} 条，跳过 ${skipped} 条${invalidText}${detailText}${reasonText}`, 'warning');
