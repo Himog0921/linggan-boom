@@ -5,16 +5,16 @@ Updated: 2026-07-21
 ## Current Upload Package
 
 - Extension: 灵感爆爆爆
-- Version: 2.0.89
-- Upload ZIP: `releases/linggan-boom-v2.0.89.zip`
-- SHA256: `17ac398a5c8394c19abcd411816262ce56d6e31ee3a6c6bd36879fb930c13cf1`
-- Size: `432288` bytes
+- Version: 2.0.90
+- Upload ZIP: `releases/linggan-boom-v2.0.90.zip`
+- SHA256: `0ba19da59898694c265d7e8771fb0f8ac1008e91943dffd124e3741aaa47be4f`
+- Size: `432085` bytes
 
 The package has been checked with:
 
 ```bash
 npm run build
-npm run release:verify -- --version 2.0.89 --zip releases/linggan-boom-v2.0.89.zip
+npm run release:verify -- --version 2.0.90 --zip releases/linggan-boom-v2.0.90.zip
 node --test
 ```
 
@@ -28,7 +28,7 @@ Reason: your goal is team distribution and automatic update, not public search t
 
 1. Open Chrome Web Store Developer Dashboard.
 2. Click **Add new item**.
-3. Upload `releases/linggan-boom-v2.0.89.zip`.
+3. Upload `releases/linggan-boom-v2.0.90.zip`.
 4. Fill **Store listing** using `store-listing.md`.
 5. Upload images from `assets/`.
 6. Fill **Privacy** using `privacy-and-permissions.md`.
