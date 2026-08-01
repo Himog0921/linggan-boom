@@ -274,15 +274,12 @@ function collectVideoStreamUrls(item = {}) {
 }
 
 export function pickBestVideoStream(stream = {}) {
-  const pools = [
-    ...(Array.isArray(stream?.h266) ? stream.h266 : []),
-    ...(Array.isArray(stream?.h_266) ? stream.h_266 : []),
-    ...(Array.isArray(stream?.h265) ? stream.h265 : []),
-    ...(Array.isArray(stream?.h_265) ? stream.h_265 : []),
-    ...(Array.isArray(stream?.h264) ? stream.h264 : []),
-    ...(Array.isArray(stream?.h_264) ? stream.h_264 : []),
-    ...(Array.isArray(stream?.av1) ? stream.av1 : []),
-  ];
+  // 小红书会调整流分类名（已实测从 h264/h265 等改为 EF4/EF5）。流条目本身
+  // 仍提供同一套 masterUrl、backupUrls、尺寸和码率字段，因此以实际存在的数组
+  // 为准，不再把外层分类名当作协议。
+  const pools = Object.values(stream || {}).flatMap((group) => (
+    Array.isArray(group) ? group : []
+  ));
   if (pools.length === 0) return { url: '', streams: [] };
 
   const scored = pools.flatMap((item) => {

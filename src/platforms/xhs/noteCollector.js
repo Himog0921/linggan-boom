@@ -472,7 +472,7 @@ export async function collectNote(wd = window, options = {}) {
     images: imageUrls,
     imageCandidates,
     livePhotoStreams,
-    video: videoSelection.url || note.video?.media?.stream?.h264?.[0]?.masterUrl || '',
+    video: videoSelection.url,
     videoStreams: videoSelection.streams || [],
     likes: parseXhsInteractCount(note.interactInfo, ['likedCount', 'likeCount', 'likes']),
     collects: parseXhsInteractCount(note.interactInfo, ['collectedCount', 'collectCount', 'collects', 'favoriteCount']),

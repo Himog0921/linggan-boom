@@ -18,25 +18,28 @@
   const raw = noteMap[key];
   const note = raw?.note || raw || {};
   const stream = note?.video?.media?.stream || {};
-  const pools = [
-    ...(Array.isArray(stream.h265) ? stream.h265 : []),
-    ...(Array.isArray(stream.h264) ? stream.h264 : []),
-    ...(Array.isArray(stream.av1) ? stream.av1 : []),
-  ];
-
-  const rows = pools.map((item) => ({
-    codec: item.format || item.codecType || '',
+  // 外层分组名不是协议（实测可为 EF4/EF5），只把即时数组当作流集合。
+  const streamGroups = Object.entries(stream || {})
+    .filter(([, items]) => Array.isArray(items));
+  const groupCounts = Object.fromEntries(
+    streamGroups.map(([group, items]) => [group, items.length]),
+  );
+  const rows = streamGroups.flatMap(([group, items]) => items.map((item) => ({
+    group,
+    codec: item.videoCodec || item.format || item.codecType || '',
     bitrate: item.avgBitrate || item.bitrate || item.avg_bitrate || 0,
     width: item.width || item.vwidth || 0,
     height: item.height || item.vheight || 0,
     qualityType: item.qualityType || item.quality_type || '',
-    url: item.masterUrl || item.url || item.backupUrl || '',
-  }));
+    url: item.masterUrl || item.master_url || item.url || item.backupUrl || item.backup_url || '',
+    backupUrls: item.backupUrls || item.backup_urls || [],
+  })));
 
   const output = {
     url: location.href,
     time: new Date().toISOString(),
     noteId: note.noteId || note.id || key,
+    groupCounts,
     streamCount: rows.length,
     rows,
   };
