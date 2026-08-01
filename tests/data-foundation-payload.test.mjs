@@ -88,6 +88,54 @@ test('enrichNoteWithDataFoundationPayload emits canonical media source fields fo
   assert.equal(enriched.videoStreams, undefined);
 });
 
+test('enrichNoteWithDataFoundationPayload keeps one image slot for a candidate group with fallback URLs', () => {
+  const cover = 'https://sns-img.example.com/original-cover.webp';
+  const fallback = 'https://sns-img.example.com/original-cover-fallback.webp';
+
+  const enriched = enrichNoteWithDataFoundationPayload({
+    platform: 'xhs',
+    noteId: '68fb9898000000000402084f',
+    type: 'video',
+    cover,
+    images: [cover],
+    // 一个图片槽位的两个地址是主地址和备用地址，不能被传输协议误写成两张图片。
+    imageCandidates: [[cover, fallback]],
+    video: 'https://sns-video.example.com/stream.mp4',
+  });
+
+  assert.deepEqual(enriched.imageUrls, [cover]);
+  assert.deepEqual(enriched.rawData.imageCandidates, [[cover, fallback]]);
+});
+
+test('enrichNoteWithDataFoundationPayload treats a flat candidate list as fallback URLs for one image slot', () => {
+  const primary = 'https://sns-img.example.com/candidate-primary.webp';
+  const fallback = 'https://sns-img.example.com/candidate-fallback.webp';
+
+  const enriched = enrichNoteWithDataFoundationPayload({
+    platform: 'douyin',
+    noteId: '7350000000000000001',
+    imageCandidates: [primary, fallback],
+  });
+
+  assert.deepEqual(enriched.imageUrls, [primary]);
+});
+
+test('enrichNoteWithDataFoundationPayload preserves the position of multiple candidate groups', () => {
+  const firstPrimary = 'https://sns-img.example.com/first-primary.webp';
+  const secondPrimary = 'https://sns-img.example.com/second-primary.webp';
+
+  const enriched = enrichNoteWithDataFoundationPayload({
+    platform: 'xhs',
+    noteId: '68fb98980000000004020850',
+    imageCandidates: [
+      [firstPrimary, 'https://sns-img.example.com/first-fallback.webp'],
+      [secondPrimary, 'https://sns-img.example.com/second-fallback.webp'],
+    ],
+  });
+
+  assert.deepEqual(enriched.imageUrls, [firstPrimary, secondPrimary]);
+});
+
 test('enrichNoteWithDataFoundationPayload parses compact platform fan counts', () => {
   assert.equal(enrichNoteWithDataFoundationPayload({ noteId: 'a', authorFans: '1.2万' }).authorFans, 12000);
   assert.equal(enrichNoteWithDataFoundationPayload({ noteId: 'b', authorFans: '3w' }).authorFans, 30000);

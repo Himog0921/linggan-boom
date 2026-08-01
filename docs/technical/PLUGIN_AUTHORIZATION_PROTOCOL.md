@@ -148,7 +148,7 @@ Authorization: Bearer <authorizationToken>
 
 普通同步数据归属规则：插件授权只证明“这台浏览器可以使用插件”，不代表普通采集数据应该写入授权者账号。Dashboard 手动同步和批量同步在写入前必须先通过 `POST /api/plugin-data-workspace` 绑定当前登录的内容工作台使用者账号，并在后续请求里携带 `X-Plugin-Data-Token`。如果没有使用者登录或绑定失败，工作台应拒绝同步，而不是回退写到授权者、系统所有者或共享执行池。手动同步统一走 `POST /api/execution-tasks/manual-import`：工作台为每个平台建立只导入、不派单的可追踪任务；笔记、评论和博主先落 RawSnapshot / RawRecord。笔记在同一事务中创建或复用 ContentAsset，并将媒体清单登记到唯一 MediaItem / MediaOrigin / ContentMediaUsage 账本，再由账本 outbox 请求标准物化；相同内容重复提交直接复用，不重复写入。
 
-媒体同步规则：插件只回传采集事实，不再把封面或视频字节上传到单独资产接口，也不把平台原始地址改写成展示地址。跨端笔记协议只能使用 `coverUrl`、有序 `imageUrls`、`videoUrl` 三个媒体字段；插件内部的 `cover / coverImage / images / video / videoStreams` 等平台采集字段只可保留在 `rawData` 原始证据中，不能作为并行的业务字段出站。工作台将规范字段登记到唯一媒体账本并异步物化；明确给出但不是 HTTP(S) 的来源必须计入 `mediaInvalid`，不能静默忽略。导入结果除了数量外必须以 `mediaRegistrationConfirmed: true` 明确确认账本登记，前端不得由计数推断成功；“已登记/已入队”不等同于媒体文件已经下载完成。
+媒体同步规则：插件只回传采集事实，不再把封面或视频字节上传到单独资产接口，也不把平台原始地址改写成展示地址。跨端笔记协议只能使用 `coverUrl`、有序 `imageUrls`、`videoUrl` 三个媒体字段；插件内部的 `cover / coverImage / images / video / videoStreams` 等平台采集字段只可保留在 `rawData` 原始证据中，不能作为并行的业务字段出站。`imageUrls` 的每一个位置代表一张实际图片；同一图片的主、备 URL 只能选择一个确定来源，备用地址继续留在 `rawData.imageCandidates`，不能展开成虚假的下一张图片。工作台将规范字段登记到唯一媒体账本并异步物化；明确给出但不是 HTTP(S) 的来源必须计入 `mediaInvalid`，不能静默忽略。导入结果除了数量外必须以 `mediaRegistrationConfirmed: true` 明确确认账本登记，前端不得由计数推断成功；“已登记/已入队”不等同于媒体文件已经下载完成。
 
 ## 5. 失效与撤销
 

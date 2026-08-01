@@ -92,7 +92,7 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `authorEntityId` | 关联到 authors 表 |
 | `authorName` | 作者名快照 |
 | `coverUrl` | 采集到的平台原始封面来源；同步时作为唯一媒体账本的 `source_cover` 登记依据，不替换为展示地址 |
-| `imageUrls` | 有序图片来源列表；工作台按顺序登记 `source_image` 关系 |
+| `imageUrls` | 有序的实际图片来源列表；每个位置只代表一张图片，工作台按顺序登记 `source_image` 关系。同一图片的主、备地址只能选一个确定来源，备用地址仅保留在 `rawData.imageCandidates`，不得扩展为另一张图片。 |
 | `videoUrl` | 已选定的视频原始来源；视频内容必须有该字段，工作台登记为 `source_video`，缺失即为可见的采集契约异常 |
 | `videoStreams` | 仅允许留在 `rawData` 的本地采集候选流，用于本地下载和排障；不得作为跨端笔记的顶层业务字段，不替代 `videoUrl` |
 | `livePhotoStreams` | 小红书 Live 图备选流列表，用于采集后或数据面板按 Live 类型下载 |

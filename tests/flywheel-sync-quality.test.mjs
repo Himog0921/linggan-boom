@@ -176,6 +176,49 @@ test('manual workbench sync carries comment-only and author-only records', async
   }
 });
 
+test('manual workbench sync sends one image source for each candidate group', async () => {
+  const calls = [];
+  const originalFetch = globalThis.fetch;
+  const cover = 'https://sns-img.example.com/original-cover.webp';
+  const fallback = 'https://sns-img.example.com/original-cover-fallback.webp';
+  globalThis.fetch = async (url, options) => {
+    calls.push([url, options]);
+    return new Response(JSON.stringify({
+      success: true,
+      imported: 1,
+      skipped: 0,
+      meta: { mediaRegistrationConfirmed: true },
+    }), { status: 200 });
+  };
+
+  try {
+    await syncManualRecordsToWorkbench(
+      { serverUrl: 'http://localhost:3000' },
+      {
+        notes: [{
+          noteId: '68fb9898000000000402084f',
+          platform: 'xhs',
+          type: 'video',
+          url: 'https://www.xiaohongshu.com/explore/68fb9898000000000402084f',
+          cover,
+          images: [cover],
+          imageCandidates: [[cover, fallback]],
+          video: 'https://sns-video.example.com/stream.mp4',
+        }],
+      },
+    );
+
+    const payload = JSON.parse(calls[0][1].body);
+    const note = payload.result.records.notes[0];
+    assert.deepEqual(note.imageUrls, [cover]);
+    assert.equal(note.imageCandidates, undefined);
+    assert.equal(note.images, undefined);
+    assert.deepEqual(note.rawData.imageCandidates, [[cover, fallback]]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
 test('manual workbench sync separates embedded comment records from the note comment count', async () => {
   const calls = [];
   const originalFetch = globalThis.fetch;

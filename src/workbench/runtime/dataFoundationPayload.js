@@ -125,17 +125,50 @@ function collectMediaUrls(value, output = []) {
   return output;
 }
 
+function buildRawMediaEvidence(record = {}) {
+  const existingRawData = record.rawData;
+  if (existingRawData && typeof existingRawData === 'object' && !Array.isArray(existingRawData)) {
+    return {
+      ...existingRawData,
+      ...(existingRawData.imageCandidates === undefined && record.imageCandidates !== undefined
+        ? { imageCandidates: record.imageCandidates }
+        : {}),
+    };
+  }
+
+  const { rawData: _rawData, ...rawRecord } = record;
+  return rawRecord;
+}
+
 function canonicalImageUrls(record = {}) {
   const urls = [];
   for (const field of [
     'imageUrls',
     'images',
     'imageList',
-    'imageCandidates',
     'coverImages',
     'thumbnails',
   ]) {
-    collectMediaUrls(record[field], urls);
+    const value = record[field];
+    // 数组最外层表达图片槽位；单个槽位可能带有多个 URL，只取首个可用来源。
+    const slots = Array.isArray(value) ? value : [value];
+    for (const slot of slots) {
+      const [url] = collectMediaUrls(slot);
+      if (url) urls.push(url);
+    }
+  }
+
+  // `imageCandidates` 是来源回退信息，不是另一套图片列表。只有采集记录没有
+  // 明确图片列表时才作为补洞：嵌套数组表示多个图片槽位；扁平数组则是一张图
+  // 的主、备地址。两种形态都不能把备用 URL 展开成虚假的 image:1。
+  if (urls.length === 0) {
+    const candidates = record.imageCandidates;
+    const entries = Array.isArray(candidates) ? candidates : [candidates];
+    const groups = entries.some(Array.isArray) ? entries : [entries];
+    for (const group of groups) {
+      const [url] = collectMediaUrls(group);
+      if (url) urls.push(url);
+    }
   }
   return [...new Set(urls)];
 }
@@ -207,6 +240,7 @@ export function enrichNoteWithDataFoundationPayload(record = {}, context = {}) {
     'playUrl',
   ]);
   const imageUrls = canonicalImageUrls(record);
+  const rawData = buildRawMediaEvidence(record);
   const authorId = firstText(record, ['authorId', 'authorPlatformId', 'userId']);
   const authorFans = firstNumber(record, [
     'authorFans',
@@ -238,6 +272,7 @@ export function enrichNoteWithDataFoundationPayload(record = {}, context = {}) {
   // 采集器原始字段可以保留在 rawData 供排障，但跨端的业务协议不能继续把同一
   // 媒体作为多组同义字段发送；否则后端无法判断哪一项是唯一事实来源。
   const {
+    rawData: _rawData,
     sourceCoverUrl: _sourceCoverUrl,
     source_cover_url: _sourceCoverUrlSnake,
     originalCoverUrl: _originalCoverUrl,
@@ -278,6 +313,7 @@ export function enrichNoteWithDataFoundationPayload(record = {}, context = {}) {
 
   return {
     ...transportRecord,
+    rawData,
     platform,
     platformContentId: platformContentId || record.platformContentId,
     contentType,
