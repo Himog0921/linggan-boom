@@ -70,9 +70,34 @@ function packageHash(canonicalPayloadJson) {
   return sha256Hex(canonicalPayloadJson);
 }
 
-// ── Base64 fixture package ─────────────────────────────────────────────────
+// ── CaptureSubmissionV2 body builder (B1-B-03-R2) ──────────────────────────
 
-function buildPackageSubmission(header, records, artifacts) {
+/**
+ * Build a canonical CaptureSubmissionBodyV2 from header, records, and artifacts.
+ *
+ * Per 07 §3.3 and DEC-B1-017, this function:
+ *   1. Wraps header + records + artifacts in { schemaVersion: "capture-package/v2", … }
+ *   2. Canonicalises object keys (sorted), preserves array order
+ *   3. Produces no-space JSON → UTF-8 bytes
+ *   4. Encodes with RFC 4648 standard padded base64
+ *   5. Computes lowercase 64-char hex SHA-256 over the raw canonical bytes
+ *   6. Sets contentLength to the actual UTF-8 byte length
+ *   7. The same header object is placed both as the outer header and inside
+ *      the CapturePackage payload — the caller must pass the same object.
+ *
+ * Does NOT include workspaceId, receivedAt, sourcePrincipal, stationId,
+ * leaseToken, importerIdentity, recoveryAuthorizedBy, or migrationAuthorization.
+ * These are server-authority fields added by the workbench caller adapter
+ * (07 §3.4).
+ *
+ * @param {Object} input
+ * @param {Object} input.header       - CaptureHeaderV2 (used as both outer and inner header)
+ * @param {Array}  input.records      - RawRecordSubmissionV2[]
+ * @param {Array}  input.artifacts    - CaptureArtifactSubmissionV2[]
+ * @param {boolean} [input.restricted=false] - package restricted flag (§3.3)
+ * @returns {Object} CaptureSubmissionBodyV2 { header, capturePackage }
+ */
+function buildCaptureSubmissionBodyV2({ header, records, artifacts, restricted = false }) {
   const payload = {
     schemaVersion: "capture-package/v2",
     header,
@@ -82,13 +107,22 @@ function buildPackageSubmission(header, records, artifacts) {
   const json = canonicalJson(payload);
   const bytes = Buffer.from(json, "utf8");
   return {
-    encoding: "base64",
-    packagePayload: encodeBase64(bytes),
-    checksumAlgorithm: "sha256",
-    checksumValue: packageHash(json),
-    contentLength: bytes.length,
-    restricted: false,
+    header,
+    capturePackage: {
+      encoding: "base64",
+      packagePayload: encodeBase64(bytes),
+      checksumAlgorithm: "sha256",
+      checksumValue: packageHash(json),
+      contentLength: bytes.length,
+      restricted,
+    },
   };
+}
+
+// ── Legacy internal helper (kept for fixture hash stability) ───────────────
+
+function buildPackageSubmission(header, records, artifacts) {
+  return buildCaptureSubmissionBodyV2({ header, records, artifacts }).capturePackage;
 }
 
 // ── Common header fields ───────────────────────────────────────────────────
@@ -120,8 +154,8 @@ function commonHeader(contract) {
  * Build report slots from contract slot definitions.
  * All slots are "observed" for a successful fixture.
  */
-function reportSlots(contract) {
-  return contract.map((slotId) => ({
+function reportSlots(slotIds) {
+  return slotIds.map((slotId) => ({
     slotId,
     status: "observed",
     reason: null,
@@ -345,10 +379,7 @@ function buildFixture(contractId) {
     ? [mediaInventoryArtifact()]
     : [];
 
-  const body = {
-    header,
-    capturePackage: buildPackageSubmission(header, records, artifacts),
-  };
+  const body = buildCaptureSubmissionBodyV2({ header, records, artifacts });
 
   const authority = {
     ingressKind: "execution",
@@ -384,8 +415,12 @@ module.exports = {
   encodeBase64,
   contractHash,
   packageHash,
+  buildCaptureSubmissionBodyV2,
   buildPackageSubmission,
   mediaInventoryArtifact,
+  fixtureRecordPayload,
   CONTRACTS,
+  FIXTURE_BLUEPRINTS,
+  EXPECTED_CONTRACT_HASHES,
   FIXTURES,
 };
