@@ -21,8 +21,9 @@ const crypto = require("node:crypto");
  * (Date, Map, Set, class instances), and circular references.
  * Must match workbench assertJsonValue() semantics.
  */
-function assertJsonValue(value, path) {
+function assertJsonValue(value, path, ancestors) {
   path = path || "root";
+  ancestors = ancestors || new Set();
   if (value === undefined) throw new Error(path + ": undefined is not valid JSON");
   if (typeof value === "number") {
     if (Number.isNaN(value)) throw new Error(path + ": NaN is not valid JSON");
@@ -33,7 +34,15 @@ function assertJsonValue(value, path) {
   if (typeof value === "function") throw new Error(path + ": function is not valid JSON");
   if (value === null || typeof value === "string" || typeof value === "boolean") return;
   if (Array.isArray(value)) {
-    for (let i = 0; i < value.length; i++) assertJsonValue(value[i], path + "[" + i + "]");
+    if (ancestors.has(value)) throw new Error(path + ": circular reference is not valid JSON");
+    ancestors.add(value);
+    try {
+      for (let i = 0; i < value.length; i++) {
+        assertJsonValue(value[i], path + "[" + i + "]", ancestors);
+      }
+    } finally {
+      ancestors.delete(value);
+    }
     return;
   }
   if (typeof value === "object") {
@@ -41,8 +50,14 @@ function assertJsonValue(value, path) {
     if (proto !== Object.prototype && proto !== null) {
       throw new Error(path + ": non-plain object is not valid JSON");
     }
-    for (const key of Object.keys(value)) {
-      assertJsonValue(value[key], path + "." + key);
+    if (ancestors.has(value)) throw new Error(path + ": circular reference is not valid JSON");
+    ancestors.add(value);
+    try {
+      for (const key of Object.keys(value)) {
+        assertJsonValue(value[key], path + "." + key, ancestors);
+      }
+    } finally {
+      ancestors.delete(value);
     }
     return;
   }
@@ -130,10 +145,9 @@ function packageHash(canonicalPayloadJson) {
  *   7. The same header object is placed both as the outer header and inside
  *      the CapturePackage payload — the caller must pass the same object.
  *
- * Does NOT include workspaceId, receivedAt, sourcePrincipal, stationId,
- * leaseToken, importerIdentity, recoveryAuthorizedBy, or migrationAuthorization.
- * These are server-authority fields added by the workbench caller adapter
- * (07 §3.4).
+ * Given a valid CaptureHeaderV2 input, does not independently construct
+ * server-authority fields. Those fields belong to the workbench caller adapter
+ * boundary (07 §3.4); this builder forwards the caller-provided header unchanged.
  *
  * @param {Object} input
  * @param {Object} input.header       - CaptureHeaderV2 (used as both outer and inner header)

@@ -404,7 +404,7 @@ describe("buildCaptureSubmissionBodyV2", () => {
     assert.equal(body.capturePackage.checksumValue, expected);
   });
 
-  it("does not contain server authority fields", () => {
+  it("does not independently construct server-authority fields for a valid CaptureHeaderV2", () => {
     const body = buildCaptureSubmissionBodyV2({ header, records, artifacts: [] });
     const str = JSON.stringify(body);
     assert.ok(!str.includes("workspaceId"));
@@ -468,28 +468,87 @@ describe("buildCaptureSubmissionBodyV2", () => {
     // The point: this body has a non-XHS platform, so a validator with XHS contracts rejects it
   });
 
-  it("rejects undefined values in canonicalJson (B1-B-03-R2-F2)", () => {
-    assert.throws(() => canonicalJson({ a: 1, b: undefined }), /undefined is not valid JSON/);
+  function buildWithPayload(payload) {
+    const candidateRecords = [{ ...records[0], payload }];
+    return buildCaptureSubmissionBodyV2({ header, records: candidateRecords, artifacts: [] });
+  }
+
+  it("rejects undefined through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: undefined }), /undefined is not valid JSON/);
   });
 
-  it("rejects NaN in canonicalJson (B1-B-03-R2-F2)", () => {
-    assert.throws(() => canonicalJson({ val: NaN }), /NaN is not valid JSON/);
+  it("rejects NaN through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: NaN }), /NaN is not valid JSON/);
   });
 
-  it("rejects Infinity in canonicalJson (B1-B-03-R2-F2)", () => {
-    assert.throws(() => canonicalJson({ val: Infinity }), /Infinity.* is not valid JSON/);
+  it("rejects Infinity through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: Infinity }), /Infinity.* is not valid JSON/);
   });
 
-  it("rejects non-plain objects like Date in canonicalJson (B1-B-03-R2-F2)", () => {
-    assert.throws(() => canonicalJson({ when: new Date() }), /non-plain object is not valid JSON/);
+  it("rejects -Infinity through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: -Infinity }), /Infinity.* is not valid JSON/);
   });
 
-  it("rejects non-plain objects like Map in canonicalJson (B1-B-03-R2-F2)", () => {
-    assert.throws(() => canonicalJson({ map: new Map() }), /non-plain object is not valid JSON/);
+  it("rejects BigInt through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: 1n }), /BigInt is not valid JSON/);
   });
 
-  it("accepts valid JSON values (null, boolean, string, number, array, nested object)", () => {
-    canonicalJson({ a: 1, b: "two", c: null, d: true, e: [1, { f: "nested" }] });
+  it("rejects functions through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value() {} }), /function is not valid JSON/);
+  });
+
+  it("rejects Date through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: new Date() }), /non-plain object is not valid JSON/);
+  });
+
+  it("rejects Map through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: new Map() }), /non-plain object is not valid JSON/);
+  });
+
+  it("rejects Set through the CaptureSubmission builder", () => {
+    assert.throws(() => buildWithPayload({ value: new Set() }), /non-plain object is not valid JSON/);
+  });
+
+  it("rejects class instances through the CaptureSubmission builder", () => {
+    class UnsupportedValue {}
+    assert.throws(() => buildWithPayload({ value: new UnsupportedValue() }), /non-plain object is not valid JSON/);
+  });
+
+  it("rejects circular objects through the CaptureSubmission builder", () => {
+    const circularPayload = {};
+    circularPayload.self = circularPayload;
+    const circularRecords = [{ ...records[0], payload: circularPayload }];
+
+    assert.throws(
+      () => buildCaptureSubmissionBodyV2({ header, records: circularRecords, artifacts: [] }),
+      /circular reference is not valid JSON/,
+    );
+  });
+
+  it("rejects circular arrays through the CaptureSubmission builder", () => {
+    const circularPayload = [];
+    circularPayload.push(circularPayload);
+
+    assert.throws(() => buildWithPayload(circularPayload), /circular reference is not valid JSON/);
+  });
+
+  it("accepts valid JSON through the CaptureSubmission builder", () => {
+    const payload = { a: 1, b: "two", c: null, d: true, e: [1, { f: "nested" }] };
+    const body = buildWithPayload(payload);
+    const decoded = JSON.parse(Buffer.from(body.capturePackage.packagePayload, "base64").toString("utf8"));
+
+    assert.deepEqual(decoded.records[0].payload, payload);
+  });
+
+  it("accepts a non-circular shared reference through the CaptureSubmission builder", () => {
+    const shared = { evidence: "same-value" };
+    const body = buildWithPayload({ first: shared, second: shared });
+    const decoded = JSON.parse(Buffer.from(body.capturePackage.packagePayload, "base64").toString("utf8"));
+
+    assert.deepEqual(decoded.records[0].payload, {
+      first: { evidence: "same-value" },
+      second: { evidence: "same-value" },
+    });
   });
 });
 
