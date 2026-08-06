@@ -429,6 +429,23 @@ describe("buildCaptureSubmissionBodyV2", () => {
     assert.equal(pkg.artifacts[0].artifactPayload, art.artifactPayload);
   });
 
+  it("propagates artifact.restricted=true to package restricted (B1-B-03-R2-F1)", () => {
+    const art = { ...mediaInventoryArtifact(), restricted: true };
+    const body = buildCaptureSubmissionBodyV2({ header, records, artifacts: [art] });
+    assert.equal(body.capturePackage.restricted, true);
+  });
+
+  it("preserves explicit restricted:true even without restricted artifacts (B1-B-03-R2-F1)", () => {
+    const body = buildCaptureSubmissionBodyV2({ header, records, artifacts: [], restricted: true });
+    assert.equal(body.capturePackage.restricted, true);
+  });
+
+  it("output restricted:false when no artifact is restricted and restricted not set", () => {
+    const art = mediaInventoryArtifact(); // restricted: false by default
+    const body = buildCaptureSubmissionBodyV2({ header, records, artifacts: [art] });
+    assert.equal(body.capturePackage.restricted, false);
+  });
+
   // ── Tampering negative tests ──────────────────────────────────────
   it("tampered fixture payload → fixed hash check fails", () => {
     const tamperedRecords = [{ ...records[0], payload: { ...records[0].payload, noteId: "TAMPERED" } }];
@@ -451,16 +468,28 @@ describe("buildCaptureSubmissionBodyV2", () => {
     // The point: this body has a non-XHS platform, so a validator with XHS contracts rejects it
   });
 
-  it("undefined values are stripped by JSON.stringify (not silently kept as string 'undefined')", () => {
-    // JSON.stringify drops keys with undefined values. This means a payload
-    // with undefined is NOT silently accepted — it is structurally altered.
-    const original = { a: 1, b: undefined, c: 3 };
-    const result = canonicalJson(original);
-    const parsed = JSON.parse(result);
-    // b is gone because JSON.stringify omits undefined values
-    assert.ok(!("b" in parsed));
-    assert.equal(parsed.a, 1);
-    assert.equal(parsed.c, 3);
+  it("rejects undefined values in canonicalJson (B1-B-03-R2-F2)", () => {
+    assert.throws(() => canonicalJson({ a: 1, b: undefined }), /undefined is not valid JSON/);
+  });
+
+  it("rejects NaN in canonicalJson (B1-B-03-R2-F2)", () => {
+    assert.throws(() => canonicalJson({ val: NaN }), /NaN is not valid JSON/);
+  });
+
+  it("rejects Infinity in canonicalJson (B1-B-03-R2-F2)", () => {
+    assert.throws(() => canonicalJson({ val: Infinity }), /Infinity.* is not valid JSON/);
+  });
+
+  it("rejects non-plain objects like Date in canonicalJson (B1-B-03-R2-F2)", () => {
+    assert.throws(() => canonicalJson({ when: new Date() }), /non-plain object is not valid JSON/);
+  });
+
+  it("rejects non-plain objects like Map in canonicalJson (B1-B-03-R2-F2)", () => {
+    assert.throws(() => canonicalJson({ map: new Map() }), /non-plain object is not valid JSON/);
+  });
+
+  it("accepts valid JSON values (null, boolean, string, number, array, nested object)", () => {
+    canonicalJson({ a: 1, b: "two", c: null, d: true, e: [1, { f: "nested" }] });
   });
 });
 

@@ -16,11 +16,54 @@ const crypto = require("node:crypto");
 // ── Canonical JSON ─────────────────────────────────────────────────────────
 
 /**
+ * Validate that a value is legal JSON (07 §2.1).
+ * Rejects: undefined, NaN, Infinity, BigInt, functions, non-plain objects
+ * (Date, Map, Set, class instances), and circular references.
+ * Must match workbench assertJsonValue() semantics.
+ */
+function assertJsonValue(value, path) {
+  path = path || "root";
+  if (value === undefined) throw new Error(path + ": undefined is not valid JSON");
+  if (typeof value === "number") {
+    if (Number.isNaN(value)) throw new Error(path + ": NaN is not valid JSON");
+    if (!Number.isFinite(value)) throw new Error(path + ": Infinity/-Infinity is not valid JSON");
+    return;
+  }
+  if (typeof value === "bigint") throw new Error(path + ": BigInt is not valid JSON");
+  if (typeof value === "function") throw new Error(path + ": function is not valid JSON");
+  if (value === null || typeof value === "string" || typeof value === "boolean") return;
+  if (Array.isArray(value)) {
+    for (let i = 0; i < value.length; i++) assertJsonValue(value[i], path + "[" + i + "]");
+    return;
+  }
+  if (typeof value === "object") {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) {
+      throw new Error(path + ": non-plain object is not valid JSON");
+    }
+    for (const key of Object.keys(value)) {
+      assertJsonValue(value[key], path + "." + key);
+    }
+    return;
+  }
+  throw new Error(path + ": unexpected type " + typeof value);
+}
+
+/**
+ * Check if a value is a plain object.
+ */
+function isPlainObject(value) {
+  if (value === null || typeof value !== "object") return false;
+  const proto = Object.getPrototypeOf(value);
+  return proto === Object.prototype || proto === null;
+}
+
+/**
  * Recursively sort object keys. Returns a new value; does not mutate input.
  */
 function sortKeys(value) {
   if (Array.isArray(value)) return value.map(sortKeys);
-  if (value !== null && typeof value === "object" && !(value instanceof Date)) {
+  if (isPlainObject(value)) {
     const sorted = {};
     for (const key of Object.keys(value).sort()) {
       sorted[key] = sortKeys(value[key]);
@@ -32,9 +75,11 @@ function sortKeys(value) {
 
 /**
  * Canonical JSON string: object keys sorted, arrays preserved, no whitespace.
+ * Validates input for JSON-safe values before serializing.
  * Mirrors workbench src/lib/evidence/ingress/canonical-json.ts canonicalJsonString().
  */
 function canonicalJson(value) {
+  assertJsonValue(value);
   return JSON.stringify(sortKeys(value));
 }
 
@@ -98,6 +143,11 @@ function packageHash(canonicalPayloadJson) {
  * @returns {Object} CaptureSubmissionBodyV2 { header, capturePackage }
  */
 function buildCaptureSubmissionBodyV2({ header, records, artifacts, restricted = false }) {
+  // §3.3: if any artifact is restricted, the package MUST be restricted.
+  // An explicit restricted: false with a restricted artifact would be rejected
+  // by the workbench validator as invalid_submission.  We enforce the
+  // propagation here so the caller never produces an invalid combination.
+  const effectiveRestricted = restricted || (artifacts || []).some(a => a.restricted === true);
   const payload = {
     schemaVersion: "capture-package/v2",
     header,
@@ -114,7 +164,7 @@ function buildCaptureSubmissionBodyV2({ header, records, artifacts, restricted =
       checksumAlgorithm: "sha256",
       checksumValue: packageHash(json),
       contentLength: bytes.length,
-      restricted,
+      restricted: effectiveRestricted,
     },
   };
 }
