@@ -480,3 +480,8 @@ IDLE → RUNNING → PAUSED → RUNNING（循环）
 - 停止任务时必须恢复媒体规则并清理页面状态
 - 当前技术债：结果 envelope 仍未统一，后续应逐步收口为 `{ success, data, error }`
 - 当前产品化空缺：工作台 HTTP 轮询与 patch 的鉴权边界仍未完成统一收口，接入生产环境前必须重新核对
+
+## 7. XHS V2 CollectionContract（B1-B-03-R1）
+
+V2 的六个小红书采集合同和脱敏 `CaptureSubmissionV2` fixtures 位于
+`src/workbench/protocol/v2/xhs-contracts.cjs`。该文件是合同定义与 fixture 的插件侧来源真值；内容工作台会镜像合同并在跨仓校验中实际运行其 EvidenceIngress validator。V2 首期将媒体作为 `media_inventory` artifact，不再把 V1 `media` 作为 RawRecord。
