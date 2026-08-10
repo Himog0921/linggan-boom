@@ -8,6 +8,7 @@
     "moduleResolution": "Bundler",
     "strict": false,
     "skipLibCheck": true,
+    "types": ["node"],
     "lib": ["ES2022", "DOM"]
   },
   "include": [
@@ -20,6 +21,8 @@
     "src/platforms/registry.js",
     "src/platforms/xhs/adapter.js",
     "src/platforms/douyin/adapter.js",
-    "src/shared/targetIdentity.js"
+    "src/shared/targetIdentity.js",
+    "src/workbench/protocol/v2/xhs-contracts.cjs",
+    "src/workbench/protocol/v2/xhs-terminal-mapper.cjs"
   ]
 }

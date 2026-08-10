@@ -248,6 +248,30 @@ function mediaInventoryArtifact() {
 }
 
 /**
+ * Build a media inventory artifact from the current collection run's actual
+ * media records. The legacy no-argument fixture helper above remains separate
+ * so its locked fixture hashes cannot accidentally become a runtime source.
+ *
+ * @param {Array<unknown>} candidates
+ */
+function mediaInventoryArtifactFromCandidates(candidates) {
+  if (!Array.isArray(candidates)) {
+    throw new Error("media inventory candidates must be an array");
+  }
+  const payload = { candidates };
+  const json = canonicalJson(payload);
+  const bytes = Buffer.from(json, "utf8");
+  return {
+    kind: "media_inventory",
+    encoding: "base64",
+    artifactPayload: encodeBase64(bytes),
+    artifactChecksum: sha256Hex(bytes),
+    contentLength: bytes.length,
+    restricted: false,
+  };
+}
+
+/**
  * Fixture payloads use the same stable identity/body fields that the live
  * taskPoller sanitizers and recordPayloadValidator accept.  These are
  * desensitized values, but they must still be source-shaped rather than a
@@ -482,6 +506,7 @@ module.exports = {
   buildCaptureSubmissionBodyV2,
   buildPackageSubmission,
   mediaInventoryArtifact,
+  mediaInventoryArtifactFromCandidates,
   fixtureRecordPayload,
   CONTRACTS,
   FIXTURE_BLUEPRINTS,

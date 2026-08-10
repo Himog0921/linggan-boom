@@ -485,3 +485,13 @@ IDLE → RUNNING → PAUSED → RUNNING（循环）
 
 V2 的六个小红书采集合同和脱敏 `CaptureSubmissionV2` fixtures 位于
 `src/workbench/protocol/v2/xhs-contracts.cjs`。该文件是合同定义与 fixture 的插件侧来源真值；内容工作台会镜像合同并在跨仓校验中实际运行其 EvidenceIngress validator。V2 首期将媒体作为 `media_inventory` artifact，不再把 V1 `media` 作为 RawRecord。
+
+## 8. XHS 终态到 CaptureSubmissionV2 暗态边界（B1-B-12）
+
+`src/workbench/protocol/v2/xhs-terminal-mapper.cjs` 当前仅供跨仓验证，没有接入 `taskPoller`、`taskLeaseClient`、outbox 或 HTTP route。它只接受现役 `resultPackager` 的公开终态结构：`status`、epoch-millisecond `startedAt/finishedAt` 与当前 run 的 `records`。
+
+- `captureId` 与 `executionPlanVersion` 必须来自服务端 reservation；插件不得自行生成或接受旁路覆盖。
+- `captureTerminal`、`slotReports`、`captureCounters` 必须由各自采集源显式提供；无法分类的失败拒绝形成 V2 Evidence，不从 `failed` 或错误文案猜原因。
+- `targetKey` 来自服务端执行计划，`collectorVersion` 来自运行中的插件版本；缺失均拒绝。
+- 当前 run 的媒体记录只编码为该包的 `media_inventory` Artifact；固定 fixture 媒体只用于合同 hash fixture，不能进入运行映射。
+- 当前阶段没有 V1/V2 双写、fallback、切流、部署或九工位升级。

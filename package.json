@@ -11,7 +11,7 @@
     "release:minor": "./scripts/version.sh minor",
     "release:major": "./scripts/version.sh major",
     "release:verify": "node scripts/verify-release-package.mjs",
-    "check:contracts": "tsc -p jsconfig.contracts.json --noEmit && node --test tests/xhs-collection-contracts.test.cjs",
+    "check:contracts": "tsc -p jsconfig.contracts.json --noEmit && node --test tests/xhs-collection-contracts.test.cjs tests/xhs-terminal-mapper.test.cjs",
     "test:douyin": "node --test tests/douyin-*.test.mjs tests/xhs-anti-detect.test.mjs tests/workbench-douyin-remote-long-tail.test.mjs tests/note-media-download.test.mjs tests/flywheel-sync-quality.test.mjs tests/cookie-platform-scope.test.mjs tests/workbench-capability-check.test.mjs tests/background-page-type.test.mjs tests/navigation-orchestrator.test.mjs tests/execution-station-runtime.test.mjs tests/shared-messaging-send-to-tab.test.mjs tests/inject-button-group-ui.test.mjs tests/dashboard-response-envelope.test.mjs tests/workbench-progress-error.test.mjs tests/workbench-outbox-store-dexie.test.mjs tests/capture-journal-store.test.mjs tests/workbench-outbox-recovery-export.test.mjs tests/workbench-result-packager.test.mjs tests/workbench-task-poller.test.mjs tests/release-script-contract.test.mjs tests/content-runtime-loading.test.mjs",
     "verify:douyin": "npm run test:douyin && npm run build && npm run release:verify",
     "probe:batch-flow": "cat scripts/probe-batch-flow.js",

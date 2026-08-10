@@ -1,3 +1,7 @@
+2026-08-10
+
+- B1-B-12: completed the dark-only XHS terminal-to-`CaptureSubmissionV2` mapper. Its terminal input is produced by the public `resultPackager` (`status`, epoch-millisecond `startedAt/finishedAt`, and current run records); server reservation must supply opaque `captureId`, `executionPlanVersion`, expected target, job/attempt/epoch, while the running plugin supplies collector version. Terminal classification, slot reports, and counters are explicit source facts and are never inferred; an unclassified failure is rejected instead of guessed as `parser_failed`. Current media records are serialized into the current package's `media_inventory` artifact, with no fixture URL reuse. The mapper remains dark with zero runtime callers; no route, outbox, V1 path, deployment, or station upgrade changed.
+
 2026-08-06
 
 - B1-B-03-R1: XHS V2 CollectionContract dark contract and six desensitized CaptureSubmissionV2 fixtures added. The plugin definitions remain source truth; workbench cross-repo verification now validates the actual plugin fixtures through the workbench validator and registry. 6/6 canonical contracts + 6/6 fixtures + 6/6 hashes verified cross-repo. Verification is local only; no production traffic, deployment, or publish performed.

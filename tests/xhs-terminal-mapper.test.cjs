@@ -1,0 +1,376 @@
+/**
+ * XHS terminal → CaptureSubmissionV2 dark mapper acceptance tests.
+ *
+ * The terminal fixture is deliberately produced by the public
+ * resultPackager. This prevents this boundary test from inventing a second,
+ * self-consistent terminal shape.
+ */
+const { describe, it } = require("node:test");
+const assert = require("node:assert/strict");
+const crypto = require("node:crypto");
+
+const {
+  WORKFLOW_TO_CONTRACT,
+  mapTerminalToCaptureSubmissionV2,
+} = require("../src/workbench/protocol/v2/xhs-terminal-mapper.cjs");
+const {
+  FIXTURE_BLUEPRINTS,
+  CONTRACTS,
+  contractHash,
+  canonicalJson,
+} = require("../src/workbench/protocol/v2/xhs-contracts.cjs");
+
+const PROFILES = Object.keys(WORKFLOW_TO_CONTRACT);
+const EXPECTED_WORKFLOW_TO_CONTRACT = {
+  list_scan: "xhs.list-scan",
+  note_detail: "xhs.note-detail",
+  note_full: "xhs.note-full",
+  comment_probe: "xhs.comment-probe",
+  author_profile: "xhs.author-profile",
+  author_links: "xhs.author-links",
+};
+const STARTED_AT = Date.parse("2026-08-10T10:00:00.000Z");
+const FINISHED_AT = Date.parse("2026-08-10T10:05:00.000Z");
+
+function recordsFor(profile) {
+  const blueprint = FIXTURE_BLUEPRINTS[WORKFLOW_TO_CONTRACT[profile]];
+  return {
+    notes: blueprint.recordKinds.includes("note")
+      ? [{ noteId: `n-${profile}-1`, platformContentId: `n-${profile}-1`, title: `Test ${profile}` }]
+      : [],
+    comments: blueprint.recordKinds.includes("comment")
+      ? [{ commentId: `c-${profile}-1`, noteId: `n-${profile}-1`, text: "test comment" }]
+      : [],
+    authors: blueprint.recordKinds.includes("author")
+      ? [{ userId: `a-${profile}-1`, platformAuthorId: `a-${profile}-1`, name: "test author" }]
+      : [],
+    mediaAssets: blueprint.mediaPolicy === "metadata_only"
+      ? [{ assetId: `m-${profile}-1`, sourceUrl: `https://example.com/${profile}.jpg`, width: 1080, height: 1440 }]
+      : [],
+  };
+}
+
+async function packagedTerminal(profile, overrides = {}) {
+  const { createResultPackager } = await import("../src/workbench/runtime/resultPackager.js");
+  const records = recordsFor(profile);
+  const runRecord = {
+    collectionRunId: `run-${profile}`,
+    externalTaskId: `job-${profile}-001`,
+    externalTaskType: profile,
+    platform: "xhs",
+    taskType: profile,
+    status: "done",
+    startedAt: STARTED_AT,
+    finishedAt: FINISHED_AT,
+    itemsPlanned: records.notes.length + records.comments.length + records.authors.length,
+    itemsSucceeded: records.notes.length + records.comments.length + records.authors.length,
+    itemsFailed: 0,
+    diagnostic: {
+      stage: "collecting",
+      failureCategory: "none",
+      reasonCode: "completed",
+      evidence: { profile },
+    },
+    ...overrides,
+  };
+  const store = (rows) => ({ getByCollectionRunId: async () => rows });
+  const packager = createResultPackager({
+    collectionRunStore: {
+      getById: async () => runRecord,
+      markResultUploadStatus: async () => undefined,
+    },
+    noteStore: store(records.notes),
+    commentStore: store(records.comments),
+    authorStore: store(records.authors),
+    mediaAssetStore: store(records.mediaAssets),
+  });
+  return packager.packageByCollectionRunId(runRecord.collectionRunId);
+}
+
+function reservationFor(profile, overrides = {}) {
+  return {
+    jobId: `job-${profile}-001`,
+    attemptId: `att-${profile}-001`,
+    leaseEpoch: 1,
+    platform: "xhs",
+    collectionProfile: profile,
+    targetKey: `xhs:note/${profile}-test`,
+    captureId: `capture-server-${profile}-001`,
+    executionPlanVersion: "plan-server-v1",
+    ...overrides,
+  };
+}
+
+function explicitReportFor(profile, terminal) {
+  const blueprint = FIXTURE_BLUEPRINTS[WORKFLOW_TO_CONTRACT[profile]];
+  const emitted = blueprint.recordKinds.reduce((total, kind) => {
+    const key = kind === "note" ? "notes" : kind === "comment" ? "comments" : "authors";
+    return total + terminal.records[key].length;
+  }, 0);
+  return {
+    captureTerminal: { state: "completed", reason: "source_exhausted", retryable: false },
+    slotReports: blueprint.slotIds.map((slotId) => ({ slotId, status: "observed", reason: null })),
+    captureCounters: {
+      requested: emitted,
+      discovered: emitted,
+      emitted,
+      deduplicated: 0,
+      failed: 0,
+    },
+  };
+}
+
+async function validInput(profile, overrides = {}) {
+  const terminal = overrides.terminal || await packagedTerminal(profile);
+  return {
+    reservation: reservationFor(profile),
+    terminal,
+    collectorVersion: "2.0.91",
+    observedTargetKey: `xhs:note/${profile}-test`,
+    ...explicitReportFor(profile, terminal),
+    ...overrides,
+  };
+}
+
+function decodePackage(body) {
+  return JSON.parse(Buffer.from(body.capturePackage.packagePayload, "base64").toString("utf8"));
+}
+
+function decodeArtifact(artifact) {
+  return JSON.parse(Buffer.from(artifact.artifactPayload, "base64").toString("utf8"));
+}
+
+describe("workflow contract anchors", () => {
+  it("maps exactly six profiles to registered fixed contracts", () => {
+    assert.equal(PROFILES.length, 6);
+    assert.deepEqual(WORKFLOW_TO_CONTRACT, EXPECTED_WORKFLOW_TO_CONTRACT);
+    for (const [profile, contractId] of Object.entries(EXPECTED_WORKFLOW_TO_CONTRACT)) {
+      assert.ok(PROFILES.includes(profile));
+      assert.ok(CONTRACTS[contractId]);
+      assert.ok(FIXTURE_BLUEPRINTS[contractId]);
+    }
+  });
+});
+
+describe("real resultPackager output → CaptureSubmissionV2", () => {
+  for (const profile of PROFILES) {
+    it(`${profile}: accepts the public packaged terminal shape`, async () => {
+      const input = await validInput(profile);
+      assert.equal(input.terminal.status, "done");
+      assert.equal(typeof input.terminal.finishedAt, "number");
+
+      const result = mapTerminalToCaptureSubmissionV2(input);
+      assert.equal(result.ok, true, result.error);
+      const { header, capturePackage } = result.body;
+      const contractId = WORKFLOW_TO_CONTRACT[profile];
+      assert.equal(header.captureId, `capture-server-${profile}-001`);
+      assert.equal(header.executionPlanVersion, "plan-server-v1");
+      assert.equal(header.contractId, contractId);
+      assert.equal(header.contractHash, contractHash(CONTRACTS[contractId]));
+      assert.equal(header.observedAt, "2026-08-10T10:05:00.000Z");
+      assert.equal(header.report.startedAt, "2026-08-10T10:00:00.000Z");
+      assert.equal(header.report.completedAt, "2026-08-10T10:05:00.000Z");
+      assert.deepEqual(header.report.terminal, input.captureTerminal);
+      assert.deepEqual(header.report.slots, input.slotReports);
+      assert.deepEqual(header.report.counters, input.captureCounters);
+
+      const bytes = Buffer.from(capturePackage.packagePayload, "base64");
+      assert.equal(capturePackage.contentLength, bytes.length);
+      assert.equal(capturePackage.checksumValue, crypto.createHash("sha256").update(bytes).digest("hex"));
+      assert.deepEqual(decodePackage(result.body).header, JSON.parse(canonicalJson(header)));
+    });
+
+    it(`${profile}: emits only contract record kinds`, async () => {
+      const result = mapTerminalToCaptureSubmissionV2(await validInput(profile));
+      assert.equal(result.ok, true, result.error);
+      const pkg = decodePackage(result.body);
+      for (const record of pkg.records) {
+        assert.ok(CONTRACTS[WORKFLOW_TO_CONTRACT[profile]].recordKinds.includes(record.recordKind));
+        assert.notEqual(record.recordKind, "media");
+        assert.notEqual(record.recordKind, "metric");
+      }
+    });
+  }
+
+  it("serializes the current run's actual media records, never fixture media", async () => {
+    const input = await validInput("note_detail");
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, true, result.error);
+    const artifact = decodePackage(result.body).artifacts.find((item) => item.kind === "media_inventory");
+    assert.ok(artifact);
+    assert.deepEqual(decodeArtifact(artifact), { candidates: input.terminal.records.mediaAssets });
+    assert.ok(!JSON.stringify(artifact).includes("fixture-cover"));
+  });
+
+  it("preserves observed media even when the contract does not require media", async () => {
+    const terminal = await packagedTerminal("comment_probe");
+    terminal.records.mediaAssets.push({
+      assetId: "unexpected-but-observed-media",
+      sourceUrl: "https://example.com/observed-comment-media.jpg",
+    });
+    const input = await validInput("comment_probe", { terminal });
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, true, result.error);
+    const artifact = decodePackage(result.body).artifacts.find((item) => item.kind === "media_inventory");
+    assert.ok(artifact);
+    assert.deepEqual(decodeArtifact(artifact), { candidates: terminal.records.mediaAssets });
+  });
+
+  it("is deterministic for the same server identity and packaged terminal", async () => {
+    const input = await validInput("note_detail");
+    const first = mapTerminalToCaptureSubmissionV2(input);
+    const second = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(first.ok, true);
+    assert.equal(second.ok, true);
+    assert.equal(first.body.capturePackage.checksumValue, second.body.capturePackage.checksumValue);
+    assert.equal(first.body.capturePackage.packagePayload, second.body.capturePackage.packagePayload);
+  });
+
+  it("deep-snapshots nested terminal and report input", async () => {
+    const input = await validInput("note_detail");
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, true, result.error);
+    const before = canonicalJson(result.body);
+    input.terminal.resultSummary.discoverySummary = { injected: true };
+    input.terminal.records.notes[0].title = "MUTATED";
+    input.terminal.records.mediaAssets[0].sourceUrl = "https://evil.invalid/mutated";
+    input.slotReports[0].status = "invalid";
+    input.captureTerminal.reason = "parser_failed";
+    assert.equal(canonicalJson(result.body), before);
+  });
+});
+
+describe("fail-closed source boundaries", () => {
+  it("rejects a failed packaged run without source-classified terminal facts", async () => {
+    const terminal = await packagedTerminal("note_detail", {
+      status: "failed",
+      errorMessage: "some opaque failure",
+      diagnostic: { failureCategory: "unknown", reasonCode: "unknown" },
+    });
+    const input = await validInput("note_detail", { terminal });
+    delete input.captureTerminal;
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.deepEqual(result, {
+      ok: false,
+      reason: "missing_captureTerminal",
+      error: "captureTerminal must be explicitly classified at the failure source",
+    });
+  });
+
+  it("does not infer parser_failed from terminal.status=failed", async () => {
+    const terminal = await packagedTerminal("note_detail", { status: "failed" });
+    const input = await validInput("note_detail", { terminal, captureTerminal: undefined });
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "missing_captureTerminal");
+  });
+
+  it("accepts an explicitly source-classified failed run without changing its reason", async () => {
+    const terminal = await packagedTerminal("note_detail", { status: "failed" });
+    const captureTerminal = { state: "error", reason: "network_failed", retryable: true };
+    const result = mapTerminalToCaptureSubmissionV2(
+      await validInput("note_detail", { terminal, captureTerminal }),
+    );
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.body.header.report.terminal, captureTerminal);
+  });
+
+  it("rejects missing server-issued captureId instead of synthesizing one", async () => {
+    const input = await validInput("note_detail");
+    input.reservation.captureId = "";
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "missing_captureId");
+  });
+
+  it("rejects missing server executionPlanVersion and ignores no caller override", async () => {
+    const input = await validInput("note_detail", { executionPlanVersion: "caller-plan-must-not-apply" });
+    input.reservation.executionPlanVersion = "";
+    const result = mapTerminalToCaptureSubmissionV2(input);
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "missing_executionPlanVersion");
+  });
+
+  it("rejects missing expected target, collector version, explicit slots, and explicit counters", async () => {
+    for (const mutate of [
+      (input) => { input.reservation.targetKey = ""; },
+      (input) => { input.collectorVersion = ""; },
+      (input) => { delete input.slotReports; },
+      (input) => { delete input.captureCounters; },
+    ]) {
+      const input = await validInput("note_detail");
+      mutate(input);
+      assert.equal(mapTerminalToCaptureSubmissionV2(input).ok, false);
+    }
+  });
+
+  it("rejects missing or invalid real packager timestamps; there is no wall-clock fallback", async () => {
+    for (const override of [
+      { startedAt: 0 },
+      { finishedAt: 0 },
+      { startedAt: FINISHED_AT + 1 },
+    ]) {
+      const terminal = await packagedTerminal("note_detail", override);
+      const result = mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal }));
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, "invalid_terminal_timestamps");
+    }
+  });
+
+  it("rejects slot guesses, duplicate slots, invalid counters, and emitted-count mismatch", async () => {
+    const cases = [
+      { slotReports: [{ slotId: "not-in-contract", status: "observed", reason: null }] },
+      { slotReports: [
+        { slotId: "note", status: "observed", reason: null },
+        { slotId: "note", status: "observed", reason: null },
+      ] },
+      { captureCounters: { requested: 1, discovered: 1, emitted: -1, deduplicated: 0, failed: 0 } },
+      { captureCounters: { requested: 1, discovered: 1, emitted: 999, deduplicated: 0, failed: 0 } },
+    ];
+    for (const overrides of cases) {
+      const input = await validInput("note_detail", overrides);
+      assert.equal(mapTerminalToCaptureSubmissionV2(input).ok, false);
+    }
+  });
+
+  it("rejects unsupported platform, unknown workflow, and non-final run status", async () => {
+    const unsupported = await validInput("note_detail");
+    unsupported.reservation.platform = "douyin";
+    assert.equal(mapTerminalToCaptureSubmissionV2(unsupported).reason, "unsupported_platform");
+
+    const unknown = await validInput("note_detail");
+    unknown.reservation.collectionProfile = "unknown";
+    assert.equal(mapTerminalToCaptureSubmissionV2(unknown).reason, "unknown_workflow");
+
+    const running = await packagedTerminal("note_detail", { status: "running" });
+    assert.equal(
+      mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal: running })).reason,
+      "non_terminal_status",
+    );
+  });
+
+  it("rejects a packaged result from another job or platform", async () => {
+    const otherJob = await packagedTerminal("note_detail");
+    otherJob.externalTaskId = "another-job";
+    assert.equal(
+      mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal: otherJob })).reason,
+      "terminal_job_mismatch",
+    );
+
+    const otherPlatform = await packagedTerminal("note_detail");
+    otherPlatform.platform = "douyin";
+    assert.equal(
+      mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal: otherPlatform })).reason,
+      "terminal_platform_mismatch",
+    );
+  });
+
+  it("does not include request authority fields", async () => {
+    const result = mapTerminalToCaptureSubmissionV2(await validInput("note_detail"));
+    assert.equal(result.ok, true, result.error);
+    const serialized = JSON.stringify(result.body);
+    for (const forbidden of ["workspaceId", "receivedAt", "sourcePrincipal", "stationId", "leaseToken"] ) {
+      assert.ok(!serialized.includes(forbidden));
+    }
+  });
+});
