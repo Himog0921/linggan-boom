@@ -233,3 +233,11 @@
 - **方案**：视频流选择器只枚举 `stream` 的即时数组值；把外层键视为不稳定的分类标签。统一使用流条目中的 URL、码率、尺寸字段选择主地址并保留备用地址；采集器不再单独读取 `stream.h264`。
 - **结果**：旧编解码名和新的 `EF*` 名称走同一条选择器，消除了按旧键读取的旁路。2026-08-01 已在真实视频笔记上完成手动采集与本地下载验收（Dashboard 显示 2 个媒体，含视频，下载完成）；尚未发布。该次手动采集没有同步到工作台，服务端媒体入库仍需独立验收。
 - **影响**：今后小红书调整流分类名时，只要内层流条目结构保持，视频采集不应再因分类键改名失效；若内层 URL 字段变化，必须重新进行页面探针，不能自行猜测新字段。
+
+## D28: XHS V2 来源合同由插件定真值，工作台独立镜像并 fail closed
+
+- **日期**：2026-08-11
+- **背景**：工作台 B3 不能从不稳定别名、URL、媒体角色或两仓各自的默认值猜测内容身份、内容类型和封面来源；否则 ContractEvaluation 可能接受身份冲突的数据，媒体槽也会随临时 URL 漂移。
+- **方案**：插件新增版本化暗态合同 `xhs.record-payload/v2` 与 `xhs.media-inventory/v2`。note 的 `noteId/platformContentId`、author 的 `authorId/platformAuthorId` 必须各自非空且相等，note `type` 只允许 `normal/video`；媒体候选只接受已证明的 note subject，comment media 与 author/avatar 在来源审计完成前保持拒绝。producer 从平台图片序位或媒体自身序位明示并持久保留 ordinal，稳定 slot 精确为 `subjectKey:purpose:kind:ordinal`；下载队列位置、assetId、文件名和 URL 均不得补造身份。六个 CollectionContract 升级为 v2 并绑定两份来源合同 hash。工作台维护独立镜像并通过 canonical JSON、fixture、hash 和负例交叉验证，任一侧漂移即失败。
+- **结果**：六份 XHS fixture、真实 terminal mapper 和 B2 暗态 normalization/evaluation 使用同一可证伪来源规则；身份或类型错误在 accepted 前拒绝，媒体候选不能跨 subject 或用 `role=cover` 冒充平台明确封面。
+- **影响**：本决策只补来源合同，不接现役 caller/outbox，不创建 schema、Canonical/Projection writer 或 Media Domain 关系，也不发布/升级插件。后续接线必须单独验收，不得新增 fallback、双写或兼容路径。

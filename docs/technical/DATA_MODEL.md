@@ -25,6 +25,7 @@
 | `content` | string | 正文 |
 | `type` | string | normal / video |
 | `cover` | string | 封面 URL |
+| `coverProvenance` | string | 封面候选来源：`platform_explicit` / `first_observed_image`；仅证明采集来源，不代表已被 Canonical 接受 |
 | `images` | string[] | 图片 URL 列表 |
 | `video` | string | 视频流 URL |
 | `likes` | number | 点赞数 |
@@ -54,6 +55,7 @@
 | `videoDownloadUrl` | string | 视频下载直链（可能会过期） |
 | `videoStreams` | object[] | 视频候选流列表；小红书会保留 `h266 / h265 / h264 / av1` 主链与备用链接 |
 | `imageCandidates` | string[][] | 按图片槽位保存的高清候选链接；同一槽位内是主、备地址，不是多张图片。仅作本地下载和原始证据，不得在跨端同步时展开为额外 `imageUrls`。 |
+| `imageCandidateSlots` | `{ordinal:number\|null,candidates:string[]}[]` | 小红书 producer 从平台 `imageList` 的图片序位形成并跨运行边界持久保留；候选 URL 只属于该槽位，不决定槽位身份。legacy 记录没有已证明序位时必须保留 `ordinal=null`，V2 映射 fail closed，不得由下载队列位置补造。 |
 | `livePhotoStreams` | object[] | 小红书 Live 图候选流列表，按图片序号保留主链与备用链接 |
 | `mediaDownloadStatus` | string | 媒体下载状态 |
 | `dataSource` | string | 数据来源，例如 `dom` / `render` / `api` |
@@ -183,10 +185,21 @@
 | `collectionRunId` | string | 所属采集任务 ID |
 | `assetType` | string | `image` / `video` / `comment_image` 等 |
 | `role` | string | `cover` / `body` / `comment` / `avatar` 等 |
+| `ordinal` | number | producer 从平台图片序位或媒体自身序位持久保留的同 subject/purpose/kind 稳定零基顺序；不得从下载队列位置、assetId、文件名或 URL 补造 |
+| `candidateUrls` | string[] | 同一媒体候选的可观察地址；地址可过期，不参与稳定槽位身份 |
+| `coverProvenance` | string | 仅 cover 使用：`platform_explicit` / `first_observed_image`；不得从 `role=cover` 反推 |
 | `quality` | string | `origin` / `download` / `medium` / `thumb` 等 |
 | `downloadStatus` | string | 下载状态 |
 | `lastResolvedAt` | number | 最近一次刷新/解析时间 |
 | `createdAt` | number | 创建时间 |
+
+> V2 暗态来源合同补充（`xhs.media-inventory/v2`）：terminal mapper 只把上述真实媒体事实映射为
+> `subject + slotId + purpose + kind + ordinal + observedAddress + coverProvenance`。`slotId`
+> 必须精确等于 `subjectKey:purpose:kind:ordinal`，URL 不参与身份；candidate 必须属于同一 CapturePackage
+> 已发出的 note。comment media 与 author/avatar 当前没有可审计的 producer/Artifact 来源，因此 V2 明确
+> 拒绝这些分支。producer 必须持久保留平台图片序位或媒体自身序位；不得从下载队列位置或 assetId
+> 反推。该合同尚未接现役 caller，也不创建
+> CanonicalMediaSlot 或 Media Domain 关系。
 
 ### workbenchOutbox
 

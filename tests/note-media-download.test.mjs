@@ -79,6 +79,53 @@ function uninstallBrowserMocks() {
   delete globalThis.XMLHttpRequest;
 }
 
+test('XHS image media preserves producer ordinals instead of download queue positions', async () => {
+  installBrowserMocks();
+  const originalBulkUpsert = mediaAssetStore.bulkUpsert;
+  const assetWrites = [];
+  mediaAssetStore.bulkUpsert = async (assets) => {
+    assetWrites.push(assets);
+  };
+
+  try {
+    const service = createNoteMediaDownloadService({
+      MSG: { DOWNLOAD_MEDIA_FILE: 'downloadMediaFile' },
+      noteStore: { async updateById() {} },
+      sendToBackground: async (_action, payload) => ({
+        success: true,
+        quality: 'HD',
+        sourceUrl: payload.candidates[0],
+        via: 'chrome.downloads',
+      }),
+      collectNote: async () => null,
+      loadDouyinRuntime: async () => ({}),
+      extractNoteId: () => '',
+    });
+
+    await service.downloadNoteMediaFromRecord({
+      platform: 'xhs',
+      noteId: 'note-source-order',
+      contentId: 'note-source-order',
+      title: 'source order',
+      type: 'normal',
+      imageCandidateSlots: [
+        { ordinal: 7, candidates: ['https://example.com/7-primary.jpg', 'https://example.com/7-backup.jpg'] },
+        { ordinal: 2, candidates: ['https://example.com/2.jpg'] },
+      ],
+    }, { mediaTypes: ['images'] });
+
+    const finalAssets = assetWrites.at(-1);
+    assert.deepEqual(finalAssets.map((asset) => asset.ordinal), [7, 2]);
+    assert.deepEqual(finalAssets.map((asset) => asset.sourceUrl), [
+      'https://example.com/7-primary.jpg',
+      'https://example.com/2.jpg',
+    ]);
+  } finally {
+    mediaAssetStore.bulkUpsert = originalBulkUpsert;
+    uninstallBrowserMocks();
+  }
+});
+
 test('downloadNoteMediaFromRecord refreshes douyin note before first download when queue is empty', async () => {
   installBrowserMocks();
   const originalBulkUpsert = mediaAssetStore.bulkUpsert;

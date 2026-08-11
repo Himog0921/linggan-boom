@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createTaskPoller } from '../src/workbench/runtime/taskPoller.js';
+import {
+  buildWorkbenchResultSummary,
+  createTaskPoller,
+} from '../src/workbench/runtime/taskPoller.js';
 
 function claimTask(tasksOrFactory) {
   return async () => {
@@ -10,6 +13,33 @@ function claimTask(tasksOrFactory) {
     return { task: task || null };
   };
 }
+
+test('XHS run authority prevents record aliases from synthesizing V2 identities or type', () => {
+  const result = buildWorkbenchResultSummary({
+    platform: 'xhs',
+    records: {
+      notes: [{
+        noteId: 'note-1',
+        contentId: 'note-1',
+        contentType: 'video',
+        title: 'source boundary',
+      }],
+      comments: [],
+      authors: [{
+        authorId: 'author-1',
+        authorPlatformId: 'author-1',
+        name: 'source boundary',
+      }],
+      mediaAssets: [],
+    },
+  });
+
+  assert.equal(result.records.notes[0].noteId, 'note-1');
+  assert.equal(result.records.notes[0].platformContentId, '');
+  assert.equal(result.records.notes[0].type, '');
+  assert.equal(result.records.authors[0].authorId, 'author-1');
+  assert.equal(result.records.authors[0].platformAuthorId, '');
+});
 
 test('task poller starts a fresh tick when the previous tick is stale', async () => {
   let now = 1_000;
@@ -154,6 +184,7 @@ test('task poller claims a pending task and patches completion state', async () 
               coverUrl: 'https://images.example.com/cover.jpg',
               images: [{ url: 'https://images.example.com/cover.jpg' }],
               imageCandidates: [],
+              imageCandidateSlots: [],
               videoUrl: '',
               likes: 12,
               likeCount: 12,

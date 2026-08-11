@@ -60,11 +60,21 @@ export function createNoteMediaDownloadService({
     return `灵感爆爆爆_笔记媒体_${noteId}_${title}.zip`;
   }
 
-  function getNoteImageGroups(note = {}) {
-    if (Array.isArray(note?.imageCandidates) && note.imageCandidates.length > 0) {
-      return note.imageCandidates;
+  function getNoteImageSlots(note = {}) {
+    if (Array.isArray(note?.imageCandidateSlots) && note.imageCandidateSlots.length > 0) {
+      return note.imageCandidateSlots.map((slot) => ({
+        ordinal: Number.isSafeInteger(slot?.ordinal) && slot.ordinal >= 0 ? slot.ordinal : null,
+        candidates: normalizeCandidates(slot?.candidates),
+      })).filter((slot) => slot.candidates.length > 0);
     }
-    return Array.isArray(note?.images) ? note.images.map((url) => [url]) : [];
+    const legacyGroups = Array.isArray(note?.imageCandidates) && note.imageCandidates.length > 0
+      ? note.imageCandidates
+      : (Array.isArray(note?.images) ? note.images.map((url) => [url]) : []);
+    return legacyGroups.map((group) => ({ ordinal: null, candidates: normalizeCandidates(group) }));
+  }
+
+  function getNoteImageGroups(note = {}) {
+    return getNoteImageSlots(note).map((slot) => slot.candidates);
   }
 
   function getNoteCoverCandidates(note = {}, imageGroups = getNoteImageGroups(note)) {
@@ -80,10 +90,15 @@ export function createNoteMediaDownloadService({
 
   function getNoteLivePhotoGroups(note = {}) {
     const streams = Array.isArray(note?.livePhotoStreams) ? note.livePhotoStreams : [];
-    return streams.map((item, index) => ({
-      index: Number(item?.imageIndex || index + 1),
-      candidates: normalizeCandidates([item?.candidates, item?.url, item?.streams]),
-    })).filter((item) => item.candidates.length > 0);
+    return streams.map((item, index) => {
+      const imageIndex = Number(item?.imageIndex);
+      const ordinal = Number.isSafeInteger(imageIndex) && imageIndex > 0 ? imageIndex - 1 : null;
+      return {
+        index: ordinal === null ? index + 1 : ordinal + 1,
+        ordinal,
+        candidates: normalizeCandidates([item?.candidates, item?.url, item?.streams]),
+      };
+    }).filter((item) => item.candidates.length > 0);
   }
 
   function getNoteVideoCandidates(note = {}) {
@@ -99,7 +114,8 @@ export function createNoteMediaDownloadService({
   }
 
   function getNoteMediaDownloadOptions(note = {}) {
-    const imageGroups = getNoteImageGroups(note);
+    const imageSlots = getNoteImageSlots(note);
+    const imageGroups = imageSlots.map((slot) => slot.candidates);
     const coverCandidates = getNoteCoverCandidates(note, imageGroups);
     const liveGroups = getNoteLivePhotoGroups(note);
     const videoCandidates = getNoteVideoCandidates(note);
@@ -147,7 +163,8 @@ export function createNoteMediaDownloadService({
       ? availableTypes.has(type)
       : selected.values.has(type);
 
-    const imageGroups = getNoteImageGroups(note);
+    const imageSlots = getNoteImageSlots(note);
+    const imageGroups = imageSlots.map((slot) => slot.candidates);
     const includeImages = shouldInclude('images');
     const includeCover = shouldInclude('cover') && !includeImages;
 
@@ -158,19 +175,21 @@ export function createNoteMediaDownloadService({
         queue.push({
           id: 'cover-1',
           type: 'cover',
+          ordinal: 0,
           candidates,
           filename: `${folder}/封面.${ext}`,
         });
       }
     }
 
-    if (includeImages) imageGroups.forEach((group, index) => {
-      const candidates = normalizeCandidates(group);
+    if (includeImages) imageSlots.forEach((slot, index) => {
+      const candidates = slot.candidates;
       if (candidates.length === 0) return;
       const ext = detectFileExt(candidates[0], 'jpg');
       queue.push({
         id: `image-${index + 1}`,
         type: 'image',
+        ordinal: slot.ordinal,
         candidates,
         filename: `${folder}/图_${String(index + 1).padStart(2, '0')}.${ext}`,
       });
@@ -182,6 +201,7 @@ export function createNoteMediaDownloadService({
         queue.push({
           id: `live-${item.index}`,
           type: 'live_photo',
+          ordinal: item.ordinal,
           candidates: item.candidates,
           filename: `${folder}/Live_${String(item.index).padStart(2, '0')}.${ext}`,
         });
@@ -193,6 +213,7 @@ export function createNoteMediaDownloadService({
       queue.push({
         id: 'video-1',
         type: 'video',
+        ordinal: 0,
         candidates: videoCandidates,
         filename: `${folder}/${title}.mp4`,
       });
@@ -244,6 +265,9 @@ export function createNoteMediaDownloadService({
       const role = task.type === 'cover'
         ? 'cover'
         : (task.type === 'live_photo' ? 'live_photo' : 'body');
+      const coverProvenance = role === 'cover'
+        ? String(note?.coverProvenance || '').trim()
+        : undefined;
 
       return {
         assetId: `media_${contentId}_${task.id}`,
@@ -251,6 +275,8 @@ export function createNoteMediaDownloadService({
         collectionRunId: String(note?.collectionRunId || collectionRunId || '').trim() || undefined,
         assetType,
         role,
+        ordinal: task.ordinal,
+        coverProvenance,
         quality,
         downloadStatus,
         lastResolvedAt: now,

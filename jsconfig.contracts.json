@@ -22,6 +22,7 @@
     "src/platforms/xhs/adapter.js",
     "src/platforms/douyin/adapter.js",
     "src/shared/targetIdentity.js",
+    "src/workbench/protocol/v2/xhs-source-contract.cjs",
     "src/workbench/protocol/v2/xhs-contracts.cjs",
     "src/workbench/protocol/v2/xhs-terminal-mapper.cjs"
   ]

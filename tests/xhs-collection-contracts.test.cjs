@@ -36,8 +36,12 @@ describe("XHS V2 contracts", () => {
 
   for (const id of ALL_IDS) {
     const c = CONTRACTS[id];
-    it(`${id}: version=1, platform=["xhs"], allowEmptyRecords=true`, () => {
-      assert.equal(c.version, 1);
+    it(`${id}: version=2, source contracts bound, platform=["xhs"], allowEmptyRecords=true`, () => {
+      assert.equal(c.version, 2);
+      assert.equal(c.sourceContracts.recordPayload.schemaVersion, "xhs.record-payload/v2");
+      assert.equal(c.sourceContracts.mediaInventory.schemaVersion, "xhs.media-inventory/v2");
+      assert.match(c.sourceContracts.recordPayload.contractHash, /^[0-9a-f]{64}$/);
+      assert.match(c.sourceContracts.mediaInventory.contractHash, /^[0-9a-f]{64}$/);
       assert.deepEqual(c.platforms, ["xhs"]);
       assert.deepEqual(c.terminalPolicy.allowedStates, ["completed", "blocked", "cancelled", "error"]);
       assert.equal(c.terminalPolicy.allowEmptyRecords, true);
@@ -188,7 +192,7 @@ describe("XHS V2 fixtures", () => {
     it(`${id}: fixture header matches contract id/version/hash`, () => {
       const hdr = f.submission.body.header;
       assert.equal(hdr.contractId, id);
-      assert.equal(hdr.contractVersion, 1);
+      assert.equal(hdr.contractVersion, 2);
       assert.equal(hdr.contractHash, contractHash(CONTRACTS[id]));
       assert.match(hdr.contractHash, /^[0-9a-f]{64}$/);
     });
@@ -311,7 +315,7 @@ describe("buildCaptureSubmissionBodyV2", () => {
     observedAt: "2026-08-06T12:00:00Z",
     collectorVersion: "1.0.0",
     contractId: "xhs.list-scan",
-    contractVersion: 1,
+    contractVersion: 2,
     contractHash: EXPECTED_CONTRACT_HASHES["xhs.list-scan"],
     report: {
       startedAt: "2026-08-06T11:55:00Z",

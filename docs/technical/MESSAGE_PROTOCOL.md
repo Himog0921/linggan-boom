@@ -495,3 +495,12 @@ V2 的六个小红书采集合同和脱敏 `CaptureSubmissionV2` fixtures 位于
 - `targetKey` 来自服务端执行计划，`collectorVersion` 来自运行中的插件版本；缺失均拒绝。
 - 当前 run 的媒体记录只编码为该包的 `media_inventory` Artifact；固定 fixture 媒体只用于合同 hash fixture，不能进入运行映射。
 - 当前阶段没有 V1/V2 双写、fallback、切流、部署或九工位升级。
+
+## 9. XHS V2 来源合同（B3-CONTRACT-SRC-001 / B3-MEDIA-SRC-001）
+
+`src/workbench/protocol/v2/xhs-source-contract.cjs` 是插件侧来源真值，内容工作台持有独立镜像并在跨仓检查中比较 canonical JSON。
+
+- `xhs.record-payload/v2`：note 必须同时提供相等的 `noteId/platformContentId`，author 必须同时提供相等的 `authorId/platformAuthorId`；note 类型唯一读取 `type`，只允许 `normal/video`，旧别名与未知类型拒绝。
+- `xhs.media-inventory/v2`：候选只接受同批 emitted record 中存在的 note subject；comment media 与 author/avatar 在真实 producer/Artifact 来源审计完成前均拒绝。producer 必须从平台明示的图片序位或媒体自身序位持久保留非负 ordinal，不得从下载队列位置、assetId、文件名或 URL 补造。稳定 `slotId` 必须精确等于 `subjectKey:purpose:kind:ordinal`；候选还必须包含 observedAddress 与独立 cover provenance，未知键、跨 subject、重复/不匹配 slot 和无证明封面均拒绝。
+- 六个 XHS CollectionContract 已升级为 v2，并把上述两份来源合同的 schemaVersion/canonical hash 纳入自身 definition/hash；旧 v1 header 不再代表当前来源合同。
+- terminal mapper 与六份 fixture 都经过同一严格来源 validator；该边界仍是暗态，没有运行 caller、双写、fallback、部署或工位升级。

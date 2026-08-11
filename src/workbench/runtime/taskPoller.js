@@ -609,7 +609,9 @@ function pickMediaUrlFromArray(value) {
   return '';
 }
 
-function sanitizeNoteRecord(note = {}) {
+function sanitizeNoteRecord(note = {}, expectedPlatform = '') {
+  const platform = String(note.platform || '').trim();
+  const strictXhsSource = String(expectedPlatform || '').trim() === 'xhs' || platform === 'xhs';
   const images = Array.isArray(note.images) ? note.images.filter(Boolean) : [];
   const imageCandidates = Array.isArray(note.imageCandidates) ? note.imageCandidates.filter(Boolean) : [];
   const cover = firstText(note.cover)
@@ -625,9 +627,9 @@ function sanitizeNoteRecord(note = {}) {
 
   return {
     targetKey,
-    platform: String(note.platform || '').trim(),
-    noteId: String(note.noteId || note.platformContentId || note.contentId || '').trim(),
-    platformContentId: String(note.platformContentId || note.noteId || note.contentId || '').trim(),
+    platform,
+    noteId: String(strictXhsSource ? (note.noteId || '') : (note.noteId || note.platformContentId || note.contentId || '')).trim(),
+    platformContentId: String(strictXhsSource ? (note.platformContentId || '') : (note.platformContentId || note.noteId || note.contentId || '')).trim(),
     title: String(note.title || '').trim(),
     content: String(note.content || note.desc || note.bodyText || '').trim(),
     url,
@@ -641,6 +643,12 @@ function sanitizeNoteRecord(note = {}) {
     coverUrl: firstText(note.coverUrl) || cover,
     images,
     imageCandidates,
+    imageCandidateSlots: Array.isArray(note.imageCandidateSlots)
+      ? note.imageCandidateSlots.map((slot) => ({
+          ordinal: Number.isSafeInteger(slot?.ordinal) && slot.ordinal >= 0 ? slot.ordinal : null,
+          candidates: Array.isArray(slot?.candidates) ? slot.candidates.filter(Boolean) : [],
+        }))
+      : [],
     videoUrl: firstText(note.videoUrl) || firstText(note.video) || firstText(note.videoDownloadUrl) || firstText(note.videoPlayUrl),
     likes: toFiniteNumber(note.likes, 0),
     likeCount: toFiniteNumber(note.likeCount ?? note.likes, 0),
@@ -663,7 +671,7 @@ function sanitizeNoteRecord(note = {}) {
       || firstText(note.releaseDate)
       || firstText(note.timeText)
       || firstText(note.time),
-    type: String(note.type || note.contentType || note.noteType || note.itemType || '').trim(),
+    type: String(strictXhsSource ? (note.type || '') : (note.type || note.contentType || note.noteType || note.itemType || '')).trim(),
     lastUpdateTime: note.lastUpdateTime ?? null,
     rank: toFiniteNumber(note.rank ?? note.batchRank, 0),
     batchRank: toFiniteNumber(note.batchRank ?? note.rank, 0),
@@ -696,9 +704,15 @@ function isValidCommentRecordForWriteback(comment = {}) {
   return Boolean(comment.commentId && comment.noteId && comment.text);
 }
 
-function sanitizeAuthorRecord(author = {}) {
-  const authorId = String(author.authorId || author.platformAuthorId || author.authorPlatformId || author.userId || author.id || '').trim();
-  const platformAuthorId = String(author.platformAuthorId || author.authorPlatformId || authorId).trim();
+function sanitizeAuthorRecord(author = {}, expectedPlatform = '') {
+  const platform = String(author.platform || '').trim();
+  const strictXhsSource = String(expectedPlatform || '').trim() === 'xhs' || platform === 'xhs';
+  const authorId = String(strictXhsSource
+    ? (author.authorId || '')
+    : (author.authorId || author.platformAuthorId || author.authorPlatformId || author.userId || author.id || '')).trim();
+  const platformAuthorId = String(strictXhsSource
+    ? (author.platformAuthorId || '')
+    : (author.platformAuthorId || author.authorPlatformId || authorId)).trim();
   const description = String(author.description || author.bio || author.signature || '').trim();
   const fans = toFiniteNumber(author.fans ?? author.followers ?? author.followerCount, 0);
   const follows = toFiniteNumber(author.follows ?? author.following ?? author.followingCount, 0);
@@ -713,7 +727,7 @@ function sanitizeAuthorRecord(author = {}) {
     platformAuthorId,
     authorEntityId: String(author.authorEntityId || '').trim(),
     userId: String(author.userId || '').trim(),
-    platform: String(author.platform || '').trim(),
+    platform,
     name: String(author.name || author.authorName || author.nickname || '').trim(),
     profileUrl: String(author.profileUrl || author.url || '').trim(),
     avatar: firstText(author.avatar) || firstText(author.avatarUrl) || firstText(author.image),
@@ -747,21 +761,26 @@ function sanitizeMediaAssetRecord(asset = {}) {
     sourceUrl: String(asset.sourceUrl || asset.url || '').trim(),
     localPath: String(asset.localPath || '').trim(),
     status: String(asset.status || '').trim(),
+    assetType: String(asset.assetType || '').trim(),
+    role: String(asset.role || '').trim(),
+    ordinal: Number.isSafeInteger(asset.ordinal) && asset.ordinal >= 0 ? asset.ordinal : null,
+    candidateUrls: Array.isArray(asset.candidateUrls) ? asset.candidateUrls.filter(Boolean) : [],
+    coverProvenance: String(asset.coverProvenance || '').trim(),
     noteId: String(asset.noteId || asset.contentId || '').trim(),
     commentId: String(asset.commentId || '').trim(),
   };
 }
 
-function buildWorkbenchResultSummary(run = {}) {
+export function buildWorkbenchResultSummary(run = {}) {
   const records = run?.records || {};
   const notes = Array.isArray(records.notes)
-    ? records.notes.map(sanitizeNoteRecord).filter((note) => note.noteId || note.title || note.content)
+    ? records.notes.map((note) => sanitizeNoteRecord(note, run.platform)).filter((note) => note.noteId || note.title || note.content)
     : [];
   const comments = Array.isArray(records.comments)
     ? records.comments.map(sanitizeCommentRecord).filter(isValidCommentRecordForWriteback)
     : [];
   const authors = Array.isArray(records.authors)
-    ? records.authors.map(sanitizeAuthorRecord).filter((author) => author.authorId || author.name)
+    ? records.authors.map((author) => sanitizeAuthorRecord(author, run.platform)).filter((author) => author.authorId || author.name)
     : [];
   const mediaAssets = Array.isArray(records.mediaAssets)
     ? records.mediaAssets.map(sanitizeMediaAssetRecord).filter((asset) => asset.assetId || asset.sourceUrl || asset.localPath)

@@ -211,6 +211,28 @@ AI 可用的数据契约，必须同时满足 4 件事：
 | `downloadStatus` | 下载状态 |
 | `lastResolvedAt` | 最近一次重新解析直链时间 |
 
+## 3.6 XHS V2 暗态来源合同
+
+`xhs.record-payload/v2` 是进入内容工作台 V2 Derived 前的来源门禁，不替代本文件的 V1
+展示/导出字段：
+
+- note 必须同时携带非空 `noteId` 与 `platformContentId`，且二者相等；`type` 是内容类型的唯一来源，只允许 `normal` / `video`，不得从别名、URL 或媒体字段猜测。
+- author 必须同时携带非空 `authorId` 与 `platformAuthorId`，且二者相等。
+- comment 必须携带非空 `noteId` 与 `commentId`。
+- 任一身份不完整或不相等，必须在 ContractEvaluation accepted 之前拒绝，不能推进后续 Current 指针。
+
+`xhs.media-inventory/v2` 只描述已观察媒体候选，固定字段为
+`subject / slotId / purpose / kind / ordinal / observedAddress / coverProvenance`：
+
+- `slotId` 只由稳定 subject、purpose、kind、ordinal 决定；会过期的 URL 不参与身份。
+- subject 当前只允许同包已发出的 note；comment media 与 author/avatar 没有审计完成的 producer/Artifact 来源，必须拒绝。
+- `ordinal` 必须由媒体 producer 从平台明示的图片序位或媒体自身序位持久保留且非负；不得从下载队列位置、assetId、文件名或 URL 补造。
+- cover 来源必须显式区分 `platform_explicit` 与 `first_observed_image`；`role=cover` 本身不是平台明确封面的证明。
+- 媒体 subject 必须能在同一包的 note 记录中找到；`slotId` 必须精确等于 `subjectKey:purpose:kind:ordinal`，重复/不匹配 slot、未知字段或歧义 cover 均拒绝。
+
+两份合同目前只供 V2 fixture、terminal mapper 与工作台镜像校验使用；尚未接现役 outbox/caller，
+不写 Canonical、Projection 或 Media Domain。
+
 ## 4. 当前版本与目标版本的差距
 
 ### 4.1 已具备

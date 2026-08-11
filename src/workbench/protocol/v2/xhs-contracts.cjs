@@ -12,6 +12,11 @@
  */
 
 const crypto = require("node:crypto");
+const {
+  XHS_RECORD_PAYLOAD_CONTRACT,
+  XHS_MEDIA_INVENTORY_CONTRACT,
+  validateXhsMediaInventoryV2,
+} = require("./xhs-source-contract.cjs");
 
 // ── Canonical JSON ─────────────────────────────────────────────────────────
 
@@ -119,6 +124,17 @@ function encodeBase64(bytes) {
 function contractHash(definition) {
   return sha256Hex(canonicalJson(definition));
 }
+
+const XHS_SOURCE_CONTRACT_BINDINGS = Object.freeze({
+  recordPayload: Object.freeze({
+    schemaVersion: XHS_RECORD_PAYLOAD_CONTRACT.schemaVersion,
+    contractHash: contractHash(XHS_RECORD_PAYLOAD_CONTRACT),
+  }),
+  mediaInventory: Object.freeze({
+    schemaVersion: XHS_MEDIA_INVENTORY_CONTRACT.schemaVersion,
+    contractHash: contractHash(XHS_MEDIA_INVENTORY_CONTRACT),
+  }),
+});
 
 // ── Package hash ───────────────────────────────────────────────────────────
 
@@ -228,23 +244,24 @@ function reportSlots(slotIds) {
 
 // ── Media inventory artifact (for metadata_only contracts) ─────────────────
 
-function mediaInventoryArtifact() {
+function mediaInventoryArtifact(subject = {
+  kind: "note",
+  noteId: "fixture-note-xhs-list-scan",
+  platformContentId: "fixture-note-xhs-list-scan",
+}) {
   const payload = {
-    candidates: [
-      { kind: "image", url: "https://sns-webpic-qc.xhscdn.com/fixture-cover", width: 1080, height: 1440 },
-      { kind: "image", url: "https://sns-webpic-qc.xhscdn.com/fixture-img-1", width: 1080, height: 1440 },
-    ],
+    schemaVersion: XHS_MEDIA_INVENTORY_CONTRACT.schemaVersion,
+    candidates: [{
+      subject,
+      slotId: `note:${subject.noteId}:cover:image:0`,
+      purpose: "cover",
+      kind: "image",
+      ordinal: 0,
+      observedAddress: "https://sns-webpic-qc.xhscdn.com/fixture-cover",
+      coverProvenance: "platform_explicit",
+    }],
   };
-  const json = canonicalJson(payload);
-  const bytes = Buffer.from(json, "utf8");
-  return {
-    kind: "media_inventory",
-    encoding: "base64",
-    artifactPayload: encodeBase64(bytes),
-    artifactChecksum: sha256Hex(bytes),
-    contentLength: bytes.length,
-    restricted: false,
-  };
+  return mediaInventoryArtifactFromCandidates(payload.candidates);
 }
 
 /**
@@ -258,7 +275,14 @@ function mediaInventoryArtifactFromCandidates(candidates) {
   if (!Array.isArray(candidates)) {
     throw new Error("media inventory candidates must be an array");
   }
-  const payload = { candidates };
+  const payload = {
+    schemaVersion: XHS_MEDIA_INVENTORY_CONTRACT.schemaVersion,
+    candidates,
+  };
+  const validation = validateXhsMediaInventoryV2(payload);
+  if (!validation.ok) {
+    throw new Error(`${validation.path}: ${validation.reason}`);
+  }
   const json = canonicalJson(payload);
   const bytes = Buffer.from(json, "utf8");
   return {
@@ -280,10 +304,14 @@ function mediaInventoryArtifactFromCandidates(candidates) {
 function fixtureRecordPayload(kind, contractId) {
   const suffix = contractId.replace(/[^a-z0-9-]/gi, "-");
   if (kind === "note") {
+    const type = contractId === "xhs.note-detail" || contractId === "xhs.note-full"
+      ? "video"
+      : "normal";
     return {
       platform: "xhs",
       noteId: `fixture-note-${suffix}`,
       platformContentId: `fixture-note-${suffix}`,
+      type,
       title: `Fixture note for ${contractId}`,
       content: `Desensitized note body for V2 contract ${contractId}`,
       url: `https://www.xiaohongshu.com/explore/fixture-${suffix}`,
@@ -314,7 +342,8 @@ function fixtureRecordPayload(kind, contractId) {
 const CONTRACTS = {
   "xhs.list-scan": {
     id: "xhs.list-scan",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["note"],
     slots: [{ slotId: "note_list", requirement: "required" }],
@@ -327,7 +356,8 @@ const CONTRACTS = {
 
   "xhs.note-detail": {
     id: "xhs.note-detail",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["note", "comment"],
     slots: [
@@ -343,7 +373,8 @@ const CONTRACTS = {
 
   "xhs.note-full": {
     id: "xhs.note-full",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["note", "comment"],
     slots: [
@@ -359,7 +390,8 @@ const CONTRACTS = {
 
   "xhs.comment-probe": {
     id: "xhs.comment-probe",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["comment"],
     slots: [{ slotId: "comments", requirement: "required" }],
@@ -372,7 +404,8 @@ const CONTRACTS = {
 
   "xhs.author-profile": {
     id: "xhs.author-profile",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["author", "note"],
     slots: [
@@ -388,7 +421,8 @@ const CONTRACTS = {
 
   "xhs.author-links": {
     id: "xhs.author-links",
-    version: 1,
+    version: 2,
+    sourceContracts: XHS_SOURCE_CONTRACT_BINDINGS,
     platforms: ["xhs"],
     recordKinds: ["note"],
     slots: [{ slotId: "note_links", requirement: "required" }],
@@ -415,12 +449,12 @@ const FIXTURE_BLUEPRINTS = {
 // Contract hashes are fixed audit anchors. A contract edit must update the
 // audited fixture explicitly; it may not silently move both sides together.
 const EXPECTED_CONTRACT_HASHES = {
-  "xhs.list-scan": "49c2054e6a441799cc07f2dfd4166b46eb4c44b2a19156c14f33f68dd10da002",
-  "xhs.note-detail": "0814001c0b93ea01ff522dbc7d2a9956bfa2f8d998191c2734aad4b59c4c32c1",
-  "xhs.note-full": "24d762bdd62b0a0fc188c62230cd64ee4918c9faee128fe69e8c10562abb6e51",
-  "xhs.comment-probe": "448a3c36ed74be64d633e967fc15c785c1bde274ccdf464ba1e7b766c9fbc557",
-  "xhs.author-profile": "cf8e0d1e5b3a4fda9fef5d290abb150e0f06973857338bced8fefa3efc367f44",
-  "xhs.author-links": "bd2f28b29bc8d23877a3079962018392c1f24e055c81072e114be32e2fdb3f7a",
+  "xhs.list-scan": "9d3347aca8897dc3c373f72cc4047f20c33c990be29e94b1698b47cde153c37f",
+  "xhs.note-detail": "044fd0cc82cb9fca81c3e3665c20b00af7bbeebc0657924fc01543910df65276",
+  "xhs.note-full": "ec33bbdee4dbe4dc3e9598770e8d504c2eae9c2ae6103249c699dcf98d618f0c",
+  "xhs.comment-probe": "f2f6408d9527ff169d52db8fc45e5faecee6ddc84b7ad027978df94d3e74200f",
+  "xhs.author-profile": "d2b29fd9f74ad379eb41bc16ef20ba89311a4fa914f5f189cadd4b08714f0405",
+  "xhs.author-links": "2d19d1ae951f3d1d2d66a24c0ee5037f06f2f87dee9c1418bf24aec791fd6e89",
 };
 
 // ── 6 fixture CapturePayloadV2's ───────────────────────────────────────────
@@ -463,8 +497,13 @@ function buildFixture(contractId) {
   header.report.counters.emitted = records.length;
 
   // Artifacts: metadata_only contracts get media_inventory; not_required get none
-  const artifacts = blueprint.mediaPolicy === "metadata_only"
-    ? [mediaInventoryArtifact()]
+  const fixtureNote = records.find((record) => record.recordKind === "note")?.payload;
+  const artifacts = blueprint.mediaPolicy === "metadata_only" && fixtureNote
+    ? [mediaInventoryArtifact({
+        kind: "note",
+        noteId: fixtureNote.noteId,
+        platformContentId: fixtureNote.platformContentId,
+      })]
     : [];
 
   const body = buildCaptureSubmissionBodyV2({ header, records, artifacts });
@@ -498,6 +537,7 @@ for (const id of Object.keys(CONTRACTS)) {
 // ── Exports ────────────────────────────────────────────────────────────────
 
 module.exports = {
+  XHS_SOURCE_CONTRACT_BINDINGS,
   canonicalJson,
   sha256Hex,
   encodeBase64,

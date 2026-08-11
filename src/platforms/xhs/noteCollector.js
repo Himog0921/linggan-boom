@@ -435,9 +435,13 @@ export async function collectNote(wd = window, options = {}) {
   const imageUrls = (note.imageList || [])
     .map((img) => toHighQualityImageUrl(getXhsImageUrl(img)))
     .filter(Boolean);
-  const imageCandidates = (note.imageList || [])
-    .map((img) => getHighQualityImageCandidates(getXhsImageUrl(img)))
-    .filter((arr) => arr.length > 0);
+  const imageCandidateSlots = (note.imageList || [])
+    .map((img, ordinal) => ({
+      ordinal,
+      candidates: getHighQualityImageCandidates(getXhsImageUrl(img)),
+    }))
+    .filter((slot) => slot.candidates.length > 0);
+  const imageCandidates = imageCandidateSlots.map((slot) => slot.candidates);
   const livePhotoStreams = extractXhsLivePhotoStreams(note.imageList || []);
   const videoSelection = pickBestVideoStream(note.video?.media?.stream || {});
   const existing = await noteStore.getById(note.noteId || note.id || noteKey);
@@ -467,10 +471,12 @@ export async function collectNote(wd = window, options = {}) {
     content: cleanNoteBodyText(note.desc || ''),
     bodyText: cleanNoteBodyText(note.desc || ''),
     hashtags: [...new Set([...extractHashtags(note.title || ''), ...extractHashtags(note.desc || '')])],
-    type: note.type === 'video' ? 'video' : 'normal',
+    type: normalizeXhsNoteType(note.type),
     cover: toHighQualityImageUrl(getXhsImageUrl(note.imageList?.[0] || {})),
+    coverProvenance: 'first_observed_image',
     images: imageUrls,
     imageCandidates,
+    imageCandidateSlots,
     livePhotoStreams,
     video: videoSelection.url,
     videoStreams: videoSelection.streams || [],
@@ -554,15 +560,20 @@ export function discoverNotesFromDOM(containerSelector) {
 
     notes.push({
       noteId,
+      platformContentId: noteId,
+      platform: 'xhs',
       url: safeUrl(url),
       title: titleEl?.textContent?.trim() || '',
       likes: likesEl?.textContent?.trim() || '0',
-      type: hasVideo ? 'video' : 'normal',
+      // A play icon proves video. Its absence does not prove a normal note.
+      type: hasVideo ? 'video' : '',
       cover,
+      coverProvenance: 'platform_explicit',
       coverImg: cover,
       coverUrl: cover,
       thumbnail: cover,
       images: cover ? [cover] : [],
+      imageCandidateSlots: cover ? [{ ordinal: 0, candidates: [cover] }] : [],
       element: section,
       _top: rect.top + window.scrollY,
       _left: rect.left,
@@ -589,6 +600,11 @@ function firstText(value) {
   if (typeof value !== 'string') return '';
   const trimmed = value.trim();
   return trimmed && trimmed !== '[object Object]' ? trimmed : '';
+}
+
+function normalizeXhsNoteType(value) {
+  const type = firstText(value);
+  return type === 'normal' || type === 'video' ? type : '';
 }
 
 function readObject(source = {}, keys = []) {
@@ -810,6 +826,8 @@ export function normalizeProfilePostedNote(note = {}, {
 
   return {
     noteId,
+    platformContentId: noteId,
+    platform: 'xhs',
     url,
     title: pickFirstText(note, ['display_title', 'displayTitle', 'title']),
     likes: pickFirstText(interact, ['liked_count', 'likedCount', 'like_count', 'likeCount']) || '0',
@@ -818,12 +836,14 @@ export function normalizeProfilePostedNote(note = {}, {
     shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
     isPinned: readBoolean(interact.sticky ?? interact.isSticky ?? note.sticky ?? note.isSticky),
     sticky: readBoolean(interact.sticky ?? interact.isSticky ?? note.sticky ?? note.isSticky),
-    type: pickFirstText(note, ['type', 'note_type', 'noteType']) || 'normal',
+    type: normalizeXhsNoteType(pickFirstText(note, ['type', 'note_type', 'noteType'])),
     cover,
+    coverProvenance: 'platform_explicit',
     coverImg: cover,
     coverUrl: cover,
     thumbnail: cover,
     images: cover ? [cover] : [],
+    imageCandidateSlots: cover ? [{ ordinal: 0, candidates: [cover] }] : [],
     authorId,
     authorPlatformId: authorId,
     authorName: pickFirstText(author, ['nickname', 'nick_name', 'name']),
@@ -951,6 +971,8 @@ export function normalizeSearchSurfaceNote(item = {}, {
 
   return {
     noteId,
+    platformContentId: noteId,
+    platform: 'xhs',
     url,
     title: pickFirstText(noteCard, ['display_title', 'displayTitle', 'title']),
     likes: pickFirstText(interact, ['liked_count', 'likedCount', 'like_count', 'likeCount']) || '0',
@@ -959,13 +981,15 @@ export function normalizeSearchSurfaceNote(item = {}, {
     shares: pickFirstText(interact, ['shared_count', 'sharedCount', 'share_count', 'shareCount']) || '',
     isPinned: false,
     sticky: false,
-    type: pickFirstText(noteCard, ['type', 'note_type', 'noteType']) || 'normal',
+    type: normalizeXhsNoteType(pickFirstText(noteCard, ['type', 'note_type', 'noteType'])),
     cover,
+    coverProvenance: 'platform_explicit',
     coverImg: cover,
     coverUrl: cover,
     thumbnail: cover,
     images: images.length > 0 ? [...new Set(images)] : (cover ? [cover] : []),
     imageCandidates,
+    imageCandidateSlots: imageCandidates.map((candidates, ordinal) => ({ ordinal, candidates })),
     authorId: pickFirstText(user, ['user_id', 'userId', 'id']),
     authorPlatformId: pickFirstText(user, ['user_id', 'userId', 'id']),
     authorName: pickFirstText(user, ['nickname', 'nick_name', 'name']),

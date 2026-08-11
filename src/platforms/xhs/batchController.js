@@ -91,8 +91,8 @@ function buildWorkbenchNoteRecord(note = {}) {
 
   return {
     platform: String(note.platform || 'xhs').trim() || 'xhs',
-    noteId: String(note.noteId || note.platformContentId || note.contentId || '').trim(),
-    platformContentId: String(note.platformContentId || note.noteId || note.contentId || '').trim(),
+    noteId: String(note.noteId || '').trim(),
+    platformContentId: String(note.platformContentId || '').trim(),
     title: String(note.title || '').trim(),
     content: String(note.content || note.desc || note.bodyText || '').trim(),
     url,
@@ -104,6 +104,7 @@ function buildWorkbenchNoteRecord(note = {}) {
     coverUrl: firstText(note.coverUrl) || cover,
     images,
     imageCandidates,
+    imageCandidateSlots: Array.isArray(note.imageCandidateSlots) ? note.imageCandidateSlots : [],
     videoUrl: firstText(note.videoUrl) || firstText(note.video) || firstText(note.videoDownloadUrl) || firstText(note.videoPlayUrl),
     likes: toFiniteNumber(note.likes, 0),
     collects: toFiniteNumber(note.collects, 0),
@@ -122,7 +123,7 @@ function buildWorkbenchNoteRecord(note = {}) {
       || firstText(note.releaseDate)
       || firstText(note.timeText)
       || firstText(note.time),
-    type: String(note.type || note.contentType || note.noteType || note.itemType || '').trim(),
+    type: String(note.type || '').trim(),
     contentType: String(note.contentType || note.type || note.noteType || note.itemType || '').trim(),
     dataSource: firstText(note.dataSource),
     dataQuality: firstText(note.dataQuality),

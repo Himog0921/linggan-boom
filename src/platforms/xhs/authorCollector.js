@@ -86,6 +86,7 @@ export async function collectAuthor(options = {}) {
   const collectedAt = Date.now();
   const author = withMonitorRecordMeta({
     userId: userIdMatch[1],
+    authorId: userIdMatch[1],
     authorEntityId: `xhs_${userIdMatch[1]}`,
     platformAuthorId: userIdMatch[1],
     platform: 'xhs',

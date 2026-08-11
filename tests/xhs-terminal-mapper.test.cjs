@@ -36,16 +36,29 @@ function recordsFor(profile) {
   const blueprint = FIXTURE_BLUEPRINTS[WORKFLOW_TO_CONTRACT[profile]];
   return {
     notes: blueprint.recordKinds.includes("note")
-      ? [{ noteId: `n-${profile}-1`, platformContentId: `n-${profile}-1`, title: `Test ${profile}` }]
+      ? [{
+          noteId: `n-${profile}-1`,
+          platformContentId: `n-${profile}-1`,
+          type: profile === "note_detail" || profile === "note_full" ? "video" : "normal",
+          title: `Test ${profile}`,
+        }]
       : [],
     comments: blueprint.recordKinds.includes("comment")
       ? [{ commentId: `c-${profile}-1`, noteId: `n-${profile}-1`, text: "test comment" }]
       : [],
     authors: blueprint.recordKinds.includes("author")
-      ? [{ userId: `a-${profile}-1`, platformAuthorId: `a-${profile}-1`, name: "test author" }]
+      ? [{ authorId: `a-${profile}-1`, platformAuthorId: `a-${profile}-1`, name: "test author" }]
       : [],
     mediaAssets: blueprint.mediaPolicy === "metadata_only"
-      ? [{ assetId: `m-${profile}-1`, sourceUrl: `https://example.com/${profile}.jpg`, width: 1080, height: 1440 }]
+      ? [{
+          assetId: `media_n-${profile}-1_cover-1`,
+          noteId: `n-${profile}-1`,
+          assetType: "image",
+          role: "cover",
+          ordinal: 0,
+          coverProvenance: "platform_explicit",
+          sourceUrl: `https://example.com/${profile}.jpg`,
+        }]
       : [],
   };
 }
@@ -198,22 +211,40 @@ describe("real resultPackager output → CaptureSubmissionV2", () => {
     assert.equal(result.ok, true, result.error);
     const artifact = decodePackage(result.body).artifacts.find((item) => item.kind === "media_inventory");
     assert.ok(artifact);
-    assert.deepEqual(decodeArtifact(artifact), { candidates: input.terminal.records.mediaAssets });
+    assert.deepEqual(decodeArtifact(artifact), {
+      schemaVersion: "xhs.media-inventory/v2",
+      candidates: [{
+        subject: {
+          kind: "note",
+          noteId: "n-note_detail-1",
+          platformContentId: "n-note_detail-1",
+        },
+        slotId: "note:n-note_detail-1:cover:image:0",
+        purpose: "cover",
+        kind: "image",
+        ordinal: 0,
+        observedAddress: "https://example.com/note_detail.jpg",
+        coverProvenance: "platform_explicit",
+      }],
+    });
     assert.ok(!JSON.stringify(artifact).includes("fixture-cover"));
   });
 
-  it("preserves observed media even when the contract does not require media", async () => {
+  it("rejects comment media until a real producer and persisted source contract exist", async () => {
     const terminal = await packagedTerminal("comment_probe");
     terminal.records.mediaAssets.push({
       assetId: "unexpected-but-observed-media",
+      noteId: "n-comment_probe-1",
+      commentId: "c-comment_probe-1",
+      assetType: "image",
+      role: "comment_image",
+      ordinal: 0,
       sourceUrl: "https://example.com/observed-comment-media.jpg",
     });
     const input = await validInput("comment_probe", { terminal });
     const result = mapTerminalToCaptureSubmissionV2(input);
-    assert.equal(result.ok, true, result.error);
-    const artifact = decodePackage(result.body).artifacts.find((item) => item.kind === "media_inventory");
-    assert.ok(artifact);
-    assert.deepEqual(decodeArtifact(artifact), { candidates: terminal.records.mediaAssets });
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "media_subject_mismatch");
   });
 
   it("is deterministic for the same server identity and packaged terminal", async () => {
@@ -241,6 +272,74 @@ describe("real resultPackager output → CaptureSubmissionV2", () => {
 });
 
 describe("fail-closed source boundaries", () => {
+  it("rejects aliases after the real XHS task result sanitizer instead of synthesizing source facts", async () => {
+    const { buildWorkbenchResultSummary } = await import("../src/workbench/runtime/taskPoller.js");
+    const terminal = await packagedTerminal("note_detail");
+    terminal.records = buildWorkbenchResultSummary({
+      platform: "xhs",
+      records: {
+        notes: [{
+          noteId: terminal.records.notes[0].noteId,
+          contentId: terminal.records.notes[0].noteId,
+          contentType: "video",
+          title: terminal.records.notes[0].title,
+        }],
+        comments: [],
+        authors: [],
+        mediaAssets: [],
+      },
+    }).records;
+
+    const result = mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal }));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "identity_missing");
+  });
+
+  it("rejects unequal identities and missing or unknown note type before packaging", async () => {
+    const cases = [
+      ["identity_mismatch", (terminal) => { terminal.records.notes[0].platformContentId = "other-note"; }],
+      ["identity_missing", (terminal) => { delete terminal.records.notes[0].platformContentId; }],
+      ["identity_missing", (terminal) => { delete terminal.records.notes[0].noteId; }],
+      ["content_type_missing", (terminal) => { delete terminal.records.notes[0].type; }],
+      ["content_type_missing", (terminal) => {
+        delete terminal.records.notes[0].type;
+        terminal.records.notes[0].contentType = "video";
+      }],
+      ["content_type_invalid", (terminal) => { terminal.records.notes[0].type = "article"; }],
+    ];
+    for (const [reason, mutate] of cases) {
+      const terminal = await packagedTerminal("note_detail");
+      mutate(terminal);
+      const result = mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal }));
+      assert.equal(result.ok, false);
+      assert.equal(result.reason, reason);
+    }
+  });
+
+  it("rejects a producer author that supplies only one identity", async () => {
+    const terminal = await packagedTerminal("author_profile");
+    delete terminal.records.authors[0].platformAuthorId;
+    const result = mapTerminalToCaptureSubmissionV2(await validInput("author_profile", { terminal }));
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, "identity_missing");
+  });
+
+  it("rejects media whose subject is absent or whose cover proof is ambiguous", async () => {
+    const crossSubject = await packagedTerminal("note_detail");
+    crossSubject.records.mediaAssets[0].noteId = "other-note";
+    assert.equal(
+      mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal: crossSubject })).reason,
+      "media_subject_mismatch",
+    );
+
+    const ambiguousCover = await packagedTerminal("note_detail");
+    ambiguousCover.records.mediaAssets[0].coverProvenance = "";
+    assert.equal(
+      mapTerminalToCaptureSubmissionV2(await validInput("note_detail", { terminal: ambiguousCover })).reason,
+      "media_cover_provenance_invalid",
+    );
+  });
+
   it("rejects a failed packaged run without source-classified terminal facts", async () => {
     const terminal = await packagedTerminal("note_detail", {
       status: "failed",

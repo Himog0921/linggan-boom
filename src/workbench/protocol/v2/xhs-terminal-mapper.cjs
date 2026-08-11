@@ -17,6 +17,10 @@ const {
   buildCaptureSubmissionBodyV2,
   mediaInventoryArtifactFromCandidates,
 } = require("./xhs-contracts.cjs");
+const {
+  validateXhsRecordPayload,
+  buildXhsMediaInventoryV2,
+} = require("./xhs-source-contract.cjs");
 
 const WORKFLOW_TO_CONTRACT = Object.freeze({
   list_scan: "xhs.list-scan",
@@ -158,6 +162,13 @@ function buildRecords(terminalRecords, blueprint, captureId, targetKey, observed
   let sequence = 0;
   for (const kind of blueprint.recordKinds) {
     for (const sourceRecord of recordArray(terminalRecords, kind)) {
+      const sourceValidation = validateXhsRecordPayload(kind, sourceRecord);
+      if (!sourceValidation.ok) {
+        throw Object.assign(
+          new Error(`${sourceValidation.path}: ${sourceValidation.reason}`),
+          { reason: sourceValidation.reason },
+        );
+      }
       const payload = jsonSnapshot(sourceRecord);
       const externalId = externalRecordId(sourceRecord, kind);
       output.push({
@@ -268,13 +279,16 @@ function mapTerminalToCaptureSubmissionV2(input) {
       reservation.targetKey,
       completedAt,
     );
-    mediaAssets = jsonSnapshot(terminal.records.mediaAssets);
+    mediaAssets = buildXhsMediaInventoryV2(terminal.records).candidates;
     diagnostics = jsonSnapshot({
       terminalDiagnostic: terminal.diagnostic ?? null,
       resultSummary: terminal.resultSummary ?? {},
     });
   } catch (error) {
-    return fail("invalid_terminal_payload", error instanceof Error ? error.message : "terminal payload is not valid JSON");
+    return fail(
+      typeof error?.reason === "string" ? error.reason : "invalid_terminal_payload",
+      error instanceof Error ? error.message : "terminal payload is not valid JSON",
+    );
   }
 
   const countersResult = validateCounters(input.captureCounters, records.length);

@@ -163,7 +163,7 @@ devDependencies：
 | `npm run dev` | webpack watch 开发模式 |
 | `npm run release:patch` / `minor` / `major` | 调 `scripts/version.sh` 改版本号 + 打 release zip |
 | `npm run release:verify` | `node scripts/verify-release-package.mjs` 校验 release zip 与 dist 一致 |
-| `npm run check:contracts` | `tsc -p jsconfig.contracts.json --noEmit`，对协议层 10 个文件做 checkJs 静态校验 |
+| `npm run check:contracts` | `tsc -p jsconfig.contracts.json --noEmit`，对协议层 13 个文件做 checkJs 静态校验，并运行 XHS Collection/source contract 与 terminal mapper 测试 |
 | `npm run test:douyin` | 跑指定子集测试（193+ 用例）|
 
 > **注意**：项目**没有** `npm test` 全量脚本（tech-debt T2）。全量测试用 `node --test tests/*.test.mjs`。
