@@ -92,7 +92,7 @@
 >
 > 工作台远程任务的最终结果包必须从执行页读取，不能用 Background 本地库伪造。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
-> 新工作台观察席协议中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 仍保留为最终快照与修复同步路径；主实时持久化路径改为 Background outbox → `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation，按终态结果包写入内容工作台 `RawSnapshot / RawRecord`。任务完成、失败、停止、超时、结果包丢失或结构化记录被过滤为空时，都必须提交终态 raw snapshot；`records: []` 是合法终态包。
+> 2.0.92 候选中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 负责从真实执行页取得终态。XHS 终态由 workflow 持久化 `captureReport`，Background mapper 生成唯一 `CaptureSubmissionV2`，outbox 直达 `/api/v2/evidence/execution`。`/sync commit_raw_snapshot` 是 2.0.91 及更早版本的历史路径，不得用于 2.0.92 XHS 新数据。
 > 笔记记录进入 outbox 前会补齐数据地基出站字段，包括 `standardContentCode`、`standardAuthorCode`、`keywords`、`authorFans`、`authorFansCollectedAt`、`mediaUnderstanding`、`sourceRun` 和 `dataFoundation` 摘要，供内容工作台做低粉爆文、爆款聚类和 Claude Agent 打标。
 
 ### 2.7 工作台 HTTP 协议补充
@@ -136,7 +136,7 @@ POST /api/execution-stations/sync
 - 插件只处理 V1.1 响应字段：`mailboxVersions`、`reservations[]`、`operationResults`、`controlCommands[]` 与 `nextSync`。
 - 插件从 v2.0.55 起 body 只发送 V1.1 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
 - 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成。
-- 任务终态结果通过 `/api/execution-stations/sync` 的 `commit_raw_snapshot` operation 完成；终态空结果也必须提交，失败/停止分支先提交 raw snapshot，再释放任务。
+- `/sync` 只承接 reservation、续租/进度和控制邮箱；2.0.92 XHS 终态不再发送 `commit_raw_snapshot`。producer 已证明的空结果通过 V2 Evidence 提交；无法证明的终态走非 Evidence 失败控制路径并释放 lease。
 
 ### V1.1 /sync 协议（v2.0.55+）
 
@@ -150,7 +150,7 @@ v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议�
 | `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
 | `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
 | `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组 |
-| `operations[]` | array | 当前已接入 `start_job`、`progress_update`、`commit_raw_snapshot` 与 `release_job`；`start_job` 在 reservation 携带账号时必须回传同一个 `platformAccountId`；`account_risk_control / control_ack` 待后续迁移 |
+| `operations[]` | array | 2.0.92 XHS 当前使用 `start_job`、`progress_update` 与 `release_job`；`commit_raw_snapshot` 仅为旧版历史操作，不得承接新终态。`start_job` 在 reservation 携带账号时必须回传同一个 `platformAccountId`；`account_risk_control / control_ack` 待后续迁移 |
 | `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
 V1.1 响应 body 结构：
@@ -242,18 +242,19 @@ pause | resume | stop | delete
 - 插件应用控制后通过 ingest 写入 `task.control_applied`，失败则写入 `task.control_failed`。
 - 插件本地控制按钮仍保留，通过 `WORKBENCH_LOCAL_CONTROL_EVENT` 写回同一条任务事件流。
 
-终态写入路径：
+2.0.92 XHS 终态写入路径：
 
 ```text
 Content/platform runtime → Background final result package
-Background outbox → Workbench /sync commit_raw_snapshot → RawSnapshot/RawRecord
+workflow persisted captureReport → runtime mapper → Background outbox
+Background → POST /api/v2/evidence/execution → EvidenceIngress
 ```
 
 插件写入：
 
 ```text
-POST /api/execution-stations/sync
-operation.type = commit_raw_snapshot
+POST /api/v2/evidence/execution
+body = CaptureSubmissionV2
 ```
 
 delta envelope：
@@ -279,10 +280,10 @@ delta envelope：
 ```
 
 终态规则：
-- `snapshot.status` 为 `completed / failed / stopped / cancelled` 时，插件必须提交 `commit_raw_snapshot`。
-- `records: []` 代表“本轮采集已终态，但没有可写入的结构化记录”，不是失败协议。
-- 如果本地记录因为缺少幂等键等原因被过滤为空，`taskLeaseClient` 会返回 `clientRecordStats`，用于区分“提交了空终态包”和“没有提交”。
-- 运行中的采集记录不能作为 `commit_raw_snapshot` 提前提交；页面运行期只允许写进度/心跳事件。`list_scan`、`author_links`、`note_full`、`author_profile`、`comment_probe` 等新架构 profile 必须等最终结果包聚合完成后一次性提交记录，避免半包把服务端任务提前关闭。
+- XHS `snapshot.status` 为终态时必须携带已经持久化并校验通过的 `captureSubmissionV2`；缺包禁止请求 Evidence route。
+- `records: []` 只有在 producer 明确持久化 `observed + emitted=0` 时才是合法 Evidence；不能从空数组推断 `absent/unavailable/observed`。
+- 已分类失败可持久化 `invalid` slots 与封闭 reason 后提交失败 Evidence；无法证明的 mapping failure 不进 outbox、不写 V1 Raw，通过唯一失败控制路径释放 lease，且不能报告 success。
+- 页面运行期只允许写进度/心跳；六个新架构 profile 必须等最终结果包聚合完成后一次性提交 V2 Evidence，禁止双写、fallback 或重新接回 `commit_raw_snapshot`。
 
 事件类型：
 
@@ -486,15 +487,15 @@ IDLE → RUNNING → PAUSED → RUNNING（循环）
 V2 的六个小红书采集合同和脱敏 `CaptureSubmissionV2` fixtures 位于
 `src/workbench/protocol/v2/xhs-contracts.cjs`。该文件是合同定义与 fixture 的插件侧来源真值；内容工作台会镜像合同并在跨仓校验中实际运行其 EvidenceIngress validator。V2 首期将媒体作为 `media_inventory` artifact，不再把 V1 `media` 作为 RawRecord。
 
-## 8. XHS 终态到 CaptureSubmissionV2 暗态边界（B1-B-12）
+## 8. XHS 终态到 CaptureSubmissionV2 运行边界（B1-B-12）
 
-`src/workbench/protocol/v2/xhs-terminal-mapper.cjs` 当前仅供跨仓验证，没有接入 `taskPoller`、`taskLeaseClient`、outbox 或 HTTP route。它只接受现役 `resultPackager` 的公开终态结构：`status`、epoch-millisecond `startedAt/finishedAt` 与当前 run 的 `records`。
+`src/workbench/protocol/v2/xhs-terminal-mapper.cjs` 已由 `taskPoller` 的 XHS 终态路径调用。真实 workflow 在 collection run 中持久化 `captureReport`，`resultPackager` 原样携带，mapper 只做运行时校验和转录，终态 outbox 只提交 V2 Evidence route。
 
 - `captureId` 与 `executionPlanVersion` 必须来自服务端 reservation；插件不得自行生成或接受旁路覆盖。
-- `captureTerminal`、`slotReports`、`captureCounters` 必须由各自采集源显式提供；无法分类的失败拒绝形成 V2 Evidence，不从 `failed` 或错误文案猜原因。
+- `captureTerminal`、`slotReports`、`captureCounters` 必须由各自采集源显式持久化；0 条结果可以是 producer 明确证明的 `observed + emitted=0`。无法证明的终态不得形成 Evidence，而走唯一非 Evidence 失败控制路径终结任务和释放 lease，且不写 V1 Raw。
 - `targetKey` 来自服务端执行计划，`collectorVersion` 来自运行中的插件版本；缺失均拒绝。
 - 当前 run 的媒体记录只编码为该包的 `media_inventory` Artifact；固定 fixture 媒体只用于合同 hash fixture，不能进入运行映射。
-- 当前阶段没有 V1/V2 双写、fallback、切流、部署或九工位升级。
+- 当前路径没有 V1/V2 双写或 fallback；本仓候选尚未发布、部署或升级九工位。
 
 ## 9. XHS V2 来源合同（B3-CONTRACT-SRC-001 / B3-MEDIA-SRC-001）
 
@@ -503,4 +504,13 @@ V2 的六个小红书采集合同和脱敏 `CaptureSubmissionV2` fixtures 位于
 - `xhs.record-payload/v2`：note 必须同时提供相等的 `noteId/platformContentId`，author 必须同时提供相等的 `authorId/platformAuthorId`；note 类型唯一读取 `type`，只允许 `normal/video`，旧别名与未知类型拒绝。
 - `xhs.media-inventory/v2`：候选只接受同批 emitted record 中存在的 note subject；comment media 与 author/avatar 在真实 producer/Artifact 来源审计完成前均拒绝。producer 必须从平台明示的图片序位或媒体自身序位持久保留非负 ordinal，不得从下载队列位置、assetId、文件名或 URL 补造。稳定 `slotId` 必须精确等于 `subjectKey:purpose:kind:ordinal`；候选还必须包含 observedAddress 与独立 cover provenance，未知键、跨 subject、重复/不匹配 slot 和无证明封面均拒绝。
 - 六个 XHS CollectionContract 已升级为 v2，并把上述两份来源合同的 schemaVersion/canonical hash 纳入自身 definition/hash；旧 v1 header 不再代表当前来源合同。
-- terminal mapper 与六份 fixture 都经过同一严格来源 validator；该边界仍是暗态，没有运行 caller、双写、fallback、部署或工位升级。
+- terminal mapper 与六份真实 `resultPackager` fixture 都经过同一严格来源 validator；运行 caller 只走 V2 终态 Evidence，缺失 producer 事实 fail-closed，不双写、不 fallback；本仓候选尚未部署或升级工位。
+
+## 10. XHS 手动同步到 V2 Evidence
+
+`syncManualRecordsToWorkbench` 与 `syncToFlywheel` 只向现役 `POST /api/execution-tasks/manual-import` 发送 `ingressKind=manual_import` 的 `CaptureSubmissionV2`。发送前必须以运行中插件版本、严格 XHS identity/type 和真实观测时间构建并校验完整 CapturePackage；旧 `{ source, result.records, metadata }` body 已废止，禁止 fallback。
+
+- note、comment、author 分别绑定 `xhs.list-scan`、`xhs.comment-probe`、`xhs.author-profile`，一次用户操作可按合同产生多份独立 Evidence package，但每一份都只能包含该合同允许的 record kind。
+- 只有服务端实际返回 `committed` 或 `replayed` 才算该包完成；未知响应或任一 HTTP 失败不得报告整次成功。确定性 capture identity 允许重试时复用已提交观察。
+- 手动 note 中的媒体地址只作为原始 Evidence payload 保留；没有 producer Artifact 证明时不得把 URL 推断成媒体已登记、已入队或已下载。
+- Douyin 手动同步未进入本次 XHS 合同，必须在联网前 fail-closed，不能误发到 XHS V2 route，也不能回退旧 body。

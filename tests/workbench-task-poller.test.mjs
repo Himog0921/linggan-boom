@@ -3,8 +3,28 @@ import assert from 'node:assert/strict';
 
 import {
   buildWorkbenchResultSummary,
-  createTaskPoller,
+  createTaskPoller as createRuntimeTaskPoller,
 } from '../src/workbench/runtime/taskPoller.js';
+
+// These legacy poller tests exercise lease, cleanup, and writeback behavior. The
+// dedicated V2 mapper suite owns fail-closed source-contract cases, so this
+// harness replaces only that deep boundary with a deterministic validated-body
+// result. Production never receives this injection.
+function createTaskPoller(deps = {}) {
+  return createRuntimeTaskPoller({
+    ...deps,
+    collectorVersion: deps.collectorVersion || 'test-plugin/v2',
+    mapRuntimeTerminalToCaptureSubmissionV2:
+      deps.mapRuntimeTerminalToCaptureSubmissionV2
+      || (() => ({
+        ok: true,
+        body: {
+          protocolVersion: 'capture-submission/v2',
+          testBoundary: 'workbench-task-poller',
+        },
+      })),
+  });
+}
 
 function claimTask(tasksOrFactory) {
   return async () => {

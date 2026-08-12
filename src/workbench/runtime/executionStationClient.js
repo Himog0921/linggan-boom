@@ -196,6 +196,8 @@ export function createExecutionStationClient({
     const identity = await saveStationIdentity({
       stationId: normalizeString(data.stationId),
       stationToken: normalizeString(data.stationToken),
+      stationSigningSecret: normalizeString(data.stationSigningSecret),
+      stationSigningSecretVersion: toOptionalInteger(data.stationSigningSecretVersion),
       displayName: normalizeString(data.displayName),
       role: normalizeString(data.role),
       stationKey,

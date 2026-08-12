@@ -3,12 +3,14 @@ import { createCollectionHandlers } from './collectionHandlers.js';
 import { createDataHandlers } from './dataHandlers.js';
 import { createMediaHandlers } from './mediaHandlers.js';
 import { createWorkbenchHandlers } from './workbenchHandlers.js';
+import { buildPersistedXhsCaptureReport } from '../../workbench/runtime/xhsCaptureReport.js';
 
 const normalizeRemoteTaskMeta = (meta = {}) => ({
   externalTaskId: String(meta.externalTaskId || '').trim(),
   externalTaskType: String(meta.externalTaskType || '').trim(),
   executorInstanceId: String(meta.executorInstanceId || '').trim(),
   protocolVersion: String(meta.protocolVersion || '').trim(),
+  collectionProfile: String(meta.collectionProfile || '').trim(),
   monitorMeta: meta.monitorMeta || null,
 });
 
@@ -53,6 +55,7 @@ export function createContentMessageHandlers({
       externalTaskType: externalTaskMeta.externalTaskType,
       executorInstanceId: externalTaskMeta.executorInstanceId,
       protocolVersion: externalTaskMeta.protocolVersion,
+      collectionProfile: externalTaskMeta.collectionProfile,
       platform: String(platform || pageContext?.platform || '').trim(),
       taskType: String(taskType || '').trim(),
       pageType,
@@ -67,16 +70,28 @@ export function createContentMessageHandlers({
   const finalizeRemoteRun = async (run, status, patch = {}) => {
     const runId = String(run?.collectionRunId || '').trim();
     if (!runId || !collectionRunStore) return;
+    const { captureProducer = null, ...storedPatch } = patch;
+    const captureReport = run?.platform === 'xhs' && captureProducer
+      ? buildPersistedXhsCaptureReport({
+          collectionProfile: run.collectionProfile,
+          status,
+          producerReason: captureProducer.reason,
+          failureReason: captureProducer.failureReason,
+          counters: captureProducer.counters,
+          slotReports: captureProducer.slotReports,
+        })
+      : null;
+    const terminalPatch = captureReport ? { ...storedPatch, captureReport } : storedPatch;
     if (status === 'done') {
-      await collectionRunStore.markDone(runId, patch);
+      await collectionRunStore.markDone(runId, terminalPatch);
       return;
     }
     if (status === 'stopped') {
-      await collectionRunStore.markStopped(runId, patch);
+      await collectionRunStore.markStopped(runId, terminalPatch);
       return;
     }
     if (status === 'failed') {
-      await collectionRunStore.markFailed(runId, patch.error || '博主采集失败', patch);
+      await collectionRunStore.markFailed(runId, terminalPatch.error || '博主采集失败', terminalPatch);
     }
   };
 

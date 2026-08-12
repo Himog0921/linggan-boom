@@ -24,6 +24,7 @@ import {
   buildXhsBatchNotesRunPatch,
   publicCommentCountFromXhsNote,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import { buildXhsBatchNoteCaptureReport } from '../../workbench/runtime/xhsCaptureReport.js';
 import {
   applyXhsSearchFilters,
   hasExplicitXhsSearchFilters,
@@ -341,6 +342,8 @@ export class BatchNoteController extends BaseBatchController {
     this.onStateChange = null;
     this.collectionRunId = '';
     this.externalTaskId = '';
+    this.collectionProfile = '';
+    this.captureProducerReason = '';
     this.monitorMeta = null;
     this.targetNoteId = '';
     this.surfaceOnly = false;
@@ -367,6 +370,8 @@ export class BatchNoteController extends BaseBatchController {
     this._originUrl = window.location.href;
     this.onStateChange = typeof onProgress === 'function' ? onProgress : null;
     this.externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
+    this.collectionProfile = String(settings.externalTaskMeta?.collectionProfile || '').trim();
+    this.captureProducerReason = mode === COLLECT_MODE.DETAIL ? 'target_reached' : '';
     this.monitorMeta = settings.monitorMeta || settings.externalTaskMeta?.monitorMeta || null;
     this.targetNoteId = String(
       settings.targetNoteId
@@ -561,6 +566,9 @@ export class BatchNoteController extends BaseBatchController {
           expectedCount: this.targetNoteId ? 1 : count,
         });
       }
+      if (mode !== COLLECT_MODE.DETAIL) {
+        this.captureProducerReason = String(this.noteList?.discoveryMeta?.stopReason || '').trim();
+      }
       this.noteList = filterTargetedXhsNoteList(this.noteList, this.targetNoteId);
       if (this.targetNoteId && this.noteList.length === 0) {
         throw new Error(`目标作品未在当前作者页找到：${this.targetNoteId}`);
@@ -680,10 +688,20 @@ export class BatchNoteController extends BaseBatchController {
 
   async _finalizeCollectionRun(status, patch = {}) {
     if (!this.collectionRunId) return null;
+    const captureReport = buildXhsBatchNoteCaptureReport({
+      collectionProfile: this.collectionProfile,
+      status,
+      producerReason: this.captureProducerReason,
+      includeComments: this._includeComments,
+      patch,
+    });
     const finalizer = status === 'stopped'
       ? collectionRunStore.markStopped
       : collectionRunStore.markDone;
-    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, patch);
+    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, {
+      ...patch,
+      ...(captureReport ? { captureReport } : {}),
+    });
     if (!updated) {
       throw new Error(`采集运行记录最终状态写入失败：${this.collectionRunId}`);
     }

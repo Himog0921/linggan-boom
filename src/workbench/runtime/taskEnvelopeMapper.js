@@ -255,6 +255,7 @@ export function mapTaskEnvelopeToInternalCommand(taskEnvelope = {}, { tabId = nu
     externalTaskId: String(taskEnvelope.taskId || '').trim(),
     externalTaskType: String(taskEnvelope.taskType || '').trim(),
     protocolVersion: String(taskEnvelope.protocolVersion || '').trim(),
+    collectionProfile: String(taskEnvelope.payload?.collectionProfile || '').trim(),
     triggerSource: String(taskEnvelope.triggerSource || 'workbench_dispatch').trim() || 'workbench_dispatch',
     monitorMeta: monitorMeta || undefined,
   };

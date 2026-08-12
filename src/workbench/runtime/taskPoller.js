@@ -9,6 +9,9 @@ import { createTaskLeaseIdleSnapshot } from './taskLeaseClient.js';
 import { attachTaskRuntimeObservability } from './taskRuntimeObservability.js';
 import { resolveCollectionProfile } from './collectionProfile.js';
 import { parseTargetIdentity } from '../../shared/targetIdentity.js';
+import xhsTerminalMapper from '../protocol/v2/xhs-terminal-mapper.cjs';
+
+const { mapRuntimeTerminalToCaptureSubmissionV2 } = xhsTerminalMapper;
 
 function deepClone(obj) {
   if (obj === null || typeof obj !== 'object') return obj;
@@ -200,9 +203,13 @@ function normalizeLeaseSnapshot(lease = {}) {
     expiresAt: String(lease?.expiresAt || '').trim(),
   };
   const attemptId = String(lease?.attemptId || '').trim();
+  const captureId = String(lease?.captureId || '').trim();
+  const executionPlanVersion = String(lease?.executionPlanVersion || '').trim();
   const leaseEpoch = toOptionalInteger(lease?.leaseEpoch);
   const attemptNumber = toOptionalInteger(lease?.attemptNumber);
   if (attemptId) snapshot.attemptId = attemptId;
+  if (captureId) snapshot.captureId = captureId;
+  if (executionPlanVersion) snapshot.executionPlanVersion = executionPlanVersion;
   if (leaseEpoch !== undefined) snapshot.leaseEpoch = leaseEpoch;
   if (attemptNumber !== undefined) snapshot.attemptNumber = attemptNumber;
   return snapshot;
@@ -1006,6 +1013,43 @@ export function createTaskPoller(deps = {}) {
     return typeof deps.now === 'function' ? deps.now() : Date.now();
   }
 
+  function buildRuntimeCaptureSubmission(activeTask, terminal) {
+    if (String(activeTask?.platform || '').trim() !== 'xhs') return null;
+    const lease = state.activeLease ? normalizeLeaseSnapshot(state.activeLease) : {};
+    const reservation = {
+      jobId: String(activeTask?.taskId || activeTask?.id || '').trim(),
+      attemptId: String(lease.attemptId || activeTask?.attemptId || '').trim(),
+      leaseEpoch: toOptionalInteger(lease.leaseEpoch ?? activeTask?.leaseEpoch),
+      platform: 'xhs',
+      collectionProfile: String(activeTask?.collectionProfile || '').trim(),
+      targetKey: String(activeTask?.payload?.targetKey || activeTask?.targetKey || '').trim(),
+      captureId: String(activeTask?.captureId || lease.captureId || '').trim(),
+      executionPlanVersion: String(
+        activeTask?.executionPlanVersion || lease.executionPlanVersion || '',
+      ).trim(),
+    };
+    const collectorVersion = typeof deps.collectorVersion === 'function'
+      ? String(deps.collectorVersion() || '').trim()
+      : String(deps.collectorVersion || '').trim();
+    const mapper = typeof deps.mapRuntimeTerminalToCaptureSubmissionV2 === 'function'
+      ? deps.mapRuntimeTerminalToCaptureSubmissionV2
+      : mapRuntimeTerminalToCaptureSubmissionV2;
+    const mapped = mapper({
+      reservation,
+      terminal,
+      collectorVersion,
+      observedTargetKey: null,
+    });
+    if (mapped?.ok !== true) {
+      const error = new Error(String(mapped?.reason || 'v2_capture_mapping_failed'));
+      error.reasonCode = String(mapped?.reason || 'v2_capture_mapping_failed');
+      error.retryable = false;
+      error.cause = mapped?.error;
+      throw error;
+    }
+    return mapped.body;
+  }
+
   // 出站积压熔断（报告 §9.2）：可补发写回超过阈值（条数或最老记录年龄）时，
   // 说明结果送不回服务端；此时接新任务只会批量制造租约过期。熔断期间
   // 每 tick 触发一次补发自愈，积压回落后自动恢复接单。终态死信只做告警，
@@ -1783,6 +1827,10 @@ export function createTaskPoller(deps = {}) {
       controlCursor: '',
       errorMessage: '',
       attemptId: String(lease?.attemptId || task?.currentAttemptId || '').trim(),
+      captureId: String(task?.captureId || lease?.captureId || '').trim(),
+      executionPlanVersion: String(
+        task?.executionPlanVersion || lease?.executionPlanVersion || '',
+      ).trim(),
       leaseEpoch: toOptionalInteger(lease?.leaseEpoch ?? task?.leaseEpoch),
       executionPhase: String(task?.executionPhase || 'assigned').trim() || 'assigned',
       pageFingerprint,
@@ -2344,11 +2392,49 @@ export function createTaskPoller(deps = {}) {
     }
 
     const run = result?.result || {};
-    const mapped = mapRunStatusToWorkbenchStatus(run.status);
+    let mapped = mapRunStatusToWorkbenchStatus(run.status);
+    let captureSubmissionV2 = null;
+    let captureMappingFailure = null;
+    if (mapped.final) {
+      try {
+        captureSubmissionV2 = buildRuntimeCaptureSubmission(activeTask, run);
+      } catch (error) {
+        captureMappingFailure = error;
+        mapped = { status: 'failed', progress: 100, final: true };
+      }
+    }
     const pluginRunId = String(run.collectionRunId || activeTask.pluginRunId || '').trim();
     await consumePendingAccountUsage(activeTask, mapped.status, pluginRunId);
     const resultSummary = buildWorkbenchResultSummary(run);
-    const errorMessage = resolveRunErrorMessage(run);
+    const errorMessage = captureMappingFailure
+      ? `v2_capture_mapping_failed:${String(captureMappingFailure.reasonCode || 'unknown')}`
+      : resolveRunErrorMessage(run);
+    if (captureMappingFailure) {
+      const cleanupTask = cleanupTaskSnapshot(activeTask);
+      await patchTask(activeTask.taskId, {
+        status: 'failed',
+        progress: 100,
+        pluginRunId: pluginRunId || null,
+        resultSummary,
+        errorMessage,
+        deferRelease: false,
+        failurePath: 'v2_non_evidence_terminal_control',
+      });
+      await notifyContentScriptToStop(activeTask);
+      state.activeTask = null;
+      state.seenControlIds.clear();
+      await clearActiveLease(activeTask);
+      return {
+        success: false,
+        failed: true,
+        final: true,
+        status: 'failed',
+        reason: 'v2_capture_mapping_failed_non_evidence_control',
+        reasonCode: String(captureMappingFailure.reasonCode || 'unknown'),
+        evidenceSubmitted: false,
+        cleanupTask,
+      };
+    }
     const recordDeltas = buildWorkbenchRecordDeltas(
       activeTask,
       pluginRunId || getPluginRunId(activeTask),
@@ -2363,6 +2449,7 @@ export function createTaskPoller(deps = {}) {
           progress: mapped.progress ?? buildRunningProgress(run),
           errorMessage,
           latestSummary: run?.resultSummary || {},
+          reasonCode: captureMappingFailure?.reasonCode,
         })
       : null;
     const fingerprint = JSON.stringify({
@@ -2468,6 +2555,7 @@ export function createTaskPoller(deps = {}) {
           progress: mapped.progress ?? buildRunningProgress(run),
           latestSummary: run?.resultSummary || {},
           latestHeartbeatAt: new Date().toISOString(),
+          ...(captureSubmissionV2 ? { captureSubmissionV2 } : {}),
         },
       });
       await persistActiveTaskContext();

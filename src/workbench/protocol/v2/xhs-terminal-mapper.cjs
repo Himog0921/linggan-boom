@@ -1,11 +1,9 @@
 /**
- * XHS terminal → V2 CaptureSubmission dark mapper (B1-B-12).
+ * XHS terminal → V2 CaptureSubmission mapper (B1-B-12).
  *
- * This module has no runtime caller. It maps one immutable snapshot from the
- * existing resultPackager plus server-issued reservation identity into a V2
- * body. Classification, slot semantics, counters, captureId, plan version,
- * target identity, and collector version must all come from their owning
- * boundary; this mapper never guesses them.
+ * taskPoller calls this mapper for final XHS runs. It validates and transcribes
+ * the captureReport already persisted by the workflow producer; it never
+ * derives terminal, slot, or counter facts from record counts or aliases.
  */
 
 const {
@@ -329,7 +327,35 @@ function mapTerminalToCaptureSubmissionV2(input) {
   return { ok: true, body };
 }
 
+function mapRuntimeTerminalToCaptureSubmissionV2(input) {
+  if (!isPlainObject(input) || !isPlainObject(input.reservation)) {
+    return fail("invalid_mapper_input", "Runtime mapper input and reservation must be objects");
+  }
+  const contractId = WORKFLOW_TO_CONTRACT[input.reservation.collectionProfile];
+  const blueprint = contractId && FIXTURE_BLUEPRINTS[contractId];
+  if (!blueprint) {
+    return fail("unsupported_collection_profile", "Runtime reservation collectionProfile is not registered");
+  }
+  const report = input.terminal?.captureReport;
+  if (!isPlainObject(report)) {
+    return fail("missing_captureReport", "Runtime producer did not persist a captureReport");
+  }
+  if (!isPlainObject(report.producer)
+    || report.producer.collectionProfile !== input.reservation.collectionProfile
+    || report.producer.status !== input.terminal.status
+    || !nonEmptyString(report.producer.reason)) {
+    return fail("invalid_captureReport_source", "captureReport producer identity does not match the terminal run");
+  }
+  return mapTerminalToCaptureSubmissionV2({
+    ...input,
+    captureTerminal: report.captureTerminal,
+    slotReports: report.slotReports,
+    captureCounters: report.captureCounters,
+  });
+}
+
 module.exports = {
   WORKFLOW_TO_CONTRACT,
   mapTerminalToCaptureSubmissionV2,
+  mapRuntimeTerminalToCaptureSubmissionV2,
 };
