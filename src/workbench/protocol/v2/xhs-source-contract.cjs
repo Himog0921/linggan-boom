@@ -1,5 +1,5 @@
 /**
- * Versioned XHS source contracts shared by the dark V2 terminal mapper and
+ * Versioned XHS source contracts shared by the V2 terminal mapper and
  * mirrored by content-workbench. These contracts describe source facts only;
  * they do not create Domain or Projection records.
  */

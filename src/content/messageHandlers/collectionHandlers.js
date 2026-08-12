@@ -56,6 +56,29 @@ function ensurePositiveInteger(value, fallback = 0) {
   return Math.floor(num);
 }
 
+function xhsCaptureProducer({
+  reason = '',
+  requested = 0,
+  emitted = 0,
+  failed = 0,
+  failureReason = '',
+  slotReports = null,
+} = {}) {
+  const safeEmitted = Math.max(0, Number(emitted || 0) || 0);
+  return {
+    reason: String(reason || '').trim(),
+    failureReason: String(failureReason || '').trim(),
+    slotReports,
+    counters: {
+      requested: Math.max(0, Number(requested || 0) || 0),
+      discovered: safeEmitted,
+      emitted: safeEmitted,
+      deduplicated: 0,
+      failed: Math.max(0, Number(failed || 0) || 0),
+    },
+  };
+}
+
 function firstRecordId(...values) {
   for (const value of values) {
     const text = String(value || '').trim();
@@ -372,6 +395,15 @@ export function createCollectionHandlers({
             itemsFailed: 0,
             targetIds: [String(note?.noteId || note?.platformContentId || expectedNoteId || '').trim()].filter(Boolean),
             contentIds: [String(note?.contentId || '').trim()].filter(Boolean),
+            captureProducer: xhsCaptureProducer({
+              reason: 'target_reached',
+              requested: 1,
+              emitted: 1,
+              slotReports: [
+                { slotId: 'note', status: 'observed', reason: null },
+                { slotId: 'comments', status: 'not_applicable', reason: 'not_requested_by_plan' },
+              ],
+            }),
           });
           reportDone('note', 1);
           return {
@@ -394,6 +426,11 @@ export function createCollectionHandlers({
             itemsSucceeded: 0,
             itemsFailed: 1,
             targetIds: [expectedNoteId].filter(Boolean),
+            captureProducer: xhsCaptureProducer({
+              requested: 1,
+              failed: 1,
+              failureReason: diagnostic.reasonCode,
+            }),
           });
           throw error;
         }
@@ -592,6 +629,7 @@ export function createCollectionHandlers({
               requestedCount: limit,
               discoveredCount: 0,
               shortfallCount: limit,
+              captureProducer: xhsCaptureProducer({ requested: limit }),
             });
             return {
               success: true,
@@ -651,6 +689,12 @@ export function createCollectionHandlers({
               discoveredCount: records.length,
               discoverySummary,
             }) || undefined,
+            captureProducer: xhsCaptureProducer({
+              reason: discoverySummary.stopReason,
+              requested: limit,
+              emitted: records.length,
+              slotReports: [{ slotId: 'note_links', status: 'observed', reason: null }],
+            }),
           });
           if (!stopped) reportDone('note', records.length, { platform: 'xhs', taskType: 'authorNoteLinks' });
           return {
@@ -1016,6 +1060,18 @@ export function createCollectionHandlers({
               requestedCount: batchResult.requestedCount || undefined,
               discoveredCount: batchResult.discoveredCount || undefined,
               shortfallCount: batchResult.shortfallCount || undefined,
+              captureProducer: xhsCaptureProducer({
+                reason: 'target_reached',
+                requested: 1 + batchResult.requestedCount,
+                emitted: 1 + batchResult.succeeded + surfaceRecords.length,
+                failed: batchResult.failed,
+                slotReports: [
+                  { slotId: 'author', status: 'observed', reason: null },
+                  isAuthorBaselineMonitor || isMonitorSurface
+                    ? { slotId: 'note_list', status: 'observed', reason: null }
+                    : { slotId: 'note_list', status: 'not_applicable', reason: 'not_requested_by_plan' },
+                ],
+              }),
             });
             if (!stopped) reportDone('author', 1);
             return {

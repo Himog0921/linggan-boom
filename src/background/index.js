@@ -584,6 +584,7 @@ function buildTaskEnvelopeFromCollectionTask(task = {}) {
     target: normalizeWorkbenchTaskTarget(task),
     payload: {
       ...payload,
+      collectionProfile: task.collectionProfile || payload.collectionProfile || undefined,
       taskStrategy: payload.taskStrategy || taskStrategy || undefined,
     },
   };
@@ -2340,6 +2341,8 @@ const taskDeltaReporter = createTaskDeltaReporter({
       envelope,
       stationId: identity.stationId,
       stationToken: identity.stationToken,
+      stationSigningSecret: identity.stationSigningSecret,
+      pluginAuthorizationId: authorization.authorizationId,
       authorizationToken: String(config?.apiToken || authorization.authorizationToken || '').trim(),
       capabilities: runtimeSnapshot.capabilities,
       platformAccounts: runtimeSnapshot.platformAccounts,
@@ -2433,6 +2436,7 @@ async function prepareManualExecutionLockForDispatch({ action = '', msg = {}, ta
 }
 
 const taskPoller = createTaskPoller({
+  collectorVersion: getPluginVersion,
   // 出站积压熔断：写回积压超阈值时拒接新任务（OUTBOX_BACKLOG_BLOCKED），
   // 并在熔断 tick 内触发补发自愈。
   getOutboxBacklog: () => workbenchOutboxStore.countsByStatus(),

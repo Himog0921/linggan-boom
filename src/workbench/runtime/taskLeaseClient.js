@@ -27,7 +27,7 @@ function toOptionalInteger(value) {
 }
 
 // 报告 §9.1：采集阶段进度上限 95%。100% 是"服务端已确认终态包入库"的语义，
-// 只能由服务端在 commit_raw_snapshot/release_job 被接受后判定，插件不得自报。
+// 只能由服务端在 Evidence 提交与控制推进完成后判定，插件不得自报。
 const CAPTURE_PROGRESS_CAP = 95;
 
 function clampCaptureProgress(value) {
@@ -51,6 +51,18 @@ function normalizeLeaseSnapshot({
     || task?.currentAttemptId
     || fallback?.attemptId,
   );
+  const captureId = normalizeString(
+    lease?.captureId
+    || attempt?.captureId
+    || task?.captureId
+    || fallback?.captureId,
+  );
+  const executionPlanVersion = normalizeString(
+    lease?.executionPlanVersion
+    || attempt?.executionPlanVersion
+    || task?.executionPlanVersion
+    || fallback?.executionPlanVersion,
+  );
   const attemptNumber = toOptionalInteger(
     lease?.attemptNumber
     ?? attempt?.attemptNumber
@@ -68,6 +80,8 @@ function normalizeLeaseSnapshot({
     expiresAt,
   };
   if (attemptId) snapshot.attemptId = attemptId;
+  if (captureId) snapshot.captureId = captureId;
+  if (executionPlanVersion) snapshot.executionPlanVersion = executionPlanVersion;
   if (attemptNumber !== undefined) snapshot.attemptNumber = attemptNumber;
   if (leaseEpoch !== undefined) snapshot.leaseEpoch = leaseEpoch;
   return snapshot;
@@ -185,10 +199,15 @@ function errorMessageFromResponseText(text = '', fallback = '') {
   }
 }
 
-function createHttpError(message, { status = 0, reasonCode = '', nextPollAfterMs = 0 } = {}) {
+function createHttpError(message, {
+  status = 0,
+  reasonCode = '',
+  nextPollAfterMs = 0,
+  retryable,
+} = {}) {
   const error = new Error(message);
   error.status = Number(status || 0);
-  error.retryable = isRetryableStatus(status);
+  error.retryable = typeof retryable === 'boolean' ? retryable : isRetryableStatus(status);
   error.reasonCode = normalizeString(reasonCode);
   error.nextPollAfterMs = toFiniteNumber(nextPollAfterMs, 0);
   return error;
@@ -279,19 +298,6 @@ function operationObservedAt(envelope = {}, fallback = new Date().toISOString())
     ? normalizeString(envelope.records.find((record) => normalizeString(record?.collectedAt))?.collectedAt)
     : '';
   return recordAt || fallback;
-}
-
-function captureIdForEnvelope(taskId = '', envelope = {}) {
-  const cursor = normalizeString(envelope?.cursor);
-  const pluginRunId = normalizeString(envelope?.pluginRunId);
-  const attemptId = normalizeString(envelope?.attemptId);
-  return [
-    'plugin-v11',
-    normalizeString(taskId),
-    pluginRunId || 'run',
-    attemptId || 'attempt',
-    cursor || Date.now(),
-  ].join(':');
 }
 
 function rawRecordsFromEnvelope(envelope = {}, fallbackObservedAt = new Date().toISOString()) {
@@ -459,8 +465,12 @@ function buildLeaseFromStartResult(reservation = {}, result = {}) {
     expiresAt: normalizeString(result.leaseExpiresAt || result.expiresAt),
   };
   const attemptId = normalizeString(result.attemptId);
+  const captureId = normalizeString(result.captureId);
+  const executionPlanVersion = normalizeString(result.executionPlanVersion);
   const leaseEpoch = toOptionalInteger(result.leaseEpoch);
   if (attemptId) lease.attemptId = attemptId;
+  if (captureId) lease.captureId = captureId;
+  if (executionPlanVersion) lease.executionPlanVersion = executionPlanVersion;
   if (leaseEpoch !== undefined) lease.leaseEpoch = leaseEpoch;
   return lease;
 }
@@ -542,10 +552,16 @@ async function startReservationThroughSync({
     ...startData,
     reservation,
     claim: {
-      task: buildTaskFromReservation(reservation),
+      task: {
+        ...buildTaskFromReservation(reservation),
+        captureId: normalizeString(result.captureId),
+        executionPlanVersion: normalizeString(result.executionPlanVersion),
+      },
       lease,
       attempt: {
         attemptId: normalizeString(result.attemptId),
+        captureId: normalizeString(result.captureId),
+        executionPlanVersion: normalizeString(result.executionPlanVersion),
       },
     },
   };
@@ -613,21 +629,63 @@ async function postJson({
   body = {},
   fetchFn = globalThis.fetch?.bind(globalThis),
   authorizationToken = '',
+  stationId = '',
+  stationToken = '',
+  stationSigningSecret = '',
+  pluginAuthorizationId = '',
+  pluginVersion = '',
   /** V1.1（2026-06-29）：请求超时（毫秒），防止 fetch 永久挂起阻塞 tick。 */
   timeoutMs = 30000,
 } = {}) {
   if (typeof fetchFn !== 'function') throw new Error('fetch unavailable');
+  const bodyText = JSON.stringify(body);
   const headers = { 'Content-Type': 'application/json' };
   const normalizedAuthorizationToken = normalizeString(authorizationToken);
   if (normalizedAuthorizationToken) {
     headers.Authorization = `Bearer ${normalizedAuthorizationToken}`;
+  }
+  if (normalizeString(stationSigningSecret)) {
+    const timestamp = new Date().toISOString();
+    const nonce = globalThis.crypto?.randomUUID?.();
+    if (!nonce || !globalThis.crypto?.subtle) {
+      throw createHttpError('station_signature_crypto_unavailable', {
+        status: 500,
+        reasonCode: 'station_signature_crypto_unavailable',
+        retryable: false,
+      });
+    }
+    const bytes = new TextEncoder().encode(bodyText);
+    const bodyHash = [...new Uint8Array(await globalThis.crypto.subtle.digest('SHA-256', bytes))]
+      .map((value) => value.toString(16).padStart(2, '0'))
+      .join('');
+    const signingKey = await globalThis.crypto.subtle.importKey(
+      'raw',
+      new TextEncoder().encode(normalizeString(stationSigningSecret)),
+      { name: 'HMAC', hash: 'SHA-256' },
+      false,
+      ['sign'],
+    );
+    const signaturePayload = ['POST', path, timestamp, nonce, bodyHash].join('\n');
+    const signature = [...new Uint8Array(await globalThis.crypto.subtle.sign(
+      'HMAC',
+      signingKey,
+      new TextEncoder().encode(signaturePayload),
+    ))].map((value) => value.toString(16).padStart(2, '0')).join('');
+    headers['x-cw-station-id'] = normalizeString(stationId);
+    headers['x-cw-station-token'] = normalizeString(stationToken);
+    headers['x-cw-plugin-authorization-id'] = normalizeString(pluginAuthorizationId);
+    headers['x-cw-plugin-version'] = normalizeString(pluginVersion);
+    headers['x-cw-timestamp'] = timestamp;
+    headers['x-cw-nonce'] = nonce;
+    headers['x-cw-body-sha256'] = bodyHash;
+    headers['x-cw-signature'] = signature;
   }
   const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
   const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   const response = await fetchFn(`${normalizeServerUrl(serverUrl, DEFAULT_SERVER_URL)}${path}`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(body),
+    body: bodyText,
     signal: controller?.signal ?? undefined,
   });
   if (timer) clearTimeout(timer);
@@ -778,6 +836,8 @@ export async function commitCollectionTaskDeltaThroughSync({
   envelope = {},
   stationId = '',
   stationToken = '',
+  stationSigningSecret = '',
+  pluginAuthorizationId = '',
   authorizationToken = '',
   capabilities = [],
   platformAccounts = [],
@@ -798,13 +858,73 @@ export async function commitCollectionTaskDeltaThroughSync({
   const inputRecordCount = Array.isArray(envelope?.records) ? envelope.records.length : 0;
   const records = rawRecordsFromEnvelope(envelope, observedAt);
   const droppedRecordCount = Math.max(0, inputRecordCount - records.length);
-  const shouldCommitRawSnapshot = records.length > 0 || isTerminalSnapshotStatus(envelope?.snapshot?.status);
-  const operationId = `${shouldCommitRawSnapshot ? 'commit' : 'progress'}_${normalizedTaskId}_${Date.now()}`;
-  const resultSummary = isPlainObject(envelope?.resultSummary)
-    ? envelope.resultSummary
-    : isPlainObject(envelope?.snapshot?.latestSummary)
-      ? envelope.snapshot.latestSummary
-      : undefined;
+  const terminalSnapshot = isTerminalSnapshotStatus(envelope?.snapshot?.status);
+  const captureSubmissionV2 = isPlainObject(envelope?.snapshot?.captureSubmissionV2)
+    ? envelope.snapshot.captureSubmissionV2
+    : null;
+  if (terminalSnapshot) {
+    if (!captureSubmissionV2) {
+      throw createHttpError('v2_capture_submission_required', {
+        status: 422,
+        reasonCode: 'v2_capture_submission_required',
+        retryable: false,
+      });
+    }
+    if (![
+      stationId,
+      stationToken,
+      stationSigningSecret,
+      pluginAuthorizationId,
+      authorizationToken,
+      pluginVersion,
+    ].every((value) => normalizeString(value))) {
+      throw createHttpError('v2_execution_authority_missing', {
+        status: 401,
+        reasonCode: 'v2_execution_authority_missing',
+        retryable: false,
+      });
+    }
+    const data = await postJson({
+      serverUrl,
+      path: '/api/v2/evidence/execution',
+      fetchFn,
+      authorizationToken,
+      stationId,
+      stationToken,
+      stationSigningSecret,
+      pluginAuthorizationId,
+      pluginVersion,
+      body: captureSubmissionV2,
+    });
+    if (data?.ok !== true) {
+      const reasonCode = normalizeString(data?.reason || data?.error || 'v2_evidence_submission_rejected');
+      throw createHttpError(reasonCode, {
+        status: 409,
+        reasonCode,
+        retryable: data?.retryable !== false,
+      });
+    }
+    return {
+      success: true,
+      ...acceptedDeltaKeys(envelope),
+      ...data,
+      clientRecordStats: {
+        inputRecordCount,
+        committedRecordCount: records.length,
+        droppedRecordCount,
+        dropReason: droppedRecordCount > 0 ? 'missing_idempotency_key_or_invalid_record' : '',
+      },
+    };
+  }
+  if (records.length > 0) {
+    throw createHttpError('v2_terminal_submission_pending', {
+      status: 503,
+      reasonCode: 'v2_terminal_submission_pending',
+      retryable: true,
+      nextPollAfterMs: 1000,
+    });
+  }
+  const operationId = `progress_${normalizedTaskId}_${Date.now()}`;
 
   const existingLease = typeof store?.read === 'function' ? await store.read() : null;
   const mailboxVersion = extractMailboxVersion(existingLease || {});
@@ -822,31 +942,16 @@ export async function commitCollectionTaskDeltaThroughSync({
     },
   });
 
-  const operations = shouldCommitRawSnapshot
-    ? [{
-        operationId,
-        type: 'commit_raw_snapshot',
-        jobId: normalizedTaskId,
-        attemptId,
-        leaseToken,
-        leaseEpoch,
-        captureId: captureIdForEnvelope(normalizedTaskId, envelope),
-        expectedTargetKey: normalizeString(envelope?.executionContext?.expectedTargetKey || ''),
-        observedTargetKey: normalizeString(envelope?.executionContext?.observedTargetKey || ''),
-        observedAt,
-        ...(resultSummary ? { resultSummary } : {}),
-        records,
-      }]
-    : [{
-        operationId,
-        type: 'progress_update',
-        jobId: normalizedTaskId,
-        leaseToken,
-        leaseEpoch,
-        progress: clampCaptureProgress(envelope?.snapshot?.progress),
-        stage: normalizeString(envelope?.snapshot?.status || 'running'),
-        observedAt,
-      }];
+  const operations = [{
+    operationId,
+    type: 'progress_update',
+    jobId: normalizedTaskId,
+    leaseToken,
+    leaseEpoch,
+    progress: clampCaptureProgress(envelope?.snapshot?.progress),
+    stage: normalizeString(envelope?.snapshot?.status || 'running'),
+    observedAt,
+  }];
 
   const body = buildSyncRequestV11({
     stationId,

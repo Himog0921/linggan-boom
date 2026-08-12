@@ -14,6 +14,7 @@ import {
   buildXhsBatchCommentsProgressPatch,
   buildXhsBatchCommentsRunPatch,
 } from '../../workbench/runtime/xhsBatchRunHelper.js';
+import { buildXhsBatchCommentCaptureReport } from '../../workbench/runtime/xhsCaptureReport.js';
 import {
   applyXhsSearchFilters,
   hasExplicitXhsSearchFilters,
@@ -92,6 +93,7 @@ export class BatchCommentController extends BaseBatchController {
     this._noteTimedOut = false;
     this._searchFilters = normalizeXhsSearchFilters();
     this._searchFilterSnapshot = null;
+    this.collectionProfile = '';
     this.reportHeartbeat = createCollectionRunHeartbeatReporter({ collectionRunStore });
     this.heartbeatLoop = createCollectionRunHeartbeatLoop({ reporter: this.reportHeartbeat });
   }
@@ -165,6 +167,7 @@ export class BatchCommentController extends BaseBatchController {
     const safeCount = Math.min(Math.max(1, Number(settings.count || 10) || 10), BATCH_CONFIG.maxPerSession);
     const triggerSource = String(settings.triggerSource || 'popup_manual').trim() || 'popup_manual';
     const externalTaskId = String(settings.externalTaskMeta?.externalTaskId || '').trim();
+    this.collectionProfile = String(settings.externalTaskMeta?.collectionProfile || '').trim();
     const isRemoteDispatch = Boolean(externalTaskId);
     this._captchaActionTimeoutMs = Math.max(
       0,
@@ -375,10 +378,18 @@ export class BatchCommentController extends BaseBatchController {
 
   async _finalizeCollectionRun(status, patch = {}) {
     if (!this.collectionRunId) return null;
+    const captureReport = buildXhsBatchCommentCaptureReport({
+      collectionProfile: this.collectionProfile,
+      status,
+      patch,
+    });
     const finalizer = status === 'stopped'
       ? collectionRunStore.markStopped
       : collectionRunStore.markDone;
-    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, patch);
+    const updated = await finalizer.call(collectionRunStore, this.collectionRunId, {
+      ...patch,
+      ...(captureReport ? { captureReport } : {}),
+    });
     if (!updated) {
       throw new Error(`采集运行记录最终状态写入失败：${this.collectionRunId}`);
     }

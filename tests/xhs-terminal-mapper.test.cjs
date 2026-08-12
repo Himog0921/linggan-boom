@@ -12,6 +12,7 @@ const crypto = require("node:crypto");
 const {
   WORKFLOW_TO_CONTRACT,
   mapTerminalToCaptureSubmissionV2,
+  mapRuntimeTerminalToCaptureSubmissionV2,
 } = require("../src/workbench/protocol/v2/xhs-terminal-mapper.cjs");
 const {
   FIXTURE_BLUEPRINTS,
@@ -65,14 +66,18 @@ function recordsFor(profile) {
 
 async function packagedTerminal(profile, overrides = {}) {
   const { createResultPackager } = await import("../src/workbench/runtime/resultPackager.js");
+  const { buildPersistedXhsCaptureReport } = await import("../src/workbench/runtime/xhsCaptureReport.js");
   const records = recordsFor(profile);
+  const emitted = records.notes.length + records.comments.length + records.authors.length;
+  const status = overrides.status || "done";
   const runRecord = {
     collectionRunId: `run-${profile}`,
     externalTaskId: `job-${profile}-001`,
     externalTaskType: profile,
     platform: "xhs",
     taskType: profile,
-    status: "done",
+    collectionProfile: profile,
+    status,
     startedAt: STARTED_AT,
     finishedAt: FINISHED_AT,
     itemsPlanned: records.notes.length + records.comments.length + records.authors.length,
@@ -84,6 +89,22 @@ async function packagedTerminal(profile, overrides = {}) {
       reasonCode: "completed",
       evidence: { profile },
     },
+    captureReport: status === "done"
+      ? buildPersistedXhsCaptureReport({
+          collectionProfile: profile,
+          status,
+          producerReason: "target_reached",
+          counters: {
+            requested: emitted,
+            discovered: emitted,
+            emitted,
+            deduplicated: 0,
+            failed: 0,
+          },
+          slotReports: FIXTURE_BLUEPRINTS[WORKFLOW_TO_CONTRACT[profile]].slotIds
+            .map((slotId) => ({ slotId, status: "observed", reason: null })),
+        })
+      : null,
     ...overrides,
   };
   const store = (rows) => ({ getByCollectionRunId: async () => rows });
@@ -138,7 +159,7 @@ async function validInput(profile, overrides = {}) {
   return {
     reservation: reservationFor(profile),
     terminal,
-    collectorVersion: "2.0.91",
+    collectorVersion: "2.0.92",
     observedTargetKey: `xhs:note/${profile}-test`,
     ...explicitReportFor(profile, terminal),
     ...overrides,
@@ -268,6 +289,188 @@ describe("real resultPackager output → CaptureSubmissionV2", () => {
     input.slotReports[0].status = "invalid";
     input.captureTerminal.reason = "parser_failed";
     assert.equal(canonicalJson(result.body), before);
+  });
+});
+
+describe("real runtime terminal → CaptureSubmissionV2", () => {
+  it("recognizes only the seven audited noteCollector terminal reasons", async () => {
+    const {
+      buildPersistedXhsCaptureReport,
+      XHS_DISCOVERY_SUCCESS_REASONS,
+    } = await import("../src/workbench/runtime/xhsCaptureReport.js");
+    assert.deepEqual(XHS_DISCOVERY_SUCCESS_REASONS, [
+      "target_reached",
+      "captured_partial",
+      "api_partial",
+      "max_rounds_reached",
+      "bottom_confirmed",
+      "stable_no_new",
+      "no_cards_found",
+    ]);
+    for (const reason of XHS_DISCOVERY_SUCCESS_REASONS) {
+      assert.ok(buildPersistedXhsCaptureReport({
+        collectionProfile: "list_scan",
+        status: "done",
+        producerReason: reason,
+        counters: { requested: 0, discovered: 0, emitted: 0, deduplicated: 0, failed: 0 },
+        slotReports: [{ slotId: "note_list", status: "observed", reason: null }],
+      }));
+    }
+    assert.equal(buildPersistedXhsCaptureReport({
+      collectionProfile: "list_scan",
+      status: "done",
+      producerReason: "source_exhausted",
+      counters: { requested: 0, discovered: 0, emitted: 0, deduplicated: 0, failed: 0 },
+      slotReports: [{ slotId: "note_list", status: "observed", reason: null }],
+    }), null);
+  });
+
+  it("batch producers report list/note/comment slots from execution facts, including zero results", async () => {
+    const {
+      buildXhsBatchNoteCaptureReport,
+      buildXhsBatchCommentCaptureReport,
+    } = await import("../src/workbench/runtime/xhsCaptureReport.js");
+    const emptyList = buildXhsBatchNoteCaptureReport({
+      collectionProfile: "list_scan",
+      status: "done",
+      producerReason: "no_cards_found",
+      patch: { itemsPlanned: 20, itemsSucceeded: 0, itemsFailed: 0, totalComments: 0 },
+    });
+    assert.deepEqual(emptyList.slotReports, [
+      { slotId: "note_list", status: "observed", reason: null },
+    ]);
+    assert.equal(emptyList.captureCounters.emitted, 0);
+
+    const noteDetail = buildXhsBatchNoteCaptureReport({
+      collectionProfile: "note_detail",
+      status: "done",
+      producerReason: "target_reached",
+      includeComments: false,
+      patch: { itemsPlanned: 1, itemsSucceeded: 1, itemsFailed: 0 },
+    });
+    assert.deepEqual(noteDetail.slotReports, [
+      { slotId: "note", status: "observed", reason: null },
+      { slotId: "comments", status: "not_applicable", reason: "not_requested_by_plan" },
+    ]);
+    assert.equal(buildXhsBatchNoteCaptureReport({
+      collectionProfile: "note_full",
+      status: "done",
+      producerReason: "target_reached",
+      includeComments: false,
+      patch: { itemsPlanned: 1, itemsSucceeded: 1, itemsFailed: 0 },
+    }), null);
+
+    const emptyComments = buildXhsBatchCommentCaptureReport({
+      collectionProfile: "comment_probe",
+      status: "done",
+      patch: { itemsPlanned: 1, itemsSucceeded: 0, itemsFailed: 0, totalComments: 0 },
+    });
+    assert.deepEqual(emptyComments.slotReports, [
+      { slotId: "comments", status: "observed", reason: null },
+    ]);
+    assert.equal(emptyComments.captureCounters.emitted, 0);
+  });
+
+  for (const profile of PROFILES) {
+    it(`${profile}: validates and transcribes the persisted producer report`, async () => {
+      const terminal = await packagedTerminal(profile);
+      const persistedReport = terminal.captureReport;
+      const result = mapRuntimeTerminalToCaptureSubmissionV2({
+        reservation: reservationFor(profile),
+        terminal,
+        collectorVersion: "2.0.92",
+        observedTargetKey: `xhs:note/${profile}-test`,
+      });
+
+      assert.equal(result.ok, true, result.error);
+      assert.deepEqual(result.body.header.report.terminal, persistedReport.captureTerminal);
+      assert.deepEqual(result.body.header.report.slots, persistedReport.slotReports);
+      assert.deepEqual(result.body.header.report.counters, persistedReport.captureCounters);
+    });
+  }
+
+  it("accepts a producer-proven zero-result workflow without inferring absent", async () => {
+    const { buildPersistedXhsCaptureReport } = await import("../src/workbench/runtime/xhsCaptureReport.js");
+    const captureReport = buildPersistedXhsCaptureReport({
+      collectionProfile: "list_scan",
+      status: "done",
+      producerReason: "no_cards_found",
+      counters: { requested: 10, discovered: 0, emitted: 0, deduplicated: 0, failed: 0 },
+      slotReports: [{ slotId: "note_list", status: "observed", reason: null }],
+    });
+    const terminal = await packagedTerminal("list_scan", { captureReport });
+    terminal.records.notes = [];
+    terminal.records.mediaAssets = [];
+    const result = mapRuntimeTerminalToCaptureSubmissionV2({
+      reservation: reservationFor("list_scan"),
+      terminal,
+      collectorVersion: "2.0.92",
+      observedTargetKey: "xhs:note/list_scan-test",
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.body.header.report.slots, [
+      { slotId: "note_list", status: "observed", reason: null },
+    ]);
+    assert.deepEqual(result.body.header.report.counters, {
+      requested: 10,
+      discovered: 0,
+      emitted: 0,
+      deduplicated: 0,
+      failed: 0,
+    });
+  });
+
+  it("fails closed when the producer report is missing instead of reading stopReason or record count", async () => {
+    const terminal = await packagedTerminal("note_detail");
+    terminal.captureReport = null;
+    terminal.runRecord.captureReport = null;
+    terminal.runRecord.discoverySummary = { stopReason: "target_reached" };
+    const result = mapRuntimeTerminalToCaptureSubmissionV2({
+      reservation: reservationFor("note_detail"),
+      terminal,
+      collectorVersion: "2.0.92",
+      observedTargetKey: "xhs:note/note_detail-test",
+    });
+
+    assert.deepEqual(result, {
+      ok: false,
+      reason: "missing_captureReport",
+      error: "Runtime producer did not persist a captureReport",
+    });
+  });
+
+  it("submits classified failed Evidence with invalid slots and never calls it success", async () => {
+    const { buildPersistedXhsCaptureReport } = await import("../src/workbench/runtime/xhsCaptureReport.js");
+    const captureReport = buildPersistedXhsCaptureReport({
+      collectionProfile: "note_detail",
+      status: "failed",
+      failureReason: "parser_failed",
+      counters: { requested: 1, discovered: 0, emitted: 0, deduplicated: 0, failed: 1 },
+    });
+    const terminal = await packagedTerminal("note_detail", {
+      status: "failed",
+      captureReport,
+    });
+    terminal.records = { notes: [], comments: [], authors: [], mediaAssets: [] };
+    const result = mapRuntimeTerminalToCaptureSubmissionV2({
+      reservation: reservationFor("note_detail"),
+      terminal,
+      collectorVersion: "2.0.92",
+      observedTargetKey: "xhs:note/note_detail-test",
+    });
+
+    assert.equal(result.ok, true, result.error);
+    assert.deepEqual(result.body.header.report.terminal, {
+      state: "error",
+      reason: "parser_failed",
+      retryable: false,
+    });
+    assert.deepEqual(result.body.header.report.slots, [
+      { slotId: "note", status: "invalid", reason: "parser_failed" },
+      { slotId: "comments", status: "invalid", reason: "parser_failed" },
+    ]);
   });
 });
 

@@ -3,8 +3,28 @@ import assert from 'node:assert/strict';
 
 import {
   buildWorkbenchResultSummary,
-  createTaskPoller,
+  createTaskPoller as createRuntimeTaskPoller,
 } from '../src/workbench/runtime/taskPoller.js';
+
+// These legacy poller tests exercise lease, cleanup, and writeback behavior. The
+// dedicated V2 mapper suite owns fail-closed source-contract cases, so this
+// harness replaces only that deep boundary with a deterministic validated-body
+// result. Production never receives this injection.
+function createTaskPoller(deps = {}) {
+  return createRuntimeTaskPoller({
+    ...deps,
+    collectorVersion: deps.collectorVersion || 'test-plugin/v2',
+    mapRuntimeTerminalToCaptureSubmissionV2:
+      deps.mapRuntimeTerminalToCaptureSubmissionV2
+      || (() => ({
+        ok: true,
+        body: {
+          protocolVersion: 'capture-submission/v2',
+          testBoundary: 'workbench-task-poller',
+        },
+      })),
+  });
+}
 
 function claimTask(tasksOrFactory) {
   return async () => {
@@ -2519,6 +2539,7 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
   const patches = [];
   const events = [];
   let clearLeaseCalls = 0;
+  let terminalAckCalls = 0;
   const poller = createTaskPoller({
     claimTaskLease: async () => ({
       task: {
@@ -2553,6 +2574,15 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
       events.push(event);
       return event;
     },
+    flushDeltas: async () => {
+      terminalAckCalls += 1;
+      return {
+        success: true,
+        executionSucceeded: false,
+        status: 'evidence_committed_terminal',
+        terminalState: 'error',
+      };
+    },
     clearTaskLease: async () => {
       clearLeaseCalls += 1;
     },
@@ -2576,6 +2606,7 @@ test('task poller fails monitor tasks on recoverable tab connection errors and r
   assert.equal(events[0].eventType, 'task.failed');
   assert.equal(events[0].payload.status, 'failed');
   assert.equal(clearLeaseCalls, 1);
+  assert.equal(terminalAckCalls, 1);
   assert.equal(poller.getState().activeTask, null);
   assert.equal(poller.getState().activeLease, null);
 });

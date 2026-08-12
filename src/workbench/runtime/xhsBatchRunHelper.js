@@ -85,6 +85,7 @@ function normalizeExternalTaskMeta(meta = {}) {
     externalTaskType: normalizeText(meta.externalTaskType),
     executorInstanceId: normalizeText(meta.executorInstanceId),
     protocolVersion: normalizeText(meta.protocolVersion),
+    collectionProfile: normalizeText(meta.collectionProfile),
   };
 }
 
@@ -105,6 +106,7 @@ export function buildRemoteRunCreatePayload({
     externalTaskType: taskMeta.externalTaskType,
     executorInstanceId: taskMeta.executorInstanceId,
     protocolVersion: taskMeta.protocolVersion,
+    collectionProfile: taskMeta.collectionProfile,
     platform: normalizeText(platform),
     taskType: normalizeText(taskType),
     pageType: normalizeText(pageType),

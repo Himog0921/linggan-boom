@@ -193,13 +193,12 @@
 | `lastResolvedAt` | number | 最近一次刷新/解析时间 |
 | `createdAt` | number | 创建时间 |
 
-> V2 暗态来源合同补充（`xhs.media-inventory/v2`）：terminal mapper 只把上述真实媒体事实映射为
+> V2 来源合同补充（`xhs.media-inventory/v2`）：terminal mapper 只把上述真实媒体事实映射为
 > `subject + slotId + purpose + kind + ordinal + observedAddress + coverProvenance`。`slotId`
 > 必须精确等于 `subjectKey:purpose:kind:ordinal`，URL 不参与身份；candidate 必须属于同一 CapturePackage
 > 已发出的 note。comment media 与 author/avatar 当前没有可审计的 producer/Artifact 来源，因此 V2 明确
 > 拒绝这些分支。producer 必须持久保留平台图片序位或媒体自身序位；不得从下载队列位置或 assetId
-> 反推。该合同尚未接现役 caller，也不创建
-> CanonicalMediaSlot 或 Media Domain 关系。
+> 反推。该合同已接 XHS 终态 V2 Evidence caller，但插件不创建 CanonicalMediaSlot 或 Media Domain 关系。
 
 ### workbenchOutbox
 

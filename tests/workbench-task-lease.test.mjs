@@ -46,6 +46,8 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
               [body.operations[0].operationId]: {
                 status: 'accepted',
                 attemptId: 'attempt-v11',
+                captureId: 'capture-server-v11',
+                executionPlanVersion: 'plan-server-v11',
                 leaseToken: 'lease-v11',
                 leaseEpoch: 4,
                 leaseExpiresAt: '2026-04-17T12:05:00.000Z',
@@ -96,6 +98,8 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
     serverUrl: 'http://localhost:3000',
     stationId: 'station-1',
     stationToken: 'station-token',
+    stationSigningSecret: 'station-signing-secret',
+    pluginAuthorizationId: 'authorization-1',
     authorizationToken: 'auth_token_1',
     capabilities: ['xhs.list_scan'],
     platformAccounts: [{ platform: 'xhs', purpose: 'author_monitor', healthStatus: 'healthy' }],
@@ -119,9 +123,15 @@ test('task lease client starts a V1.1 reservation immediately after claim sync',
   assert.equal(claim.task.accountId, 'account-xhs-1');
   assert.equal(claim.task.platformAccountId, 'account-xhs-1');
   assert.equal(claim.task.payload.platformAccountId, 'account-xhs-1');
+  assert.equal(claim.task.captureId, 'capture-server-v11');
+  assert.equal(claim.task.executionPlanVersion, 'plan-server-v11');
   assert.equal(claim.lease.leaseToken, 'lease-v11');
+  assert.equal(claim.lease.captureId, 'capture-server-v11');
+  assert.equal(claim.lease.executionPlanVersion, 'plan-server-v11');
   assert.equal(stored.taskId, 'job-v11');
   assert.equal(stored.leaseToken, 'lease-v11');
+  assert.equal(stored.captureId, 'capture-server-v11');
+  assert.equal(stored.executionPlanVersion, 'plan-server-v11');
   assert.equal(stored.mailboxLaneVersions['xhs.monitor_patrol'], 3);
 });
 
@@ -287,105 +297,136 @@ test('task lease client maps xhs note_full reservations to detail collection wit
   assert.equal(claim.task.payload.platformContentId, '6986ceb7000000000c03587f');
 });
 
-test('task lease client commits outbox records through V1.1 commit_raw_snapshot', async () => {
+test('terminal outbox submits the exact persisted CaptureSubmissionV2 body to the execution Evidence route', async () => {
   const requests = [];
+  const captureSubmissionV2 = {
+    header: {
+      protocolVersion: 'capture-submission/v2',
+      captureId: 'capture-server-1',
+      ingressKind: 'execution',
+    },
+    capturePackage: {
+      checksumAlgorithm: 'sha256',
+      checksumValue: 'hash-1',
+      contentLength: 10,
+      packagePayload: 'e30=',
+    },
+  };
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
-    const body = JSON.parse(options.body || '{}');
-    const op = body.operations?.[0] || {};
     return {
       ok: true,
       status: 200,
       async json() {
-        return {
-          mailboxVersions: { station: 14 },
-          operationResults: {
-            [op.operationId]: {
-              status: 'accepted',
-              rawSnapshotId: 'raw-1',
-              captureId: op.captureId,
-              checksumAlgorithm: 'sha256',
-              checksumValue: 'abc',
-              contentLength: 123,
-              snapshotStatus: 'committed',
-            },
-          },
-          reservations: [],
-          controlCommands: [],
-          nextSync: { afterMs: 30000, reason: 'running' },
-        };
+        return { ok: true, receiptId: 'receipt-1', rawSnapshotId: 'snapshot-1' };
       },
     };
   };
-  const store = createTaskLeaseMemoryStore({
-    taskId: 'job-commit-1',
-    leaseToken: 'lease-commit-1',
-    leaseEpoch: 6,
-    attemptId: 'attempt-commit-1',
-  });
 
   const response = await commitCollectionTaskDeltaThroughSync({
     serverUrl: 'http://localhost:3000',
-    taskId: 'job-commit-1',
+    taskId: 'job-v2-1',
     envelope: {
-      taskId: 'job-commit-1',
-      pluginRunId: 'run-commit-1',
-      cursor: 'cursor-1',
-      attemptId: 'attempt-commit-1',
-      leaseToken: 'lease-commit-1',
+      taskId: 'job-v2-1',
+      pluginRunId: 'run-v2-1',
+      attemptId: 'attempt-v2-1',
+      leaseToken: 'lease-v2-1',
       leaseEpoch: 6,
-      executionContext: { platform: 'xhs', expectedTargetKey: 'xhs:note:1' },
-      snapshot: {
-        latestSummary: {
-          requestedCount: 200,
-          discoveredCount: 37,
-          discoverySummary: {
-            stopReason: 'no_new_cards_after_scroll',
-            scrollRounds: 12,
-            canLoadMore: true,
-          },
-        },
-      },
-      records: [{
-        recordType: 'note',
-        externalRecordId: 'note-1',
-        sequence: 1,
-        collectedAt: '2026-04-17T12:00:00.000Z',
-        idempotencyKey: 'record-key-1',
-        payload: { noteId: 'note-1', title: 'hello' },
-      }],
-      events: [{ idempotencyKey: 'event-key-1' }],
+      snapshot: { status: 'completed', progress: 100, captureSubmissionV2 },
+      records: [{ idempotencyKey: 'record-v2-1' }],
+      events: [{ idempotencyKey: 'event-v2-1' }],
     },
     stationId: 'station-1',
     stationToken: 'station-token',
-    authorizationToken: 'auth_token_1',
-    capabilities: ['xhs.list_scan'],
-    pluginVersion: '2.0.58',
+    stationSigningSecret: 'station-signing-secret',
+    pluginAuthorizationId: 'authorization-1',
+    authorizationToken: 'auth-token',
+    pluginVersion: '2.0.92',
     fetchFn,
-    store,
   });
-  const body = JSON.parse(requests[0][1].body);
-  const op = body.operations[0];
 
-  assert.equal(requests[0][0], 'http://localhost:3000/api/execution-stations/sync');
-  assert.equal(Object.prototype.hasOwnProperty.call(body, 'mode'), false);
-  assert.equal(body.capacity, undefined);
-  assert.equal(op.type, 'commit_raw_snapshot');
-  assert.equal(op.jobId, 'job-commit-1');
-  assert.equal(op.leaseToken, 'lease-commit-1');
-  assert.equal(op.leaseEpoch, 6);
-  assert.deepEqual(op.resultSummary.discoverySummary, {
-    stopReason: 'no_new_cards_after_scroll',
-    scrollRounds: 12,
-    canLoadMore: true,
-  });
-  assert.equal(op.records[0].recordType, 'note');
-  assert.equal(op.records[0].idempotencyKey, 'record-key-1');
-  assert.deepEqual(response.acceptedRecordKeys, ['record-key-1']);
-  assert.deepEqual(response.acceptedEventKeys, ['event-key-1']);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0][0], 'http://localhost:3000/api/v2/evidence/execution');
+  assert.deepEqual(JSON.parse(requests[0][1].body), captureSubmissionV2);
+  assert.equal(requests[0][1].headers['x-cw-station-id'], 'station-1');
+  assert.equal(requests[0][1].headers['x-cw-station-token'], 'station-token');
+  assert.equal(requests[0][1].headers['x-cw-plugin-authorization-id'], 'authorization-1');
+  assert.match(requests[0][1].headers['x-cw-body-sha256'], /^[0-9a-f]{64}$/);
+  assert.match(requests[0][1].headers['x-cw-signature'], /^[0-9a-f]{64}$/);
+  assert.equal(response.success, true);
+  assert.equal(response.receiptId, 'receipt-1');
 });
 
-test('task lease client treats stale lease operation rejection as permanent', async () => {
+for (const terminalState of ['error', 'cancelled']) {
+  test(`terminal ${terminalState} Evidence ACK drains the durable outbox without claiming execution success`, async () => {
+    const captureSubmissionV2 = {
+      header: { protocolVersion: 'capture-submission/v2', captureId: `capture-${terminalState}` },
+      capturePackage: { checksumAlgorithm: 'sha256', checksumValue: 'hash-1', contentLength: 10, packagePayload: 'e30=' },
+    };
+    const response = await commitCollectionTaskDeltaThroughSync({
+      serverUrl: 'http://localhost:3000',
+      taskId: `job-${terminalState}`,
+      envelope: {
+        taskId: `job-${terminalState}`,
+        attemptId: `attempt-${terminalState}`,
+        leaseToken: `lease-${terminalState}`,
+        leaseEpoch: 1,
+        snapshot: { status: terminalState === 'error' ? 'failed' : 'stopped', progress: 100, captureSubmissionV2 },
+        records: [],
+        events: [],
+      },
+      stationId: 'station-1',
+      stationToken: 'station-token',
+      stationSigningSecret: 'station-signing-secret',
+      pluginAuthorizationId: 'authorization-1',
+      authorizationToken: 'auth-token',
+      pluginVersion: '2.0.92',
+      fetchFn: async () => ({
+        ok: true,
+        status: 200,
+        async json() {
+          return {
+            ok: true,
+            executionSucceeded: false,
+            status: 'evidence_committed_terminal',
+            terminalState,
+            retryable: false,
+          };
+        },
+      }),
+    });
+
+    assert.equal(response.success, true);
+    assert.equal(response.executionSucceeded, false);
+    assert.equal(response.status, 'evidence_committed_terminal');
+    assert.equal(response.terminalState, terminalState);
+  });
+}
+
+test('non-terminal records stay pending until one durable V2 terminal package exists', async () => {
+  let requestCount = 0;
+  await assert.rejects(
+    () => commitCollectionTaskDeltaThroughSync({
+      taskId: 'job-pending-1',
+      envelope: {
+        taskId: 'job-pending-1',
+        records: [{ idempotencyKey: 'record-pending-1', payload: { noteId: 'note-1' } }],
+      },
+      fetchFn: async () => {
+        requestCount += 1;
+        throw new Error('must not call network');
+      },
+    }),
+    (error) => {
+      assert.equal(error.reasonCode, 'v2_terminal_submission_pending');
+      assert.equal(error.retryable, true);
+      return true;
+    },
+  );
+  assert.equal(requestCount, 0);
+});
+
+test('terminal submission without a persisted V2 package fails before network access', async () => {
   const fetchFn = async (url, options = {}) => {
     const body = JSON.parse(options.body || '{}');
     const op = body.operations?.[0] || {};
@@ -425,13 +466,8 @@ test('task lease client treats stale lease operation rejection as permanent', as
         attemptId: 'attempt-stale-1',
         leaseToken: 'lease-stale-1',
         leaseEpoch: 2,
-        records: [{
-          recordType: 'note',
-          externalRecordId: 'note-stale',
-          sequence: 1,
-          idempotencyKey: 'record-stale-1',
-          payload: { noteId: 'note-stale', title: 'stale' },
-        }],
+        snapshot: { status: 'failed', progress: 100 },
+        records: [],
         events: [],
       },
       stationId: 'station-1',
@@ -442,15 +478,15 @@ test('task lease client treats stale lease operation rejection as permanent', as
       store,
     }),
     (error) => {
-      assert.equal(error.status, 410);
+      assert.equal(error.status, 422);
       assert.equal(error.retryable, false);
-      assert.equal(error.reasonCode, 'lease_token_mismatch');
+      assert.equal(error.reasonCode, 'v2_capture_submission_required');
       return true;
     },
   );
 });
 
-test('task lease client commits a terminal empty result as a raw snapshot', async () => {
+test('task lease client never converts a terminal empty result into a V1 raw snapshot', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
@@ -484,7 +520,7 @@ test('task lease client commits a terminal empty result as a raw snapshot', asyn
     attemptId: 'attempt-empty-1',
   });
 
-  await commitCollectionTaskDeltaThroughSync({
+  await assert.rejects(() => commitCollectionTaskDeltaThroughSync({
     serverUrl: 'http://localhost:3000',
     taskId: 'job-empty-1',
     envelope: {
@@ -503,17 +539,11 @@ test('task lease client commits a terminal empty result as a raw snapshot', asyn
     pluginVersion: '2.0.58',
     fetchFn,
     store,
-  });
-  const body = JSON.parse(requests[0][1].body);
-  const op = body.operations[0];
-
-  assert.equal(op.type, 'commit_raw_snapshot');
-  assert.equal(op.jobId, 'job-empty-1');
-  assert.equal(op.leaseToken, 'lease-empty-1');
-  assert.deepEqual(op.records, []);
+  }), (error) => error.reasonCode === 'v2_capture_submission_required');
+  assert.equal(requests.length, 0);
 });
 
-test('task lease client commits a terminal failed result even when invalid records are filtered out', async () => {
+test('task lease client never converts a failed terminal into a V1 raw snapshot', async () => {
   const requests = [];
   const fetchFn = async (url, options = {}) => {
     requests.push([url, options]);
@@ -547,7 +577,7 @@ test('task lease client commits a terminal failed result even when invalid recor
     attemptId: 'attempt-filtered-empty-1',
   });
 
-  const response = await commitCollectionTaskDeltaThroughSync({
+  await assert.rejects(() => commitCollectionTaskDeltaThroughSync({
     serverUrl: 'http://localhost:3000',
     taskId: 'job-filtered-empty-1',
     envelope: {
@@ -570,16 +600,8 @@ test('task lease client commits a terminal failed result even when invalid recor
     pluginVersion: '2.0.59',
     fetchFn,
     store,
-  });
-  const body = JSON.parse(requests[0][1].body);
-  const op = body.operations[0];
-
-  assert.equal(op.type, 'commit_raw_snapshot');
-  assert.deepEqual(op.records, []);
-  assert.equal(response.clientRecordStats.inputRecordCount, 1);
-  assert.equal(response.clientRecordStats.committedRecordCount, 0);
-  assert.equal(response.clientRecordStats.droppedRecordCount, 1);
-  assert.equal(response.clientRecordStats.dropReason, 'missing_idempotency_key_or_invalid_record');
+  }), (error) => error.reasonCode === 'v2_capture_submission_required');
+  assert.equal(requests.length, 0);
 });
 
 test('task lease client syncs status updates without the retired collection task PATCH route', async () => {
@@ -1205,6 +1227,195 @@ test('task poller keeps one active lease and does not claim another task while r
   assert.equal(claimCalls, 1);
   assert.deepEqual(renewals, [['task-lease-2', 'lease-token-2']]);
   assert.equal(poller.getState().activeLease.leaseToken, 'lease-token-2');
+});
+
+test('task poller persists one real mapped CaptureSubmissionV2 before terminal cleanup', async () => {
+  const events = [];
+  let claimed = false;
+  const poller = createTaskPoller({
+    collectorVersion: '2.0.92',
+    claimTaskLease: async () => {
+      if (claimed) return { task: null };
+      claimed = true;
+      return {
+        task: {
+          id: 'job-terminal-v2',
+          taskId: 'job-terminal-v2',
+          taskType: 'xhs.list_scan',
+          platform: 'xhs',
+          collectionProfile: 'list_scan',
+          captureId: 'capture-server-terminal-v2',
+          executionPlanVersion: 'plan-server-terminal-v2',
+          payload: { targetKey: 'xhs:note/terminal-v2' },
+        },
+        lease: {
+          taskId: 'job-terminal-v2',
+          attemptId: 'attempt-terminal-v2',
+          leaseToken: 'lease-terminal-v2',
+          leaseEpoch: 2,
+          captureId: 'capture-server-terminal-v2',
+          executionPlanVersion: 'plan-server-terminal-v2',
+        },
+      };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      taskId: 'job-terminal-v2',
+      collectionRunId: 'run-terminal-v2',
+      resultLookup: { externalTaskId: 'job-terminal-v2' },
+    }),
+    renewTaskLease: async () => ({ success: true }),
+    patchTask: async () => ({ success: true }),
+    enqueueRecords: async () => undefined,
+    enqueueEvent: async (event) => {
+      events.push(event);
+      return event;
+    },
+    flushDeltas: async () => ({ success: true }),
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run-terminal-v2',
+        externalTaskId: 'job-terminal-v2',
+        externalTaskType: 'list_scan',
+        platform: 'xhs',
+        taskType: 'list_scan',
+        status: 'done',
+        startedAt: Date.parse('2026-08-12T01:00:00.000Z'),
+        finishedAt: Date.parse('2026-08-12T01:01:00.000Z'),
+        diagnostic: null,
+        captureReport: {
+          producer: { collectionProfile: 'list_scan', status: 'done', reason: 'target_reached' },
+          captureTerminal: { state: 'completed', reason: 'limit_reached', retryable: false },
+          slotReports: [{ slotId: 'note_list', status: 'observed', reason: null }],
+          captureCounters: { requested: 1, discovered: 1, emitted: 1, deduplicated: 0, failed: 0 },
+        },
+        resultSummary: {
+          requestedCount: 1,
+          discoveredCount: 1,
+          discoverySummary: { stopReason: 'no_new_cards_after_scroll' },
+        },
+        runRecord: {
+          requestedCount: 1,
+          discoveredCount: 1,
+          itemsSucceeded: 1,
+          itemsFailed: 0,
+          discoverySummary: { stopReason: 'no_new_cards_after_scroll' },
+        },
+        records: {
+          notes: [{
+            noteId: 'note-terminal-v2',
+            platformContentId: 'note-terminal-v2',
+            type: 'normal',
+            title: 'terminal v2',
+          }],
+          comments: [],
+          authors: [],
+          mediaAssets: [],
+        },
+      },
+    }),
+  });
+
+  await poller.tick();
+  const terminal = await poller.tick();
+  const terminalEvent = events.find((event) => event.snapshot?.captureSubmissionV2);
+
+  assert.equal(terminal.final, true);
+  assert.ok(terminalEvent);
+  assert.equal(
+    terminalEvent.snapshot.captureSubmissionV2.header.captureId,
+    'capture-server-terminal-v2',
+  );
+  assert.equal(
+    terminalEvent.snapshot.captureSubmissionV2.header.executionPlanVersion,
+    'plan-server-terminal-v2',
+  );
+  assert.equal(poller.getState().activeLease, null);
+});
+
+test('unprovable XHS terminal uses the one non-Evidence failure path and releases the lease', async () => {
+  const patches = [];
+  const events = [];
+  let flushCalls = 0;
+  let recordWrites = 0;
+  let claimed = false;
+  const poller = createTaskPoller({
+    collectorVersion: '2.0.92',
+    claimTaskLease: async () => {
+      if (claimed) return { task: null };
+      claimed = true;
+      return {
+        task: {
+          id: 'job-unprovable-v2',
+          taskId: 'job-unprovable-v2',
+          taskType: 'xhs.list_scan',
+          platform: 'xhs',
+          collectionProfile: 'list_scan',
+          captureId: 'capture-unprovable-v2',
+          executionPlanVersion: 'plan-unprovable-v2',
+          payload: { targetKey: 'xhs:search/unprovable' },
+        },
+        lease: {
+          taskId: 'job-unprovable-v2',
+          attemptId: 'attempt-unprovable-v2',
+          leaseToken: 'lease-unprovable-v2',
+          leaseEpoch: 1,
+          captureId: 'capture-unprovable-v2',
+          executionPlanVersion: 'plan-unprovable-v2',
+        },
+      };
+    },
+    capabilityCheck: async () => ({ success: true, accepted: true }),
+    dispatchTask: async () => ({
+      success: true,
+      accepted: true,
+      collectionRunId: 'run-unprovable-v2',
+      resultLookup: { externalTaskId: 'job-unprovable-v2' },
+    }),
+    renewTaskLease: async () => ({ success: true }),
+    patchTask: async (_taskId, patch) => {
+      patches.push(patch);
+      return { success: true };
+    },
+    enqueueRecords: async () => { recordWrites += 1; },
+    enqueueEvent: async (event) => { events.push(event); return event; },
+    flushDeltas: async () => { flushCalls += 1; return { success: true }; },
+    getResultPackage: async () => ({
+      success: true,
+      result: {
+        collectionRunId: 'run-unprovable-v2',
+        externalTaskId: 'job-unprovable-v2',
+        platform: 'xhs',
+        status: 'done',
+        startedAt: Date.parse('2026-08-12T02:00:00.000Z'),
+        finishedAt: Date.parse('2026-08-12T02:01:00.000Z'),
+        captureReport: null,
+        resultSummary: {},
+        records: { notes: [], comments: [], authors: [], mediaAssets: [] },
+      },
+    }),
+  });
+
+  await poller.tick();
+  const terminal = await poller.tick();
+  const next = await poller.tick();
+
+  assert.equal(terminal.final, true);
+  assert.equal(terminal.success, false);
+  assert.equal(terminal.evidenceSubmitted, false);
+  assert.equal(terminal.reason, 'v2_capture_mapping_failed_non_evidence_control');
+  assert.equal(poller.getState().activeLease, null);
+  assert.equal(next.idle, true);
+  assert.equal(recordWrites, 0);
+  assert.equal(flushCalls, 0);
+  assert.equal(events.some((event) => event.snapshot?.status === 'completed'), false);
+  assert.equal(events.some((event) => event.snapshot?.captureSubmissionV2), false);
+  assert.equal(patches.at(-1).status, 'failed');
+  assert.equal(patches.at(-1).deferRelease, false);
+  assert.equal(patches.at(-1).failurePath, 'v2_non_evidence_terminal_control');
 });
 
 test('task poller stays idle when station is not paired yet', async () => {

@@ -107,6 +107,7 @@ export function createResultPackager({
         errorMessage,
         userMessage,
         diagnostic,
+        captureReport: runRecord.captureReport || null,
         resultSummary: buildResultSummary({
           notes,
           comments,

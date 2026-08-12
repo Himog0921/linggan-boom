@@ -230,8 +230,8 @@ AI 可用的数据契约，必须同时满足 4 件事：
 - cover 来源必须显式区分 `platform_explicit` 与 `first_observed_image`；`role=cover` 本身不是平台明确封面的证明。
 - 媒体 subject 必须能在同一包的 note 记录中找到；`slotId` 必须精确等于 `subjectKey:purpose:kind:ordinal`，重复/不匹配 slot、未知字段或歧义 cover 均拒绝。
 
-两份合同目前只供 V2 fixture、terminal mapper 与工作台镜像校验使用；尚未接现役 outbox/caller，
-不写 Canonical、Projection 或 Media Domain。
+两份合同已用于 XHS 终态 runtime mapper 与 V2 Evidence outbox；workflow 持久化来源报告，mapper 只校验/转录。
+插件仍不直接写 Canonical、Projection 或 Media Domain。
 
 ## 4. 当前版本与目标版本的差距
 

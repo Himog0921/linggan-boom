@@ -5,6 +5,9 @@
 
 import { normalizeServerUrl } from '../shared/utils.js';
 import { enrichNoteWithDataFoundationPayload } from '../workbench/runtime/dataFoundationPayload.js';
+import xhsManualImportMapper from '../workbench/protocol/v2/xhs-manual-import-mapper.cjs';
+
+const { buildXhsManualImportSubmissionsV2 } = xhsManualImportMapper;
 
 const API_BASE_URL = 'https://lingganboom.fun';
 const FLYWHEEL_STORAGE_KEY = 'flywheelConfig';
@@ -240,7 +243,7 @@ async function throwForWorkbenchHttpError(response, fallbackMessage = 'workbench
 function normalizeSource(s) {
   const rawData = s.rawData || s;
   const qualityReason = s?.qualityReason ?? rawData?.qualityReason;
-  const platformContentId = s.noteId || s.platformContentId || s.platformId || s.id;
+  const platformContentId = s.platformContentId;
   const embeddedComments = [
     s.commentsData,
     s.comments,
@@ -254,8 +257,8 @@ function normalizeSource(s) {
   const normalized = {
     ...rawData,
     ...s,
-    platform: s.platform || 'xhs',
-    noteId: s.noteId || platformContentId,
+    platform: s.platform,
+    noteId: s.noteId,
     platformContentId,
     platformId: platformContentId,
     url: s.url,
@@ -283,93 +286,28 @@ function normalizeSource(s) {
   });
 }
 
-const MANUAL_IMPORT_BATCH_SIZE = 50;
-
-function createManualImportBatches(records = {}, batchSize = MANUAL_IMPORT_BATCH_SIZE) {
-  const entries = [
-    ...(Array.isArray(records.notes) ? records.notes.map((record) => ['notes', record]) : []),
-    ...(Array.isArray(records.comments) ? records.comments.map((record) => ['comments', record]) : []),
-    ...(Array.isArray(records.authors) ? records.authors.map((record) => ['authors', record]) : []),
-  ];
-  const batches = [];
-  for (let index = 0; index < entries.length; index += batchSize) {
-    const batch = { notes: [], comments: [], authors: [] };
-    for (const [kind, record] of entries.slice(index, index + batchSize)) {
-      batch[kind].push(record);
-    }
-    batches.push(batch);
-  }
-  return batches;
-}
-
-function embeddedCommentsFromNotes(notes = []) {
-  return notes.flatMap((note) => {
-    if (!Array.isArray(note?.commentsData)) return [];
-    return note.commentsData.map((comment) => ({
-      ...comment,
-      platform: comment?.platform || note.platform || 'xhs',
-      noteId: comment?.noteId || comment?.contentId || note.noteId || note.platformContentId,
-    }));
-  });
-}
-
-function emptyManualImportMeta() {
+function manualImportMeta(recordKind = null, count = 0, receipt = null) {
   return {
-    notesReceived: 0,
-    notesImported: 0,
-    notesSkipped: 0,
-    commentsReceived: 0,
-    commentsRegistered: 0,
-    commentsProcessed: 0,
-    commentsQueued: 0,
-    commentsFailed: 0,
-    commentsSkipped: 0,
-    commentsInvalid: 0,
-    authorsReceived: 0,
-    authorsIngested: 0,
-    authorsSkipped: 0,
-    monitorSourcesCreated: 0,
-    monitorSourcesExisting: 0,
-    monitorSourcesSkipped: 0,
-    mediaObserved: 0,
-    mediaEnqueued: 0,
-    mediaSkipped: 0,
-    mediaInvalid: 0,
-    mediaConflicted: 0,
-    mediaRejected: 0,
-    mediaRequiredMissing: 0,
-    mediaUnlinked: 0,
-    mediaRegistrationConfirmed: true,
-    jobs: [],
+    notesReceived: recordKind === 'note' ? count : 0,
+    commentsReceived: recordKind === 'comment' ? count : 0,
+    authorsReceived: recordKind === 'author' ? count : 0,
+    evidenceReceiptId: firstText(receipt?.receiptId),
+    evidenceStatus: firstText(receipt?.status),
   };
 }
 
-function mergeManualImportMeta(total, incoming = {}) {
-  const next = { ...total };
-  for (const key of Object.keys(total)) {
-    if (key === 'jobs') continue;
-    if (key === 'mediaRegistrationConfirmed') {
-      next[key] = Boolean(total[key]) && Boolean(incoming[key]);
-      continue;
-    }
-    next[key] = Number(total[key] || 0) + Number(incoming[key] || 0);
-  }
-  next.jobs = [...(total.jobs || []), ...(Array.isArray(incoming.jobs) ? incoming.jobs : [])];
-  return next;
+function runningPluginVersion() {
+  return firstText(globalThis.chrome?.runtime?.getManifest?.()?.version);
 }
 
-async function sendManualImportBatch(dataConfig, records, metadata = {}) {
+async function sendManualImportSubmission(dataConfig, body) {
   const response = await fetchFlywheel('/api/execution-tasks/manual-import', {
     ...dataConfig,
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
-    body: JSON.stringify({
-      source: 'plugin_manual_sync',
-      result: { records },
-      metadata,
-    }),
+    body: JSON.stringify(body),
     timeoutMs: 45000,
   });
 
@@ -381,52 +319,130 @@ async function sendManualImportBatch(dataConfig, records, metadata = {}) {
 }
 
 export async function syncManualRecordsToWorkbench(config = {}, records = {}, metadata = {}) {
-  const dataConfig = await ensureFlywheelDataSession(config);
-  const normalizedNotes = (Array.isArray(records.notes) ? records.notes : []).map(normalizeSource);
-  const normalizedRecords = {
-    notes: normalizedNotes,
-    comments: [
-      ...(Array.isArray(records.comments) ? records.comments : []),
-      ...embeddedCommentsFromNotes(normalizedNotes),
-    ],
-    authors: Array.isArray(records.authors) ? records.authors : [],
-  };
-  const batches = createManualImportBatches(normalizedRecords);
-  if (batches.length === 0) {
-    return { success: true, imported: 0, skipped: 0, details: [], meta: emptyManualImportMeta() };
+  const sourceRecords = [
+    ...(Array.isArray(records.notes) ? records.notes : []),
+    ...(Array.isArray(records.comments) ? records.comments : []),
+    ...(Array.isArray(records.authors) ? records.authors : []),
+  ];
+  const unsupportedPlatform = sourceRecords.find((record) => record?.platform !== 'xhs')?.platform;
+  if (unsupportedPlatform !== undefined || sourceRecords.some((record) => !record?.platform)) {
+    const platform = firstText(unsupportedPlatform) || 'missing';
+    return {
+      success: false,
+      imported: 0,
+      skipped: 0,
+      details: [],
+      error: `manual_import_platform_unsupported:${platform}`,
+    };
   }
 
-  let imported = 0;
-  let skipped = 0;
-  let meta = emptyManualImportMeta();
-  const details = [];
-  const errors = [];
-  let successfulBatchCount = 0;
+  let normalizedRecords;
+  try {
+    normalizedRecords = {
+      notes: (Array.isArray(records.notes) ? records.notes : [])
+        .map(normalizeSource)
+        .map((record) => JSON.parse(JSON.stringify(record))),
+      comments: (Array.isArray(records.comments) ? records.comments : [])
+        .map((record) => JSON.parse(JSON.stringify(record))),
+      authors: (Array.isArray(records.authors) ? records.authors : [])
+        .map((record) => JSON.parse(JSON.stringify(record))),
+    };
+  } catch (error) {
+    return {
+      success: false,
+      imported: 0,
+      skipped: 0,
+      details: [],
+      error: `manual_import_mapping_failed: ${String(error?.message || error)}`,
+    };
+  }
+  const recordCount = normalizedRecords.notes.length
+    + normalizedRecords.comments.length
+    + normalizedRecords.authors.length;
+  if (recordCount === 0) {
+    return { success: true, imported: 0, skipped: 0, details: [], meta: manualImportMeta() };
+  }
+  let mapped;
+  try {
+    mapped = buildXhsManualImportSubmissionsV2({
+      records: normalizedRecords,
+      metadata,
+      collectorVersion: runningPluginVersion(),
+    });
+  } catch (error) {
+    return {
+      success: false,
+      imported: 0,
+      skipped: 0,
+      details: [],
+      error: `manual_import_mapping_failed: ${String(error?.message || error)}`,
+    };
+  }
+  if (!mapped.ok) {
+    return {
+      success: false,
+      imported: 0,
+      skipped: 0,
+      details: [],
+      error: `${mapped.reason}: ${mapped.error}`,
+    };
+  }
 
-  for (const batch of batches) {
-    try {
-      const result = await sendManualImportBatch(dataConfig, batch, metadata);
-      successfulBatchCount += 1;
-      imported += Number(result.imported) || 0;
-      skipped += Number(result.skipped) || 0;
-      meta = mergeManualImportMeta(meta, result.meta);
-      if (Array.isArray(result.sources)) details.push(...result.sources);
-    } catch (error) {
-      errors.push(String(error?.message || error || 'plugin_manual_import_failed'));
+  try {
+    const dataConfig = await ensureFlywheelDataSession(config);
+    const results = [];
+    for (const submission of mapped.submissions) {
+      const result = await sendManualImportSubmission(dataConfig, submission.body);
+      results.push({ submission, result });
+      if (!['committed', 'replayed'].includes(result?.status)) {
+        return {
+          success: false,
+          imported: results
+            .filter((entry) => entry.result?.status === 'committed')
+            .reduce((sum, entry) => sum + entry.submission.recordCount, 0),
+          skipped: results
+            .filter((entry) => entry.result?.status === 'replayed')
+            .reduce((sum, entry) => sum + entry.submission.recordCount, 0),
+          details: results.map((entry) => entry.result),
+          error: `manual_import_evidence_${firstText(result?.status) || 'invalid_response'}`,
+        };
+      }
     }
+    const imported = results
+      .filter(({ result }) => result.status === 'committed')
+      .reduce((sum, { submission }) => sum + submission.recordCount, 0);
+    const skipped = results
+      .filter(({ result }) => result.status === 'replayed')
+      .reduce((sum, { submission }) => sum + submission.recordCount, 0);
+    return {
+      success: true,
+      imported,
+      skipped,
+      details: results.map((entry) => entry.result),
+      meta: results.reduce((meta, { submission, result }) => ({
+        ...meta,
+        notesReceived: meta.notesReceived + (submission.recordKind === 'note' ? submission.recordCount : 0),
+        commentsReceived: meta.commentsReceived + (submission.recordKind === 'comment' ? submission.recordCount : 0),
+        authorsReceived: meta.authorsReceived + (submission.recordKind === 'author' ? submission.recordCount : 0),
+        evidenceReceiptIds: [...meta.evidenceReceiptIds, firstText(result.receiptId)].filter(Boolean),
+        evidenceStatus: meta.evidenceStatus === result.status ? meta.evidenceStatus : 'mixed',
+      }), {
+        notesReceived: 0,
+        commentsReceived: 0,
+        authorsReceived: 0,
+        evidenceReceiptIds: [],
+        evidenceStatus: results[0]?.result?.status || '',
+      }),
+    };
+  } catch (error) {
+    return {
+      success: false,
+      imported: 0,
+      skipped: 0,
+      details: [],
+      error: String(error?.message || error || 'plugin_manual_import_failed'),
+    };
   }
-
-  if (errors.length > 0 && successfulBatchCount === 0) {
-    return { success: false, imported, skipped, details, meta, error: errors.join('; ') };
-  }
-  return {
-    success: true,
-    imported,
-    skipped,
-    details,
-    meta,
-    ...(errors.length > 0 ? { partial: true, error: errors.join('; ') } : {}),
-  };
 }
 
 /**

@@ -282,7 +282,8 @@ export function mapNoteToFlywheel(note) {
   return {
     contentId: note.contentId || '',
     platform: note.platform || 'xhs',
-    noteId: note.platformContentId || note.noteId || '',
+    noteId: note.noteId || '',
+    platformContentId: note.platformContentId || '',
     url: note.canonicalUrl || note.url || '',
     title: note.title || '',
     bodyText: note.bodyText || note.content || '',
@@ -332,7 +333,9 @@ export function mapAuthorToFlywheel(author) {
   return {
     authorEntityId: author.authorEntityId || '',
     platform: author.platform || 'xhs',
-    userId: author.userId || author.platformAuthorId || '',
+    userId: author.userId || '',
+    authorId: author.authorId || '',
+    platformAuthorId: author.platformAuthorId || '',
     handle: author.handle || author.redId || author.douyinId || '',
     name: author.name || author.authorName || '',
     avatar: author.avatar || author.avatarUrl || '',

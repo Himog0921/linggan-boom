@@ -24,6 +24,7 @@
     "src/shared/targetIdentity.js",
     "src/workbench/protocol/v2/xhs-source-contract.cjs",
     "src/workbench/protocol/v2/xhs-contracts.cjs",
-    "src/workbench/protocol/v2/xhs-terminal-mapper.cjs"
+    "src/workbench/protocol/v2/xhs-terminal-mapper.cjs",
+    "src/workbench/protocol/v2/xhs-manual-import-mapper.cjs"
   ]
 }
