@@ -181,8 +181,30 @@ function sha256Hex(value) {
 
 // ── Strict Base64 ──────────────────────────────────────────────────────────
 
+const BASE64_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
 function encodeBase64(bytes) {
-  return Buffer.from(bytes).toString("base64");
+  if (!(bytes instanceof Uint8Array)) {
+    throw new TypeError("encodeBase64 accepts only Uint8Array bytes");
+  }
+  let encoded = "";
+  for (let offset = 0; offset < bytes.length; offset += 3) {
+    const first = bytes[offset];
+    const hasSecond = offset + 1 < bytes.length;
+    const hasThird = offset + 2 < bytes.length;
+    const second = hasSecond ? bytes[offset + 1] : 0;
+    const third = hasThird ? bytes[offset + 2] : 0;
+    const value = (first << 16) | (second << 8) | third;
+    encoded += BASE64_ALPHABET[(value >>> 18) & 63];
+    encoded += BASE64_ALPHABET[(value >>> 12) & 63];
+    encoded += hasSecond ? BASE64_ALPHABET[(value >>> 6) & 63] : "=";
+    encoded += hasThird ? BASE64_ALPHABET[value & 63] : "=";
+  }
+  return encoded;
+}
+
+function utf8Bytes(value) {
+  return new TextEncoder().encode(value);
 }
 
 // ── Contract hash ──────────────────────────────────────────────────────────
@@ -255,7 +277,7 @@ function buildCaptureSubmissionBodyV2({ header, records, artifacts, restricted =
     artifacts,
   };
   const json = canonicalJson(payload);
-  const bytes = Buffer.from(json, "utf8");
+  const bytes = utf8Bytes(json);
   return {
     header,
     capturePackage: {
@@ -354,7 +376,7 @@ function mediaInventoryArtifactFromCandidates(candidates) {
     throw new Error(`${validation.path}: ${validation.reason}`);
   }
   const json = canonicalJson(payload);
-  const bytes = Buffer.from(json, "utf8");
+  const bytes = utf8Bytes(json);
   return {
     kind: "media_inventory",
     encoding: "base64",
