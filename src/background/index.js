@@ -91,12 +91,11 @@ import {
   tryDownloadCandidate,
 } from './downloadService.js';
 import { authorizeBackgroundMessage, createSensitiveActionSet } from './messageSecurity.js';
+import { removeStaleMediaBlockingRule } from './serviceWorkerBootstrap.js';
 
 // ========== 启动时清理残留规则 ==========
 // 防止上次异常退出后 BLOCK_MEDIA 规则残留导致页面加载不出来
-chrome.declarativeNetRequest.updateDynamicRules({
-  removeRuleIds: [1],
-}).catch(() => {});
+removeStaleMediaBlockingRule();
 
 const resultPackager = createResultPackager({
   collectionRunStore,
