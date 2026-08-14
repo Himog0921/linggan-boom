@@ -13,7 +13,7 @@ import {
   snapshotRepositoryState,
 } from "../scripts/package-candidate.mjs";
 
-const RELEASE_CANDIDATE_VERSION = "2.0.94";
+const RELEASE_CANDIDATE_VERSION = "2.0.95";
 
 function tempDir(label) {
   return mkdtempSync(join("/tmp", `${label}-`));
@@ -57,10 +57,10 @@ test("release candidate has one distinguishable version across authoritative ver
 test("output allowlist rejects paths outside /tmp and symlink escapes", () => {
   const output = tempDir("candidate-output");
   assert.equal(resolveAllowedOutputDirectory(output), realpathSync(output));
-  assert.throws(() => resolveAllowedOutputDirectory(process.cwd()), /inside \/tmp/);
+  assert.throws(() => resolveAllowedOutputDirectory("/candidate-output"), /inside \/tmp/);
 
   const linkParent = tempDir("candidate-link-parent");
-  const outside = process.cwd();
+  const outside = "/";
   const link = join(linkParent, "escape");
   symlinkSync(outside, link);
   assert.throws(() => resolveAllowedOutputDirectory(join(link, "candidate")), /resolves outside/);
