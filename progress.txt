@@ -1,5 +1,7 @@
 2026-08-14
 
+- v2.0.95 真实 Canary 修复：工位审批 claim 已返回 `stationSigningSecret`，但 Background 保存身份时只保留 stationId/token，导致插件能接单和上报进度，却在终态提交前以 `v2_execution_authority_missing` 进入 dead letter。现在批准身份会完整保存签名密钥和版本；任何缺少签名密钥的旧身份都会自动重新 claim 修复，不再把“在线/有 token”误判为具备 V2 提交权限。新增回归测试锁定完整身份保存与旧身份自动修复。
+
 - v2.0.94 详情页采集 P0：真实 Chrome 页面确认小红书在完成水合后会删除全局 `window.__INITIAL_STATE__`，但 SSR 内嵌脚本仍保存目标 `noteDetailMap`。新增只解析 `noteDetailMap` 平衡 JSON 对象的安全读取器（不执行页面脚本），接入详情就绪、数据稳定和 `collectNote` 三处；现场脚本准确恢复笔记 `6a56177e000000000f01e0ee` 的标题与视频类型。合并既有浏览器运行时修复，移除 Service Worker 中的 Node `Buffer` 依赖；候选版本升为 2.0.94，避免与已发布的坏 2.0.93 包混淆。
 
 2026-08-11

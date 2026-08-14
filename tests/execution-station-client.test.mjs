@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { createExecutionStationClient } from '../src/workbench/runtime/executionStationClient.js';
+import {
+  buildClaimedStationIdentity,
+  createExecutionStationClient,
+  stationIdentityNeedsRepair,
+} from '../src/workbench/runtime/executionStationClient.js';
 
 function createMemoryStorage(initial = {}) {
   const values = { ...initial };
@@ -15,6 +19,39 @@ function createMemoryStorage(initial = {}) {
     },
   };
 }
+
+test('approved claim preserves the complete V2 station authority and repairs legacy identities', () => {
+  const claimed = buildClaimedStationIdentity({
+    station: {
+      stationId: 'station-1',
+      stationToken: 'token-1',
+      stationSigningSecret: 'signing-secret-1',
+      stationSigningSecretVersion: 2,
+      displayName: '公用 3',
+      role: 'execution',
+    },
+    stationKey: 'station-key-1',
+    capabilities: ['xhs.note_full'],
+    pairedAt: 1234,
+  });
+
+  assert.deepEqual(claimed, {
+    stationKey: 'station-key-1',
+    stationId: 'station-1',
+    stationToken: 'token-1',
+    stationSigningSecret: 'signing-secret-1',
+    stationSigningSecretVersion: 2,
+    displayName: '公用 3',
+    role: 'execution',
+    capabilities: ['xhs.note_full'],
+    pairedAt: 1234,
+  });
+  assert.equal(stationIdentityNeedsRepair(claimed), false);
+  assert.equal(stationIdentityNeedsRepair({
+    stationId: 'station-1',
+    stationToken: 'token-1',
+  }), true);
+});
 
 test('execution station client stores registration identity and keeps it after heartbeat failure', async () => {
   const storageArea = createMemoryStorage();

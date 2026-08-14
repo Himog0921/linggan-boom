@@ -23,7 +23,11 @@ import { mapTaskControlToInternalCommand } from '../workbench/runtime/taskContro
 import { createResultPackager } from '../workbench/runtime/resultPackager.js';
 import { resolveCollectionProfile } from '../workbench/runtime/collectionProfile.js';
 import { canDispatchTaskFromCapabilityReport } from '../workbench/runtime/capabilityCheck.js';
-import { createExecutionStationClient } from '../workbench/runtime/executionStationClient.js';
+import {
+  buildClaimedStationIdentity,
+  createExecutionStationClient,
+  stationIdentityNeedsRepair,
+} from '../workbench/runtime/executionStationClient.js';
 import {
   claimCollectionTaskLease,
   commitCollectionTaskDeltaThroughSync,
@@ -2245,18 +2249,9 @@ function summarizeStationIdentityForDiagnostics(identity = null) {
 }
 
 async function saveConnectedWorkbenchStation({ station = null, stationKey = '', capabilities = [] } = {}) {
-  const stationId = String(station?.stationId || station?.id || '').trim();
-  const stationToken = String(station?.stationToken || station?.token || '').trim();
-  if (!stationId || !stationToken) return null;
-  return executionStationClient.saveStationIdentity({
-    stationKey: String(stationKey || '').trim(),
-    stationId,
-    stationToken,
-    displayName: String(station?.displayName || '').trim(),
-    role: String(station?.role || 'execution').trim() || 'execution',
-    capabilities: Array.isArray(capabilities) ? capabilities : [],
-    pairedAt: Date.now(),
-  });
+  const identity = buildClaimedStationIdentity({ station, stationKey, capabilities });
+  if (stationIdentityNeedsRepair(identity)) return null;
+  return executionStationClient.saveStationIdentity(identity);
 }
 
 async function sendExecutionStationHeartbeat(status = 'online') {
@@ -2268,7 +2263,7 @@ async function sendExecutionStationHeartbeat(status = 'online') {
   // V1.1 自动 claim：授权 active 但 identity 缺 stationId/stationToken（通过 request 流程授权，
   // 服务端自动审批+建工位，但插件侧没收到 station 数据）→ 自动 claim 领取 station
   const preIdentity = await executionStationClient.getStoredStationIdentity();
-  if (!preIdentity?.stationId || !preIdentity?.stationToken) {
+  if (stationIdentityNeedsRepair(preIdentity)) {
     try {
       const stationKey = await executionStationClient.ensureStationKey();
       const claimed = await pluginAuthorizationClient.claimApprovedRequest({

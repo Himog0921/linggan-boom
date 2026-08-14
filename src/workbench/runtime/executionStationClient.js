@@ -49,6 +49,33 @@ function toOptionalInteger(value) {
   return Number.isFinite(parsed) ? Math.floor(parsed) : undefined;
 }
 
+export function stationIdentityNeedsRepair(identity = {}) {
+  return ![
+    identity?.stationId,
+    identity?.stationToken,
+    identity?.stationSigningSecret,
+  ].every((value) => normalizeString(value));
+}
+
+export function buildClaimedStationIdentity({
+  station = {},
+  stationKey = '',
+  capabilities = [],
+  pairedAt = Date.now(),
+} = {}) {
+  return {
+    stationKey: normalizeString(stationKey),
+    stationId: normalizeString(station?.stationId || station?.id),
+    stationToken: normalizeString(station?.stationToken || station?.token),
+    stationSigningSecret: normalizeString(station?.stationSigningSecret),
+    stationSigningSecretVersion: toOptionalInteger(station?.stationSigningSecretVersion),
+    displayName: normalizeString(station?.displayName),
+    role: normalizeString(station?.role || 'execution') || 'execution',
+    capabilities: toStringArray(capabilities),
+    pairedAt,
+  };
+}
+
 function parseRetryAfterHeader(value = '') {
   const normalized = normalizeString(value);
   if (!normalized) return 0;
