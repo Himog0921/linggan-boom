@@ -1,6 +1,6 @@
 2026-08-14
 
-- v2.0.93 详情页采集 P0：真实 Chrome 页面确认小红书在完成水合后会删除全局 `window.__INITIAL_STATE__`，但 SSR 内嵌脚本仍保存目标 `noteDetailMap`。新增只解析 `noteDetailMap` 平衡 JSON 对象的安全读取器（不执行页面脚本），接入详情就绪、数据稳定和 `collectNote` 三处；现场脚本准确恢复笔记 `6a56177e000000000f01e0ee` 的标题与视频类型。新增回归覆盖“全局状态缺失但 SSR 事实存在”，并把候选版本升为 2.0.93，避免同版本不同包再次混淆。
+- v2.0.94 详情页采集 P0：真实 Chrome 页面确认小红书在完成水合后会删除全局 `window.__INITIAL_STATE__`，但 SSR 内嵌脚本仍保存目标 `noteDetailMap`。新增只解析 `noteDetailMap` 平衡 JSON 对象的安全读取器（不执行页面脚本），接入详情就绪、数据稳定和 `collectNote` 三处；现场脚本准确恢复笔记 `6a56177e000000000f01e0ee` 的标题与视频类型。合并既有浏览器运行时修复，移除 Service Worker 中的 Node `Buffer` 依赖；候选版本升为 2.0.94，避免与已发布的坏 2.0.93 包混淆。
 
 2026-08-11
 
