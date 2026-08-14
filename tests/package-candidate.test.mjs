@@ -13,7 +13,7 @@ import {
   snapshotRepositoryState,
 } from "../scripts/package-candidate.mjs";
 
-const RELEASE_CANDIDATE_VERSION = "2.0.92";
+const RELEASE_CANDIDATE_VERSION = "2.0.93";
 
 function tempDir(label) {
   return mkdtempSync(join("/tmp", `${label}-`));

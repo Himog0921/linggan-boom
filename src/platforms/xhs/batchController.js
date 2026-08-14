@@ -3,6 +3,7 @@ import {
   discoverProfileSurfaceNotesFromApi,
   discoverSearchSurfaceNotesFromApi,
   discoverWithScroll,
+  readEmbeddedXhsNoteDetailMap,
   resolveExpectedNoteFromMap,
 } from './noteCollector.js';
 import { collectComments } from './commentCollector.js';
@@ -1360,7 +1361,8 @@ export class BatchNoteController extends BaseBatchController {
   }
 
   _readExpectedNoteSnapshot(noteId) {
-    const noteMap = window.__INITIAL_STATE__?.note?.noteDetailMap || {};
+    const noteMap = window.__INITIAL_STATE__?.note?.noteDetailMap
+      || readEmbeddedXhsNoteDetailMap(document);
     return resolveExpectedNoteFromMap(noteMap, noteId, window.location.href);
   }
 

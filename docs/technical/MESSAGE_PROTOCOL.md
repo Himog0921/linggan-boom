@@ -92,7 +92,7 @@
 >
 > 工作台远程任务的最终结果包必须从执行页读取，不能用 Background 本地库伪造。派单成功后，轮询器要持久保存执行页 `tabId`，后续 `WORKBENCH_GET_RESULT_PACKAGE` 必须优先带上这个 `tabId`。如果任务已经进入 running，但超过保护窗口仍找不到页面侧结果包，应把任务标记为“结果包没有交回工作台”的失败，而不是继续只发心跳。
 >
-> 2.0.92 候选中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 负责从真实执行页取得终态。XHS 终态由 workflow 持久化 `captureReport`，Background mapper 生成唯一 `CaptureSubmissionV2`，outbox 直达 `/api/v2/evidence/execution`。`/sync commit_raw_snapshot` 是 2.0.91 及更早版本的历史路径，不得用于 2.0.92 XHS 新数据。
+> 2.0.93 候选中，`WORKBENCH_GET_RESULT_PACKAGE` / `TASK_RESULT` 负责从真实执行页取得终态。XHS 终态由 workflow 持久化 `captureReport`，Background mapper 生成唯一 `CaptureSubmissionV2`，outbox 直达 `/api/v2/evidence/execution`。`/sync commit_raw_snapshot` 是 2.0.91 及更早版本的历史路径，不得用于 2.0.93 XHS 新数据。
 > 笔记记录进入 outbox 前会补齐数据地基出站字段，包括 `standardContentCode`、`standardAuthorCode`、`keywords`、`authorFans`、`authorFansCollectedAt`、`mediaUnderstanding`、`sourceRun` 和 `dataFoundation` 摘要，供内容工作台做低粉爆文、爆款聚类和 Claude Agent 打标。
 
 ### 2.7 工作台 HTTP 协议补充
@@ -136,7 +136,7 @@ POST /api/execution-stations/sync
 - 插件只处理 V1.1 响应字段：`mailboxVersions`、`reservations[]`、`operationResults`、`controlCommands[]` 与 `nextSync`。
 - 插件从 v2.0.55 起 body 只发送 V1.1 字段；任务领取通过 `capacity → reservations[] → start_job` 完成。
 - 任务运行中的续租与进度上报通过 `/api/execution-stations/sync` 的 `progress_update` operation 完成。
-- `/sync` 只承接 reservation、续租/进度和控制邮箱；2.0.92 XHS 终态不再发送 `commit_raw_snapshot`。producer 已证明的空结果通过 V2 Evidence 提交；无法证明的终态走非 Evidence 失败控制路径并释放 lease。
+- `/sync` 只承接 reservation、续租/进度和控制邮箱；2.0.93 XHS 终态不再发送 `commit_raw_snapshot`。producer 已证明的空结果通过 V2 Evidence 提交；无法证明的终态走非 Evidence 失败控制路径并释放 lease。
 
 ### V1.1 /sync 协议（v2.0.55+）
 
@@ -150,7 +150,7 @@ v2.0.55 起，`/api/execution-stations/sync` 使用纯 V1.1 派单/续租协议�
 | `mailboxCursors` | `{station: number, [platform.lane]: number}` | 客户端已看到的 mailbox 版本号；服务端对比后短路 idle 返回 |
 | `capacity` | `{[platform.lane]: {remainingWorkSeconds, targetWorkSeconds, maxReservedTasks}}` | 按 V1.1 真实车道上报容量，例如 `xhs.monitor_patrol`、`douyin.governance`；服务端按此发放 reservation |
 | `activeLeases[]` | `Array<{jobId, leaseToken, leaseEpoch, lane?, progress?, stage?, lastProgressAt?}>` | 工位当前持有的租约数组 |
-| `operations[]` | array | 2.0.92 XHS 当前使用 `start_job`、`progress_update` 与 `release_job`；`commit_raw_snapshot` 仅为旧版历史操作，不得承接新终态。`start_job` 在 reservation 携带账号时必须回传同一个 `platformAccountId`；`account_risk_control / control_ack` 待后续迁移 |
+| `operations[]` | array | 2.0.93 XHS 当前使用 `start_job`、`progress_update` 与 `release_job`；`commit_raw_snapshot` 仅为旧版历史操作，不得承接新终态。`start_job` 在 reservation 携带账号时必须回传同一个 `platformAccountId`；`account_risk_control / control_ack` 待后续迁移 |
 | `accountReports[]` | `Array<{platform, platformAccountId?, healthStatus, cooldownUntil?}>` | 基础账号健康上报，由本地平台账号状态转换 |
 
 V1.1 响应 body 结构：
@@ -242,7 +242,7 @@ pause | resume | stop | delete
 - 插件应用控制后通过 ingest 写入 `task.control_applied`，失败则写入 `task.control_failed`。
 - 插件本地控制按钮仍保留，通过 `WORKBENCH_LOCAL_CONTROL_EVENT` 写回同一条任务事件流。
 
-2.0.92 XHS 终态写入路径：
+2.0.93 XHS 终态写入路径：
 
 ```text
 Content/platform runtime → Background final result package

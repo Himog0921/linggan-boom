@@ -139,13 +139,13 @@
 | **入口** | 笔记详情页浮动按钮"采集笔记"（由 `content/uiInjector.js` 注入） |
 | **前置条件** | `PAGE_TYPE = NOTE_DETAIL`；平台检测为 xhs；插件已授权 |
 | **触发消息** | `MSG.COLLECT_SINGLE_NOTE` |
-| **数据源** | `injected/noteMap.js` 注入页面主世界，读取 `window.__INITIAL_STATE__.note.noteDetailMap[noteId]` |
+| **数据源** | 优先安全解析详情页 SSR 内嵌脚本中的 `noteDetailMap[noteId]`；兼容仍保留 `window.__INITIAL_STATE__` 的页面，并用 `injected/noteMap.js` 读取。禁止执行页面脚本文本 |
 | **写入表** | `notes`（主键 `noteId` 去重覆盖） |
 | **关键字段** | `noteId`、`contentId`(=`xhs_{noteId}`)、`platform=xhs`、`title/content/type`(normal·video)、`cover/images[]/video`、`likes/collects/comments/shares`、`keywords[]/topicIds[]/atUserList[]`、`authorId/authorName/authorAvatar`、`ipLocation/lastUpdateTime/shareRestricted/authorFollowed`、`rawPayload/rawDomText/rawUrl`、`dataSource`(dom·render·api)、`triggerSource=manual`、`collectorVersion` |
 | **媒体下载** | 采集完成后弹窗询问是否下载；可选项：`cover`(封面，count=1)、`images`(所有图片)、`livePhoto`(Live 图)、`video`(视频，仅 video 类型笔记)。逐个走 Background `DOWNLOAD_MEDIA_FILE`；高清候选走 `getHighQualityImageCandidates` |
 | **业务规则** | 同一 `noteId` 覆盖更新；`contentId` 统一前缀 `xhs_`；原始证据字段（`raw*`）保留截断序列化 |
 | **状态** | 单条无 `collectionRun`；落库后发 `MSG.COLLECT_DONE` |
-| **异常处理** | `__INITIAL_STATE__` 缺失 → `CONTEXT` 错误；媒体下载失败 → `DOWNLOAD` 错误；视频旧直链失效 → 刷新媒体链接后重试 |
+| **异常处理** | 全局 `__INITIAL_STATE__` 被页面水合清理时读取 SSR 内嵌 `noteDetailMap`；两路结构化事实均缺失才返回 `CONTEXT` 错误；媒体下载失败 → `DOWNLOAD` 错误；视频旧直链失效 → 刷新媒体链接后重试 |
 | **验收点** | Dashboard `notes` tab 出现新记录；标题/作者/互动数与页面一致；勾选下载媒体后文件落盘 |
 
 ### <a id="x2-小红书批量内容采集"></a>X2 — 小红书批量内容采集
@@ -158,7 +158,7 @@
 | **触发消息** | `MSG.START_BATCH_NOTES` |
 | **采集模式** | `COLLECT_MODE`：`search` / `profile` / `favorite`；工作台 `detail_probe` 走 `detail` 模式（见 W3） |
 | **输入参数** | 数量 `[5, 10, 20, 50]`（硬上限 `maxPerSession = 50`）；搜索页原生筛选：排序依据 / 笔记类型 / 发布时间；博主页可选"按点赞排序取 Top N" |
-| **数据源** | DOM 卡片发现（`pageDetector` + 滚动加载）→ 逐条打开详情 → `noteMap.js` 读 `__INITIAL_STATE__` |
+| **数据源** | DOM 卡片发现（`pageDetector` + 滚动加载）→ 逐条打开详情 → SSR 内嵌 `noteDetailMap` 优先、主世界 `__INITIAL_STATE__` 兼容 |
 | **反检测参数** | 笔记间停顿 `intervalMin~Max = 1200~2800ms`；滚动步长 `scrollStepMin~Max = 100~300px`；滚动间隔 `scrollIntervalMin~Max = 200~500ms`；详情页加载超时 `iframeTimeout = 15000ms`；最大滚动重试 `maxScrollRetries = 10` |
 | **写入表** | `notes`（每条立即落库）；`collectionRuns`（创建 run，`processedCount / nextIndex / resumeCheckpoint` 持续更新） |
 | **业务规则** | **D23**：搜索页选择筛选后，必须先确认选中状态，再等待笔记流刷新并连续稳定，之后才能扫描和采集，避免网络慢时采到旧列表；**D19**：`author_baseline` 首次建档固定为"先采博主，再按当前博主页顺位补前 50 篇"，不走点赞 Top N；作品记录尽量带封面，详情页缺图时用博主页卡片封面兜底 |

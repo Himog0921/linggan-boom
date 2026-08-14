@@ -1,3 +1,7 @@
+2026-08-14
+
+- v2.0.93 详情页采集 P0：真实 Chrome 页面确认小红书在完成水合后会删除全局 `window.__INITIAL_STATE__`，但 SSR 内嵌脚本仍保存目标 `noteDetailMap`。新增只解析 `noteDetailMap` 平衡 JSON 对象的安全读取器（不执行页面脚本），接入详情就绪、数据稳定和 `collectNote` 三处；现场脚本准确恢复笔记 `6a56177e000000000f01e0ee` 的标题与视频类型。新增回归覆盖“全局状态缺失但 SSR 事实存在”，并把候选版本升为 2.0.93，避免同版本不同包再次混淆。
+
 2026-08-11
 
 - XHS manual-import P1 收口：现役 `syncManualRecordsToWorkbench` / `syncToFlywheel` 不再发送 legacy `{source,result.records,metadata}` body，只按 note/comment/author 各自 CollectionContract 构建严格 `manual_import CaptureSubmissionV2`。全部合同包先完成运行时 identity/type/timestamp 校验，再进入公开 route；Douyin、缺失身份和未知响应 fail-closed，无 fallback。跨仓测试实际调用工作台当前 `validateCaptureSubmissionBody`，证明真实插件 producer body 被接受、旧 body 被拒绝；手动媒体 URL 只留在原始 Evidence，不再伪报登记/入队成功。候选仍未提交、发布或安装，必须由新的 candidate commit 重新打包。

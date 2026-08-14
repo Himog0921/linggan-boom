@@ -376,6 +376,10 @@ Mog 提供的 `xhs_profile_note_discovery_probe_report.md` 进一步证明：PC 
 3. 评论补页请求应保留真实页面里的 `xsec_token`，否则在需要继续翻主评论或子评论时存在不稳定风险。本轮已让补页候选 URL 优先携带 `xsec_token / image_formats / top_comment_id`，再保留旧的简化请求作为兜底。
 4. 后续工作台任务设计可以把 `detail_probe + comment_probe` 收敛为 `note_full`：默认评论上限建议保持 20 或 50；全量评论作为治理/回填参数单独放开。
 
+### 5.5.1 2026-08-14 详情页水合后全局状态清理
+
+真实页面 `/explore/6a56177e000000000f01e0ee` 已验证：页面标题、正文和媒体完成渲染后，`window.__INITIAL_STATE__` 为 `undefined`，但无 `src` 的 SSR 内嵌脚本仍保留 `window.__INITIAL_STATE__=...`，其中目标 `noteDetailMap` 是独立合法 JSON 对象。本轮只扫描平衡花括号并对该对象执行 `JSON.parse`，不执行整段页面脚本；现场 37,307 字节脚本准确解析出唯一目标 ID、标题和 `video` 类型。详情就绪判断、稳定性判断和笔记采集统一复用该事实源。
+
 ## 5.6 2026-07-03 详情页评论 DOM 低风险补采复验
 
 基于 Mog 在真实详情页的评论采集调研，本轮补充以下结论：

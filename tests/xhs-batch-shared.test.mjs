@@ -1,7 +1,26 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getActiveCommentsContext } from '../src/platforms/xhs/batchShared.js';
+import { getActiveCommentsContext, waitForNoteState } from '../src/platforms/xhs/batchShared.js';
+
+test('waitForNoteState accepts embedded SSR note data after INITIAL_STATE cleanup', async () => {
+  const previousWindow = globalThis.window;
+  const previousDocument = globalThis.document;
+  const noteId = '6a56177e000000000f01e0ee';
+  globalThis.window = { __INITIAL_STATE__: undefined };
+  globalThis.document = {
+    scripts: [{
+      textContent: `window.__INITIAL_STATE__={"note":{"noteDetailMap":{"${noteId}":{"note":{"noteId":"${noteId}"}}}},"global":{"detailMap":new Map([])}}`,
+    }],
+  };
+
+  try {
+    assert.equal(await waitForNoteState(noteId, 5), true);
+  } finally {
+    globalThis.window = previousWindow;
+    globalThis.document = previousDocument;
+  }
+});
 
 function createFakeEnv() {
   const defaultView = {

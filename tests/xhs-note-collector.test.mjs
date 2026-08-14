@@ -7,9 +7,25 @@ import {
   isCollectedNoteUsable,
   parseXhsInteractCount,
   parseXhsPublishedAt,
+  readEmbeddedXhsNoteDetailMap,
   resolveExpectedNoteFromMap,
   selectNoteKey,
 } from '../src/platforms/xhs/noteCollector.js';
+
+test('readEmbeddedXhsNoteDetailMap recovers SSR detail after global INITIAL_STATE is removed', () => {
+  const noteId = '6a56177e000000000f01e0ee';
+  const documentLike = {
+    scripts: [{
+      textContent: `window.__INITIAL_STATE__={"global":{"detailMap":new Map([])},"note":{"noteDetailMap":{"${noteId}":{"currentTime":1786672363613,"note":{"noteId":"${noteId}","title":"能读不能写的A娃，千万别错怪他","type":"video","interactInfo":{"likedCount":"21","collectedCount":"32","commentCount":"12"},"video":{"media":{"stream":{"H264":[{"masterUrl":"https:\\u002F\\u002Fsns-video.example.com\\u002Fnote.mp4"}]}}}}}},"redmojiMap":{}}}}`,
+    }],
+  };
+
+  const noteMap = readEmbeddedXhsNoteDetailMap(documentLike);
+
+  assert.equal(noteMap[noteId].note.noteId, noteId);
+  assert.equal(noteMap[noteId].note.title, '能读不能写的A娃，千万别错怪他');
+  assert.equal(noteMap[noteId].note.interactInfo.commentCount, '12');
+});
 
 test('selectNoteKey prefers expected note id over current url and fallback keys', () => {
   const noteMap = {

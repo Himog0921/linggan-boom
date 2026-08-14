@@ -17,6 +17,9 @@ import {
   requestXhsProfileNotesSnapshot,
   requestXhsSearchNotesSnapshot,
 } from './commentApi.js';
+import { readEmbeddedXhsNoteDetailMap } from './embeddedInitialState.js';
+
+export { readEmbeddedXhsNoteDetailMap } from './embeddedInitialState.js';
 
 const XHS_CONTEXT_REFRESH_MESSAGE = '插件刚更新，请刷新当前页面后再点一次，刷新后即可继续。';
 
@@ -376,9 +379,9 @@ export async function collectNote(wd = window, options = {}) {
   }
 
   // 1. 注入脚本获取 noteDetailMap（最多重试 3 次，等待 __INITIAL_STATE__ 填充）
-  let noteMap = null;
+  let noteMap = readEmbeddedXhsNoteDetailMap(wd.document);
   let lastErr = null;
-  for (let attempt = 0; attempt < 3; attempt++) {
+  for (let attempt = 0; (!noteMap || Object.keys(noteMap).length === 0) && attempt < 3; attempt++) {
     try {
       if (attempt > 0) {
         await new Promise(r => setTimeout(r, 1500 * attempt));

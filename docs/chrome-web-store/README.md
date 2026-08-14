@@ -5,9 +5,9 @@ Updated: 2026-08-12
 ## Current Release Candidate
 
 - Extension: 灵感爆爆爆
-- Version: 2.0.92
+- Version: 2.0.93
 - Candidate only: generated below `/private/tmp/v2-xhs-content-rc-packages/`
-- Future store filename after approval: `releases/linggan-boom-v2.0.92.zip`
+- Future store filename after approval: `releases/linggan-boom-v2.0.93.zip`
 - Upload/publish status: **not executed**
 
 The V2 candidate must not be described as uploaded or published until the
@@ -25,7 +25,7 @@ The package has been checked with:
 
 ```bash
 npm run build
-npm run release:verify -- --version 2.0.92 --zip releases/linggan-boom-v2.0.92.zip
+npm run release:verify -- --version 2.0.93 --zip releases/linggan-boom-v2.0.93.zip
 node --test
 ```
 
@@ -39,7 +39,7 @@ Reason: your goal is team distribution and automatic update, not public search t
 
 1. Open Chrome Web Store Developer Dashboard.
 2. Click **Add new item**.
-3. After operator approval, create, verify, and upload `releases/linggan-boom-v2.0.92.zip`.
+3. After operator approval, create, verify, and upload `releases/linggan-boom-v2.0.93.zip`.
 4. Fill **Store listing** using `store-listing.md`.
 5. Upload images from `assets/`.
 6. Fill **Privacy** using `privacy-and-permissions.md`.
